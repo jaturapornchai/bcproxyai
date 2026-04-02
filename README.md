@@ -115,7 +115,7 @@ OpenClaw / HiClaw
 เปิด Terminal (หน้าต่างพิมพ์คำสั่ง) แล้วพิมพ์:
 
 ```bash
-git clone <repository-url> bcproxyai
+git clone https://github.com/jaturapornchai/bcproxyai.git
 cd bcproxyai
 ```
 
@@ -629,8 +629,8 @@ curl -X POST http://localhost:3333/v1/chat/completions \
 ### OpenClaw เชื่อมต่อไม่ได้
 
 - ดูหัวข้อ [เชื่อมต่อกับ OpenClaw](#เชื่อมต่อกับ-openclaw-ละเอียดมาก) ด้านบน
-- ตรวจสอบ `apiProvider` ต้องเป็น `"openai-completions"` (ไม่ใช่ `"openai-compatible"`)
-- ตรวจสอบ `contextWindow` ต้องเป็น `131072`
+- ตรวจสอบใน openclaw.json ว่า `models.providers.*.api` เป็น `"openai-completions"`
+- ตรวจสอบ `models.providers.*.models[0].contextWindow` เป็น `131072`
 - ถ้า Docker: ตรวจ pairing (`openclaw devices list` แล้ว `approve`)
 - ถ้า Docker: ตรวจ gateway bind เป็น `"lan"` + allowedOrigins
 - ทดสอบ: `curl http://localhost:3333/v1/models` ต้องตอบรายชื่อโมเดลกลับมา

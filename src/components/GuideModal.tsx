@@ -230,20 +230,28 @@ function OpenClawGuide() {
           </Paragraph>
         </Step>
 
-        <Step num={2} title="แก้ไข openclaw.json">
-          <Paragraph>หลัง onboard เสร็จ ต้องแก้ไขไฟล์ config ของ OpenClaw -- หาไฟล์ <code className="text-indigo-300">openclaw.json</code> แล้วแก้ให้เป็น:</Paragraph>
-          <Code>{`{
-  "apiProvider": "openai-completions",
-  "openAiBaseUrl": "http://host.docker.internal:3333/v1",
-  "openAiModelId": "auto",
-  "openAiApiKey": "dummy",
-  "contextWindow": 131072
+        <Step num={2} title="ตรวจสอบ openclaw.json">
+          <Paragraph>
+            หลัง onboard เสร็จ OpenClaw จะสร้าง config ให้อัตโนมัติ ปกติ<strong>ไม่ต้องแก้อะไรเพิ่ม</strong><br />
+            ถ้าอยากตรวจสอบ หาไฟล์ <code className="text-indigo-300">~/.openclaw/openclaw.json</code> จะเห็น:
+          </Paragraph>
+          <Code>{`"models": {
+  "providers": {
+    "custom-host-docker-internal-3333": {
+      "baseUrl": "http://host.docker.internal:3333/v1",
+      "apiKey": "dummy",
+      "api": "openai-completions",
+      "models": [{
+        "id": "auto",
+        "contextWindow": 131072
+      }]
+    }
+  }
 }`}</Code>
-          <Warning>
-            <strong>สำคัญมาก:</strong><br />
-            - <code className="text-amber-200">apiProvider</code> ต้องเป็น <code className="text-amber-200">&quot;openai-completions&quot;</code> (ไม่ใช่ &quot;openai-compatible&quot; -- ผิดนะ!)<br />
-            - <code className="text-amber-200">contextWindow</code> ต้องเป็น <code className="text-amber-200">131072</code> (128K) -- ถ้าไม่ตั้ง OpenClaw จะส่ง context น้อยเกินไป
-          </Warning>
+          <Info>
+            <strong>ถ้า contextWindow น้อยกว่า 131072</strong> ให้แก้เป็น 131072 เพราะ OpenClaw ส่ง system prompt ใหญ่มาก<br />
+            <strong>api</strong> ต้องเป็น <code className="text-amber-200">&quot;openai-completions&quot;</code> (onboard ตั้งให้อัตโนมัติ)
+          </Info>
         </Step>
 
         <Step num={3} title='แก้ปัญหา "pairing required"'>
@@ -309,16 +317,10 @@ openclaw devices approve abc123-def456-...`}</Code>
   --skip-ui`}</Code>
         </Step>
 
-        <Step num={2} title="แก้ไข openclaw.json">
-          <Code>{`{
-  "apiProvider": "openai-completions",
-  "openAiBaseUrl": "http://localhost:3333/v1",
-  "openAiModelId": "auto",
-  "openAiApiKey": "dummy",
-  "contextWindow": 131072
-}`}</Code>
-          <Paragraph>เท่านี้เลย!</Paragraph>
-        </Step>
+        <Paragraph>
+          เท่านี้เลย! onboard ตั้งค่าให้อัตโนมัติ (api: openai-completions, contextWindow: 131072)
+          <br />ไม่ต้องแก้ openclaw.json เพิ่ม ไม่ต้อง approve device
+        </Paragraph>
       </div>
 
       <div>
@@ -330,8 +332,8 @@ openclaw devices approve abc123-def456-...`}</Code>
           <li>เปิด <code className="text-indigo-300">http://localhost:3333</code> ได้ไหม? (ต้องเห็น Dashboard)</li>
           <li>Worker สแกนเสร็จไหม? มีโมเดลพร้อมใช้ไหม? (ดูจาก Dashboard)</li>
           <li><code className="text-indigo-300">openclaw onboard</code> เสร็จเรียบร้อยไหม?</li>
-          <li><code className="text-indigo-300">apiProvider</code> เป็น <code className="text-amber-300">&quot;openai-completions&quot;</code> ไหม? (ไม่ใช่ &quot;openai-compatible&quot;)</li>
-          <li><code className="text-indigo-300">contextWindow</code> เป็น <code className="text-amber-300">131072</code> ไหม?</li>
+          <li><code className="text-indigo-300">api</code> เป็น <code className="text-amber-300">&quot;openai-completions&quot;</code> ไหม? (ดูใน openclaw.json ส่วน models.providers)</li>
+          <li><code className="text-indigo-300">contextWindow</code> เป็น <code className="text-amber-300">131072</code> ไหม? (ดูใน models.providers.*.models[0].contextWindow)</li>
           <li>ถ้า Docker: base URL เป็น <code className="text-indigo-300">host.docker.internal:3333</code> ไหม?</li>
           <li>ถ้า Docker: approve pairing แล้วไหม? (<code className="text-indigo-300">openclaw devices approve</code>)</li>
           <li>ถ้า Docker: gateway bind เป็น <code className="text-indigo-300">&quot;lan&quot;</code> + allowedOrigins ถูกต้องไหม?</li>

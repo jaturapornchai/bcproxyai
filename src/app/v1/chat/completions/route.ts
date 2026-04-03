@@ -106,8 +106,8 @@ function getAvailableModels(caps: RequestCapabilities, minContext = 0): ModelRow
   ];
   if (caps.hasTools) filters.push("m.supports_tools = 1");
   if (caps.hasImages) filters.push("m.supports_vision = 1");
-  // Filter models with enough context window (with 2x safety margin for response)
-  if (minContext > 0) filters.push(`m.context_length >= ${minContext * 2}`);
+  // Filter models with enough context window (1.2x margin for response)
+  if (minContext > 0) filters.push(`m.context_length >= ${Math.ceil(minContext * 1.2)}`);
 
   const whereClause = filters.join(" AND ");
   // Prioritize: benchmarked models first (score > 0), then by score, then large context, then latency
@@ -533,6 +533,7 @@ export async function POST(req: NextRequest) {
       }
       round++;
     }
+
 
     for (let i = 0; i < Math.min(MAX_RETRIES, spreadCandidates.length); i++) {
       const candidate = spreadCandidates[i];

@@ -3,6 +3,7 @@ import { getDb } from "@/lib/db/schema";
 import { getNextApiKey, markKeyCooldown } from "@/lib/api-keys";
 import { PROVIDER_URLS } from "@/lib/providers";
 import { getCached, setCache, clearCache } from "@/lib/cache";
+import { compressMessages } from "@/lib/prompt-compress";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -227,7 +228,7 @@ function logCooldown(modelId: string, errorMsg: string, httpStatus = 0) {
 }
 
 function parseModelField(model: string): {
-  mode: "auto" | "fast" | "tools" | "thai" | "direct" | "match";
+  mode: "auto" | "fast" | "tools" | "thai" | "consensus" | "direct" | "match";
   provider?: string;
   modelId?: string;
 } {
@@ -237,6 +238,7 @@ function parseModelField(model: string): {
   if (model === "bcproxy/fast") return { mode: "fast" };
   if (model === "bcproxy/tools") return { mode: "tools" };
   if (model === "bcproxy/thai") return { mode: "thai" };
+  if (model === "bcproxy/consensus") return { mode: "consensus" };
 
   // openrouter/xxx, kilo/xxx, groq/xxx
   const providerMatch = model.match(/^(openrouter|kilo|groq|cerebras|sambanova|mistral|ollama)\/(.+)$/);
@@ -347,6 +349,15 @@ async function forwardToProvider(
 
   const requestBody: Record<string, unknown> = { ...body, model: actualModelId };
 
+  // Compress messages if they are large (> 30K estimated tokens)
+  if (Array.isArray(requestBody.messages)) {
+    const compressed = compressMessages(requestBody.messages as { role: string; content: unknown }[]);
+    if (compressed.compressed) {
+      requestBody.messages = compressed.messages;
+      console.log(`[Gateway] Compressed: saved ${compressed.savedChars} chars (~${Math.round(compressed.savedChars / 3)} tokens)`);
+    }
+  }
+
   // Ollama: set large context window via options.num_ctx
   if (provider === "ollama") {
     requestBody.options = { ...(requestBody.options as Record<string, unknown> ?? {}), num_ctx: 65536 };
@@ -418,6 +429,92 @@ export async function POST(req: NextRequest) {
     }
 
     const estInputTokens = estimateTokens(body);
+
+    // ---- Consensus mode: send to 3 providers, pick best answer ----
+    if (parsed.mode === "consensus") {
+      const userMsg = extractUserMessage(body);
+      const consensusStart = Date.now();
+
+      // Get top 3 models from different providers
+      const allModels = getAvailableModels(caps);
+      const picked: ModelRow[] = [];
+      const usedProviders = new Set<string>();
+      for (const m of allModels) {
+        if (!usedProviders.has(m.provider) && picked.length < 3) {
+          picked.push(m);
+          usedProviders.add(m.provider);
+        }
+      }
+
+      if (picked.length > 0) {
+        // Force non-streaming for consensus (need full response to compare)
+        const consensusBody = { ...body, stream: false };
+
+        const results = await Promise.all(
+          picked.map(async (m) => {
+            const start = Date.now();
+            try {
+              const res = await forwardToProvider(m.provider, m.model_id, consensusBody, false);
+              if (!res.ok) return null;
+              const json = await res.json();
+              const content = (json as { choices?: Array<{ message?: { content?: string } }> }).choices?.[0]?.message?.content ?? "";
+              return { model: m, content, latency: Date.now() - start, json };
+            } catch {
+              return null;
+            }
+          })
+        );
+
+        // Pick best: longest content, then lowest latency
+        const valid = results.filter(
+          (r): r is NonNullable<typeof r> => r != null && r.content.length > 0
+        );
+
+        if (valid.length > 0) {
+          valid.sort((a, b) => {
+            if (b.content.length !== a.content.length) return b.content.length - a.content.length;
+            return a.latency - b.latency;
+          });
+
+          const best = valid[0];
+          const totalLatency = Date.now() - consensusStart;
+
+          // Track token usage for winning model
+          const usage = (best.json as { usage?: { prompt_tokens?: number; completion_tokens?: number } }).usage;
+          if (usage) {
+            trackTokenUsage(best.model.provider, best.model.model_id, usage.prompt_tokens ?? 0, usage.completion_tokens ?? 0);
+          }
+
+          logGateway(
+            "bcproxy/consensus",
+            best.model.model_id,
+            best.model.provider,
+            200,
+            totalLatency,
+            usage?.prompt_tokens ?? 0,
+            usage?.completion_tokens ?? 0,
+            null,
+            userMsg,
+            `[consensus: ${valid.map((v) => v.model.provider + "/" + v.model.model_id).join(", ")}] ${best.content.slice(0, 300)}`
+          );
+
+          const headers = new Headers();
+          headers.set("Content-Type", "application/json");
+          headers.set("X-BCProxy-Provider", best.model.provider);
+          headers.set("X-BCProxy-Model", best.model.model_id);
+          headers.set(
+            "X-BCProxy-Consensus",
+            valid.map((v) => `${v.model.provider}/${v.model.model_id}(${v.content.length}chars/${v.latency}ms)`).join(", ")
+          );
+          headers.set("Access-Control-Allow-Origin", "*");
+
+          return new Response(JSON.stringify(best.json), { status: 200, headers });
+        }
+      }
+
+      // Fallback: no consensus candidates or all failed → fall through to normal auto routing
+      parsed.mode = "auto" as typeof parsed.mode;
+    }
 
     // ---- Direct provider routing (openrouter/xxx, kilo/xxx, groq/xxx) ----
     if (parsed.mode === "direct") {

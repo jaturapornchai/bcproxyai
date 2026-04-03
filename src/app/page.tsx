@@ -23,6 +23,8 @@ import { ModelGrid } from "../components/ModelGrid";
 import { ChatPanel } from "../components/ChatPanel";
 import { GuideModal } from "../components/GuideModal";
 import { SpeedRace } from "../components/SpeedRace";
+import { Analytics } from "../components/Analytics";
+import type { AnalyticsData } from "../components/Analytics";
 
 // ─── Gateway Config Card ───────────────────────────────────────────────────────
 
@@ -222,6 +224,7 @@ export default function Dashboard() {
     totalSavedThb: number;
   }
   const [costSavings, setCostSavings] = useState<CostSavings | null>(null);
+  const [analyticsData, setAnalyticsData] = useState<AnalyticsData | null>(null);
 
   // Scroll to top on mount
   useEffect(() => {
@@ -236,16 +239,18 @@ export default function Dashboard() {
 
   const fetchAll = useCallback(async () => {
     try {
-      const [s, m, l, cs] = await Promise.all([
+      const [s, m, l, cs, an] = await Promise.all([
         fetch("/api/status").then((r) => r.json()),
         fetch("/api/models").then((r) => r.json()),
         fetch("/api/leaderboard").then((r) => r.json()),
         fetch("/api/cost-savings").then((r) => r.json()).catch(() => null),
+        fetch("/api/analytics").then((r) => r.json()).catch(() => null),
       ]);
       setStatusData(s);
       setModels(Array.isArray(m) ? m : []);
       setLeaderboard(Array.isArray(l) ? l : []);
       if (cs) setCostSavings(cs);
+      if (an) setAnalyticsData(an);
       setLastRefresh(new Date());
     } catch (err) {
       console.error("fetch error", err);
@@ -342,6 +347,7 @@ export default function Dashboard() {
               { id: "status",     label: "ภาพรวม" },
               { id: "rankings",   label: "อันดับ" },
               { id: "speed-race", label: "แข่งความเร็ว" },
+              { id: "analytics",  label: "สถิติ" },
               { id: "all-models", label: "รายชื่อโมเดล" },
               { id: "chat",       label: "ทดลองแชท" },
               { id: "gateway-logs", label: "Gateway Log" },
@@ -683,6 +689,9 @@ export default function Dashboard() {
 
         {/* ── Section 3.5: Speed Race ──────────────────────────────────────── */}
         <SpeedRace models={deduped} loading={loading} />
+
+        {/* ── Section 3.6: Charts & Analytics ─────────────────────────────── */}
+        <Analytics data={analyticsData} />
 
         {/* ── Section 4: All Models Grid ───────────────────────────────────── */}
         <ModelGrid

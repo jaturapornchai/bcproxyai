@@ -49,6 +49,13 @@ const VIRTUAL_MODELS = [
     owned_by: "bcproxy",
     description: "Best model for Thai language",
   },
+  {
+    id: "bcproxy/consensus",
+    object: "model",
+    created: Math.floor(Date.now() / 1000),
+    owned_by: "bcproxy",
+    description: "Send to 3 models, pick best answer",
+  },
 ];
 
 export async function GET(_req: NextRequest) {

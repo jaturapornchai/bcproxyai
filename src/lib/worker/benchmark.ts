@@ -233,7 +233,12 @@ export async function runBenchmarks(): Promise<{
   let totalQuestions = 0;
   let testedModels = 0;
 
-  for (const model of models) {
+  // Parallel benchmark — 5 models at a time
+  const CONCURRENCY = 5;
+  let idx = 0;
+  async function benchmarkWorker() {
+    while (idx < models.length) {
+      const model = models[idx++];
     // ตรวจสอบว่าสอบแล้วและสอบตกซ้ำ — skip ถ้าคะแนนต่ำและยังไม่ถึง 7 วัน
     const summary = summaryStmt.get(model.id) as BenchmarkSummary;
     if (summary && summary.avg_score !== null && summary.latest_tested_at) {
@@ -337,7 +342,9 @@ export async function runBenchmarks(): Promise<{
         } catch { /* silent */ }
       }
     }
-  }
+  }}
+  const workers = Array.from({ length: Math.min(CONCURRENCY, models.length) }, () => benchmarkWorker());
+  await Promise.all(workers);
 
   const msg = `Benchmark เสร็จ: ทดสอบ ${testedModels} โมเดล, ${totalQuestions} คำถาม`;
   logWorker("benchmark", msg);

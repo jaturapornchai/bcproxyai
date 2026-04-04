@@ -8,6 +8,94 @@ import { compressMessages } from "@/lib/prompt-compress";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
+// Fallback strategy configuration via environment variable
+// Options: latency (default), random, score, least-used, round-robin, provider-balanced
+const FALLBACK_STRATEGY = process.env.FALLBACK_STRATEGY || "latency";
+
+// Get model usage count for "least-used" strategy
+function getModelUsageCount(): Map<string, number> {
+  const usageMap = new Map<string, number>();
+  try {
+    const db = getDb();
+    const rows = db.prepare(`
+      SELECT model_id, COUNT(*) as count 
+      FROM gateway_logs 
+      WHERE created_at >= datetime('now', '-24 hours')
+      GROUP BY model_id
+    `).all() as { model_id: string; count: number }[];
+    for (const r of rows) {
+      usageMap.set(r.model_id, r.count);
+    }
+  } catch {
+    // silent - return empty map
+  }
+    return usageMap;
+}
+
+// Apply fallback strategy to candidate models
+function applyFallbackStrategy(candidates: ModelRow[]): ModelRow[] {
+  // Shuffle array helper
+  const shuffle = (arr: ModelRow[]) => {
+    const a = [...arr];
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  };
+
+  switch (FALLBACK_STRATEGY) {
+    case "random":
+      // Pure random selection - good for load distribution
+      return shuffle(candidates);
+
+    case "score":
+      // Highest benchmark score first
+      return [...candidates].sort((a, b) => (b.avg_score ?? 0) - (a.avg_score ?? 0));
+
+    case "least-used":
+      // Track usage in last 24 hours, pick least used
+      const usageMap = getModelUsageCount();
+      return [...candidates].sort((a, b) => {
+        const aUsage = usageMap.get(a.id) ?? 0;
+        const bUsage = usageMap.get(b.id) ?? 0;
+        return aUsage - bUsage;
+      });
+
+    case "round-robin":
+      // Even distribution across all candidates (no priority)
+      return shuffle(candidates);
+
+    case "provider-balanced":
+      // Group by provider, then round-robin within each group
+      const byProvider: Record<string, ModelRow[]> = {};
+      for (const c of candidates) {
+        byProvider[c.provider] ??= [];
+        byProvider[c.provider].push(c);
+      }
+      const result: ModelRow[] = [];
+      const maxLen = Math.max(...Object.values(byProvider).map((arr) => arr.length));
+      for (let round = 0; round < maxLen; round++) {
+        for (const provider of Object.keys(byProvider).sort()) {
+          if (round < byProvider[provider].length) {
+            result.push(byProvider[provider][round]);
+          }
+        }
+      }
+      return result;
+
+    case "latency":
+    default:
+      // Default: latency-based (fastest first), then score
+      return [...candidates].sort((a, b) => {
+        const latA = a.avg_latency ?? 9999999;
+        const latB = b.avg_latency ?? 9999999;
+        if (latA !== latB) return latA - latB;
+        return (b.avg_score ?? 0) - (a.avg_score ?? 0);
+      });
+  }
+}
+
 // Budget check: returns { ok, percentUsed } — blocks at 95%
 function checkBudget(): { ok: boolean; preferCheap: boolean; percentUsed: number } {
   try {
@@ -594,36 +682,12 @@ export async function POST(req: NextRequest) {
     let lastError = "";
     const startTime = Date.now();
     const userMsg = extractUserMessage(body);
+
+    // Apply fallback strategy to candidates
+    const spreadCandidates = applyFallbackStrategy(finalCandidates);
+
+    // Track which providers have been tried
     const triedProviders = new Set<string>();
-
-    // Weighted Load Balancing — all providers equal (including Ollama)
-    const spreadCandidates: typeof finalCandidates = [];
-    const byProvider: Record<string, typeof finalCandidates> = {};
-    for (const c of finalCandidates) {
-      (byProvider[c.provider] ??= []).push(c);
-    }
-    const providerOrder = Object.entries(byProvider)
-      .map(([, models]) => {
-        const avgLat = models.reduce((s, m) => s + (m.avg_latency ?? 9999999), 0) / models.length;
-        const avgScore = models.reduce((s, m) => s + (m.avg_score ?? 0), 0) / models.length;
-        return { models, weight: avgScore * 1000 - avgLat };
-      })
-      .sort((a, b) => b.weight - a.weight);
-    // Round-robin across weighted providers
-    let hasMore = true;
-    let round = 0;
-    const totalExpected = finalCandidates.length;
-    while (hasMore && spreadCandidates.length < totalExpected) {
-      hasMore = false;
-      for (const { models: provModels } of providerOrder) {
-        if (round < provModels.length) {
-          spreadCandidates.push(provModels[round]);
-          hasMore = true;
-        }
-      }
-      round++;
-    }
-
 
     for (let i = 0; i < Math.min(MAX_RETRIES, spreadCandidates.length); i++) {
       const candidate = spreadCandidates[i];

@@ -58,6 +58,7 @@ OpenClaw / HiClaw
 |  - Weighted load balancing    |     (เรียงตาม score + latency)
 |  - Fallback 10 ครั้ง          |     round-robin ข้าม provider
 |  - ทุกตัว cooldown → สุ่มเลือก |     (ไม่มีวัน 503 ถาวร)
+|  - Configurable fallback      |     FALLBACK_STRATEGY=latency|random|score...
 |                               |
 |  Background Worker            |  <- ทำงานทุก 1 ชม.
 |  1. สแกน 8 providers พร้อมกัน  |
@@ -179,6 +180,16 @@ DEEPSEEK_API_KEY=
 
 # ไม่บังคับ -- Ollama (ถ้ารันบนเครื่อง)
 OLLAMA_BASE_URL=http://localhost:11434
+
+# === Fallback Strategy (เลือก model ยังไงเมื่อ model แรก fail) ===
+# Options: latency (default), random, score, least-used, round-robin, provider-balanced
+# - latency: เร็วสุดก่อน
+# - random: สุ่มทั้งหมด
+# - score: คะแนน benchmark สูงสุด
+# - least-used: ใช้น้อยสุดใน 24 ชม.
+# - round-robin: กระจายเท่าๆ กัน
+# - provider-balanced: กระจายข้าม provider
+FALLBACK_STRATEGY=latency
 ```
 
 (ดูวิธีสมัครที่หัวข้อ [ตั้งค่า API Keys](#ตั้งค่า-api-keys))

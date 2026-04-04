@@ -91,11 +91,17 @@ export async function GET(req: NextRequest) {
     const now = new Date();
     const result = rows.map((r) => {
       let healthStatusFinal = r.healthStatus ?? "unknown";
-      if (
-        r.cooldownUntil &&
-        new Date(r.cooldownUntil) > now
-      ) {
-        healthStatusFinal = "cooldown";
+
+      // Check if cooldown has expired - clear old status
+      if (r.cooldownUntil) {
+        const cooldownDate = new Date(r.cooldownUntil);
+        if (cooldownDate > now) {
+          // Cooldown still active
+          healthStatusFinal = "cooldown";
+        } else {
+          // Cooldown expired - clear old status (rate_limited, error, etc.)
+          healthStatusFinal = "available";
+        }
       }
 
       return {

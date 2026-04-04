@@ -4,6 +4,8 @@ import { getNextApiKey, markKeyCooldown } from "@/lib/api-keys";
 import { PROVIDER_URLS } from "@/lib/providers";
 import { getCached, setCache, clearCache } from "@/lib/cache";
 import { compressMessages } from "@/lib/prompt-compress";
+import { jsonrepair } from "jsonrepair";
+import { v4 as uuidv4 } from "uuid";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -328,7 +330,8 @@ async function forwardToProvider(
   provider: string,
   actualModelId: string,
   body: Record<string, unknown>,
-  stream: boolean
+  stream: boolean,
+  signal?: AbortSignal
 ): Promise<Response> {
   const url = PROVIDER_URLS[provider];
   if (!url) throw new Error(`Unknown provider: ${provider}`);
@@ -347,7 +350,66 @@ async function forwardToProvider(
     headers["X-Title"] = "BCProxyAI Gateway";
   }
 
-  const requestBody: Record<string, unknown> = { ...body, model: actualModelId };
+  // Whitelist: only pass known OpenAI-compatible fields to upstream providers
+  // Fixes: Google rejects unknown fields like "store" (OpenClaw memory feature)
+  const ALLOWED_FIELDS = new Set([
+    "messages", "temperature", "top_p", "max_tokens", "stream",
+    "tools", "tool_choice", "response_format", "stop", "n", "seed", "user",
+    "presence_penalty", "frequency_penalty", "logprobs", "top_logprobs",
+    "parallel_tool_calls", "service_tier", "metadata",
+  ]);
+  const requestBody: Record<string, unknown> = { model: actualModelId };
+  for (const [key, value] of Object.entries(body)) {
+    if (ALLOWED_FIELDS.has(key)) {
+      requestBody[key] = value;
+    }
+  }
+
+  // Strip unsupported message fields (reasoning, refusal, etc.)
+  // Groq/others reject messages with "reasoning" field from thinking models
+  if (Array.isArray(requestBody.messages)) {
+    for (const msg of requestBody.messages as Array<Record<string, unknown>>) {
+      delete msg.reasoning;
+      delete msg.refusal;
+    }
+  }
+
+  // Google: sanitize conversation — strip tool_calls and tool role messages
+  // Google's Gemini API requires strict ordering: user→assistant(tool_call)→tool→assistant
+  // OpenClaw conversations have complex tool call patterns that don't match this
+  if (provider === "google" && Array.isArray(requestBody.messages)) {
+    const msgs = requestBody.messages as Array<Record<string, unknown>>;
+    const sanitized: Array<Record<string, unknown>> = [];
+    for (const msg of msgs) {
+      // Skip tool role messages entirely
+      if (msg.role === "tool") continue;
+      // For assistant messages with tool_calls, convert to plain text
+      if (msg.role === "assistant" && msg.tool_calls) {
+        const textContent = (msg.content as string) || "";
+        if (textContent) {
+          sanitized.push({ role: "assistant", content: textContent });
+        }
+        continue;
+      }
+      // Pass through everything else
+      sanitized.push(msg);
+    }
+    // Ensure conversation doesn't have consecutive same-role messages
+    const merged: Array<Record<string, unknown>> = [];
+    for (const msg of sanitized) {
+      if (merged.length > 0 && merged[merged.length - 1].role === msg.role) {
+        // Merge consecutive same-role messages
+        const prev = merged[merged.length - 1];
+        const prevContent = String(prev.content || "");
+        const currContent = String(msg.content || "");
+        prev.content = prevContent + "\n" + currContent;
+      } else {
+        merged.push({ ...msg });
+      }
+    }
+    requestBody.messages = merged;
+    // Keep tools/tool_choice so model can make proper function calls
+  }
 
   // Compress messages if they are large (> 30K estimated tokens)
   if (Array.isArray(requestBody.messages)) {
@@ -367,6 +429,7 @@ async function forwardToProvider(
     method: "POST",
     headers,
     body: JSON.stringify(requestBody),
+    ...(signal ? { signal } : {}),
   });
 
   // On 429, mark this key as rate-limited and cooldown 5 minutes
@@ -382,6 +445,75 @@ async function forwardToProvider(
 
 function isRetryableStatus(status: number): boolean {
   return status === 413 || status === 429 || status >= 500;
+}
+
+// Pattern B+: Check if tool_calls are structurally broken (needs retry, not just repair)
+function hasStructurallyBrokenToolCalls(json: Record<string, unknown>): { broken: boolean; reason: string } {
+  const choices = json.choices as Array<Record<string, unknown>> | undefined;
+  if (!choices?.[0]) return { broken: false, reason: "" };
+  const msg = (choices[0] as Record<string, unknown>).message as Record<string, unknown> | undefined;
+  if (!msg) return { broken: false, reason: "" };
+  const toolCalls = msg.tool_calls;
+  if (!toolCalls) return { broken: false, reason: "" };
+  
+  // tool_calls must be array
+  if (!Array.isArray(toolCalls)) {
+    return { broken: true, reason: "tool_calls is not an array" };
+  }
+  
+  for (let i = 0; i < toolCalls.length; i++) {
+    const tc = toolCalls[i] as Record<string, unknown>;
+    const fn = tc.function as Record<string, unknown> | undefined;
+    
+    // Must have function.name
+    if (!fn?.name || typeof fn.name !== "string" || fn.name.trim() === "") {
+      return { broken: true, reason: `tool_call[${i}] missing function.name` };
+    }
+    
+    // Arguments too large → skip repair, needs retry
+    const args = fn.arguments;
+    if (typeof args === "string" && args.length > 100000) {
+      return { broken: true, reason: `tool_call[${i}] arguments too large (${args.length} chars)` };
+    }
+    
+    // Null/undefined arguments with valid name → broken
+    if (args === null || args === undefined) {
+      return { broken: true, reason: `tool_call[${i}] missing arguments` };
+    }
+  }
+  
+  return { broken: false, reason: "" };
+}
+
+// Pattern B+: Retry with a tools-capable model
+interface RetryResult { response: Response; provider: string; modelId: string; }
+
+async function retryWithToolsModel(
+  body: Record<string, unknown>,
+  caps: RequestCapabilities,
+  excludeModelId: string,
+  isStream: boolean
+): Promise<RetryResult | null> {
+  const candidates = getAvailableModels({ ...caps, hasTools: true });
+  const filtered = candidates.filter(c => c.model_id !== excludeModelId);
+  if (!filtered.length) {
+    console.log("[ToolRepair] No tools-capable models available for retry");
+    return null;
+  }
+  const pick = filtered[0];
+  console.log(`[ToolRepair] Retry with ${pick.provider}/${pick.model_id}`);
+  
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000);
+  try {
+    const resp = await forwardToProvider(pick.provider, pick.model_id, body, isStream, controller.signal);
+    clearTimeout(timeoutId);
+    return { response: resp, provider: pick.provider, modelId: pick.model_id };
+  } catch (err) {
+    clearTimeout(timeoutId);
+    console.log(`[ToolRepair] Retry failed: ${String(err)}`);
+    return null;
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -640,6 +772,43 @@ export async function POST(req: NextRequest) {
             const db = getDb();
             db.prepare("DELETE FROM health_logs WHERE model_id = ? AND cooldown_until > datetime('now')").run(dbModelId);
           } catch { /* silent */ }
+          
+          // Pattern B+: For non-streaming tool requests, check for structurally broken tool_calls
+          if (!isStream && caps.hasTools) {
+            const text = await response.text();
+            try {
+              const json = JSON.parse(text);
+              const brokenCheck = hasStructurallyBrokenToolCalls(json);
+              if (brokenCheck.broken) {
+                console.log(`[ToolRepair] Structurally broken from ${provider}/${actualModelId}: ${brokenCheck.reason}`);
+                const retry = await retryWithToolsModel(body, caps, actualModelId, isStream);
+                if (retry?.response.ok) {
+                  const proxied = await buildProxiedResponse(retry.response, retry.provider, retry.modelId, isStream, estInputTokens);
+                  logGateway(modelField, retry.modelId, retry.provider, 200, Date.now() - startTime, 0, 0, null, userMsg, "[tool_retry]");
+                  return proxied;
+                }
+                // Retry failed → continue with original (buildProxiedResponse will try jsonrepair)
+                console.log("[ToolRepair] Retry failed, using original response");
+              }
+            } catch { /* not JSON — let buildProxiedResponse handle */ }
+            
+            // Wrap text back into Response for buildProxiedResponse
+            const wrappedResponse = new Response(text, { status: 200, headers: response.headers });
+            const proxied = await buildProxiedResponse(wrappedResponse, provider, actualModelId, isStream, estInputTokens);
+            try {
+              const cloned = proxied.clone();
+              const pjson = await cloned.json();
+              const assistantContent = pjson.choices?.[0]?.message?.content?.slice(0, 500) ?? null;
+              const usage = pjson.usage;
+              logGateway(modelField, actualModelId, provider, 200, latency,
+                usage?.prompt_tokens ?? 0, usage?.completion_tokens ?? 0,
+                null, userMsg, assistantContent);
+            } catch {
+              logGateway(modelField, actualModelId, provider, 200, latency, 0, 0, null, userMsg, null);
+            }
+            return proxied;
+          }
+          
           const proxied = await buildProxiedResponse(response, provider, actualModelId, isStream, estInputTokens);
           // Log with assistant response (extract from non-stream)
           if (!isStream) {
@@ -662,6 +831,7 @@ export async function POST(req: NextRequest) {
 
         // Non-200: cooldown for cloud providers only (Ollama = local, never cooldown)
         const errText = await response.text().catch(() => "");
+        console.error(`[Gateway] ${provider}/${actualModelId} HTTP ${response.status}: ${errText.slice(0, 500)}`);
         lastError = `${provider}/${actualModelId}: HTTP ${response.status}`;
         const st = response.status;
         if (provider !== "ollama" && (st === 429 || st === 413 || st === 422 || st >= 500 || st === 401 || st === 403)) {
@@ -759,15 +929,27 @@ async function buildProxiedResponse(
       }
     }
 
-    // Fix tool call parameters: some models send numbers as strings
+    // Fix tool call parameters: validate, repair with jsonrepair, coerce numbers
     if (json.choices) {
       for (const choice of json.choices) {
         const toolCalls = choice.message?.tool_calls;
         if (Array.isArray(toolCalls)) {
           for (const tc of toolCalls) {
-            if (tc.function?.arguments && typeof tc.function.arguments === "string") {
+            // Fix missing id/type
+            if (!tc.id) tc.id = uuidv4();
+            if (!tc.type) tc.type = "function";
+            
+            // Fix arguments
+            if (tc.function?.arguments) {
+              let argsStr = typeof tc.function.arguments === "object" 
+                ? JSON.stringify(tc.function.arguments) 
+                : String(tc.function.arguments);
+              
+              // Strip markdown fences if present
+              argsStr = argsStr.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?\s*```\s*$/i, "");
+              
               try {
-                const args = JSON.parse(tc.function.arguments);
+                const args = JSON.parse(argsStr);
                 // Auto-fix: convert string numbers to actual numbers
                 for (const [key, val] of Object.entries(args)) {
                   if (typeof val === "string" && /^\d+$/.test(val)) {
@@ -775,7 +957,18 @@ async function buildProxiedResponse(
                   }
                 }
                 tc.function.arguments = JSON.stringify(args);
-              } catch { /* keep original */ }
+              } catch {
+                // JSON.parse failed → try jsonrepair
+                try {
+                  const repaired = jsonrepair(argsStr);
+                  JSON.parse(repaired); // verify it's valid
+                  tc.function.arguments = repaired;
+                  console.log(`[ToolRepair] Repaired tool_call arguments for ${tc.function?.name}`);
+                } catch {
+                  // jsonrepair also failed — keep original, client will handle
+                  console.log(`[ToolRepair] Could not repair arguments for ${tc.function?.name}`);
+                }
+              }
             }
           }
         }

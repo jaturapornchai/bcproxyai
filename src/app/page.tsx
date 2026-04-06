@@ -176,6 +176,25 @@ function GatewayConfigCard() {
   );
 }
 
+function fmtUsd(amount: number) {
+  if (amount === 0) return "$0.00";
+  if (amount < 0.01) return `$${amount.toFixed(4)}`;
+  if (amount < 1) return `$${amount.toFixed(3)}`;
+  return `$${amount.toFixed(2)}`;
+}
+
+function fmtThb(amount: number) {
+  if (amount === 0) return "฿0";
+  if (amount < 1) return `฿${amount.toFixed(2)}`;
+  return `฿${amount.toFixed(0)}`;
+}
+
+function fmtTokenSummary(tokens: number) {
+  if (tokens <= 0) return "0 tokens";
+  if (tokens < 1000) return `${tokens} tokens`;
+  return `${(tokens / 1000).toFixed(1)}K tokens`;
+}
+
 // ─── Main Dashboard ────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
@@ -478,14 +497,14 @@ export default function Dashboard() {
           <GatewayConfigCard />
 
           {/* Cost Savings Card */}
-          {costSavings && costSavings.totalTokens > 0 && (
+          {costSavings && (
             <div className="mt-6 glass-bright rounded-2xl p-5 neon-border max-w-4xl mx-auto">
-              <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center justify-between mb-4 gap-3">
                 <div className="flex items-center gap-2">
                   <span className="text-lg">💰</span>
                   <span className="font-bold text-white text-lg">เทียบต้นทุน</span>
                 </div>
-                <div className="flex items-center gap-3 text-xs text-gray-500">
+                <div className="flex items-center gap-3 text-xs text-gray-500 flex-wrap justify-end">
                   <span>สะสม {costSavings.totalRequests.toLocaleString()} requests</span>
                   <span>|</span>
                   <span>วันนี้ {costSavings.todayRequests.toLocaleString()}</span>
@@ -493,43 +512,51 @@ export default function Dashboard() {
               </div>
 
               {/* Token usage summary */}
-              <div className="flex items-center gap-4 mb-4 text-sm">
+              <div className="flex flex-wrap items-center gap-3 mb-4 text-sm">
                 <span className="text-gray-500">ใช้ไป:</span>
-                <span className="text-indigo-300 font-bold">{(costSavings.totalTokens / 1000).toFixed(0)}K tokens</span>
-                <span className="text-gray-600">(input {(costSavings.totalInputTokens / 1000).toFixed(0)}K + output {(costSavings.totalOutputTokens / 1000).toFixed(0)}K)</span>
+                <span className="text-indigo-300 font-bold">{fmtTokenSummary(costSavings.totalTokens)}</span>
+                <span className="text-gray-600">(input {fmtTokenSummary(costSavings.totalInputTokens)} + output {fmtTokenSummary(costSavings.totalOutputTokens)})</span>
               </div>
 
-              {/* Cost comparison — dynamic from API */}
-              <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mb-3">
-                {(costSavings.providers ?? []).map((p) => (
-                  <div key={p.id} className="glass rounded-lg p-3 text-center">
-                    <div className="text-xs text-gray-500 mb-1 truncate">{p.label}</div>
-                    <div className="text-lg font-bold text-red-400">${p.cost.toFixed(2)}</div>
-                    <div className="text-xs text-red-500/60">฿{p.costThb.toFixed(0)}</div>
-                    <div className="text-[10px] text-gray-600 mt-1">${p.inputPrice}/${p.outputPrice} /1M</div>
-                  </div>
-                ))}
-                <div className="glass rounded-lg p-3 text-center border border-emerald-500/30 bg-emerald-500/5">
-                  <div className="text-xs text-emerald-400 mb-1">BCProxyAI</div>
-                  <div className="text-lg font-bold text-emerald-300">$0.00</div>
-                  <div className="text-xs text-emerald-500">ฟรี!</div>
-                  <div className="text-[10px] text-emerald-600 mt-1">$0/$0 /1M</div>
+              {costSavings.totalTokens === 0 ? (
+                <div className="glass rounded-lg p-4 border border-white/10 text-sm text-gray-400">
+                  ยังไม่มี usage ในฐานข้อมูลค่ะ — ตอนนี้ section นี้จะขึ้นเสมอ แม้ยังไม่มี token log
                 </div>
-              </div>
-
-              {/* Total saved highlight — compare all */}
-              <div className="glass rounded-lg p-3 border border-emerald-500/20 bg-emerald-500/5">
-                <div className="text-xs text-emerald-400 mb-2 font-semibold">ยอดสะสมที่ประหยัดได้ (เทียบแต่ละเจ้า):</div>
-                <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
-                  {(costSavings.providers ?? []).map((p) => (
-                    <div key={p.id} className="text-center">
-                      <div className="text-xs text-gray-500">vs {p.label}</div>
-                      <div className="text-lg font-black text-emerald-300">${p.cost.toFixed(2)}</div>
-                      <div className="text-xs text-emerald-500">฿{p.costThb.toFixed(0)}</div>
+              ) : (
+                <>
+                  {/* Cost comparison — dynamic from API */}
+                  <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mb-3">
+                    {(costSavings.providers ?? []).map((p) => (
+                      <div key={p.id} className="glass rounded-lg p-3 text-center">
+                        <div className="text-xs text-gray-500 mb-1 truncate">{p.label}</div>
+                        <div className="text-lg font-bold text-red-400">{fmtUsd(p.cost)}</div>
+                        <div className="text-xs text-red-500/60">{fmtThb(p.costThb)}</div>
+                        <div className="text-[10px] text-gray-600 mt-1">${p.inputPrice}/${p.outputPrice} /1M</div>
+                      </div>
+                    ))}
+                    <div className="glass rounded-lg p-3 text-center border border-emerald-500/30 bg-emerald-500/5">
+                      <div className="text-xs text-emerald-400 mb-1">BCProxyAI</div>
+                      <div className="text-lg font-bold text-emerald-300">$0.00</div>
+                      <div className="text-xs text-emerald-500">ฟรี!</div>
+                      <div className="text-[10px] text-emerald-600 mt-1">$0/$0 /1M</div>
                     </div>
-                  ))}
-                </div>
-              </div>
+                  </div>
+
+                  {/* Total saved highlight — compare all */}
+                  <div className="glass rounded-lg p-3 border border-emerald-500/20 bg-emerald-500/5">
+                    <div className="text-xs text-emerald-400 mb-2 font-semibold">ยอดสะสมที่ประหยัดได้ (เทียบแต่ละเจ้า):</div>
+                    <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
+                      {(costSavings.providers ?? []).map((p) => (
+                        <div key={p.id} className="text-center">
+                          <div className="text-xs text-gray-500">vs {p.label}</div>
+                          <div className="text-lg font-black text-emerald-300">{fmtUsd(p.cost)}</div>
+                          <div className="text-xs text-emerald-500">{fmtThb(p.costThb)}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           )}
 

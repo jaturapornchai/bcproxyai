@@ -1,6 +1,22 @@
 import { NextRequest } from "next/server";
+import { getDb } from "@/lib/db/schema";
 import { getNextApiKey } from "@/lib/api-keys";
 import { PROVIDER_URLS } from "@/lib/providers";
+
+function estimateTokens(messages: Array<{ role: string; content: string }>): number {
+  return Math.ceil(JSON.stringify(messages).length / 3);
+}
+
+function trackTokenUsage(provider: string, modelId: string, inputTokens: number, outputTokens: number) {
+  try {
+    const db = getDb();
+    db.prepare(
+      "INSERT INTO token_usage (provider, model_id, input_tokens, output_tokens, estimated_cost_usd) VALUES (?, ?, ?, ?, 0)"
+    ).run(provider, modelId, inputTokens, outputTokens);
+  } catch {
+    // non-critical
+  }
+}
 
 export const dynamic = "force-dynamic";
 
@@ -34,6 +50,7 @@ export async function POST(req: NextRequest) {
 
     // Simple messages format — only role + content string
     const cleanMessages = messages.map(m => ({ role: m.role, content: m.content }));
+    const estimatedInputTokens = estimateTokens(cleanMessages);
 
     const res = await fetch(url, {
       method: "POST",
@@ -62,6 +79,7 @@ export async function POST(req: NextRequest) {
       async start(controller) {
         const decoder = new TextDecoder();
         let buffer = "";
+        let outputChars = 0;
         try {
           while (true) {
             const { done, value } = await reader.read();
@@ -79,6 +97,7 @@ export async function POST(req: NextRequest) {
                 const json = JSON.parse(data);
                 const content = json.choices?.[0]?.delta?.content;
                 if (content) {
+                  outputChars += content.length;
                   controller.enqueue(new TextEncoder().encode(content));
                 }
               } catch { /* skip */ }
@@ -87,6 +106,7 @@ export async function POST(req: NextRequest) {
         } catch (err) {
           console.error("[chat] stream error:", err);
         } finally {
+          trackTokenUsage(provider, modelId, estimatedInputTokens, Math.ceil(outputChars / 3));
           controller.close();
         }
       },

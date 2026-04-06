@@ -175,13 +175,35 @@ export function ModelGrid({ sortedModels, availableCount, cooldownCount, unknown
                   <div className="mb-2" />
                 )}
 
+                {/* Capability badges */}
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
+                    model.supportsTools === true
+                      ? "text-emerald-300 border-emerald-500/30 bg-emerald-500/10"
+                      : model.supportsTools === false
+                        ? "text-red-300 border-red-500/30 bg-red-500/10"
+                        : "text-gray-400 border-white/10 bg-white/5"
+                  }`}>
+                    {model.supportsTools === true ? "tools ✓" : model.supportsTools === false ? "tools ✕" : "tools ?"}
+                  </span>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
+                    model.supportsVision === true
+                      ? "text-cyan-300 border-cyan-500/30 bg-cyan-500/10"
+                      : model.supportsVision === false
+                        ? "text-amber-300 border-amber-500/30 bg-amber-500/10"
+                        : "text-gray-400 border-white/10 bg-white/5"
+                  }`}>
+                    {model.supportsVision === true ? "vision ✓" : model.supportsVision === false ? "vision ✕" : "vision ?"}
+                  </span>
+                </div>
+
                 {/* Fun status line */}
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-gray-500">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs text-gray-500 truncate">
                     {funStatus.emoji} {funStatus.text}
                   </span>
                   {gradeInfo && (
-                    <span className={`text-xs ${gradeInfo.color}`}>
+                    <span className={`text-xs shrink-0 ${gradeInfo.color}`}>
                       {gradeInfo.emoji} {gradeInfo.label}
                     </span>
                   )}

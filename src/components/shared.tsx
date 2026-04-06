@@ -67,6 +67,8 @@ export interface ModelData {
   modelId: string;
   contextLength: number;
   tier: string;
+  supportsTools: boolean | null;
+  supportsVision: boolean | null;
   health: HealthInfo;
   benchmark: BenchmarkInfo | null;
   firstSeen: string;

@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db/schema";
 import { getCached, setCache } from "@/lib/cache";
+import { ensureWorkerStarted } from "@/lib/worker/startup";
 
 export const dynamic = "force-dynamic";
+
+ensureWorkerStarted();
 
 export async function GET() {
   try {

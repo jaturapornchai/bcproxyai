@@ -65,10 +65,27 @@ interface ModelRow {
 
 // ─── Redis-backed Provider Cooldown (in-memory fallback) ───
 const _memCooldowns = new Map<string, { until: number; reason: string }>();
-const _memFailures = new Map<string, { count: number; firstAt: number }>();
-const FAILURE_STREAK_THRESHOLD = 5;
-const FAILURE_STREAK_WINDOW_MS = 2 * 60 * 1000;
+const _memFailures = new Map<string, { count: number; firstAt: number; totalSeen: number }>();
+const FAILURE_STREAK_THRESHOLD = 10;
+const FAILURE_STREAK_WINDOW_MS = 3 * 60 * 1000;
 const STREAK_COOLDOWN_MS = 30 * 60 * 1000;
+
+// Track every attempt (success or failure) for sample-size guard
+async function recordProviderAttempt(provider: string): Promise<void> {
+  try {
+    const redis = getRedis();
+    const key = `fs:provider:${provider}`;
+    const raw = await redis.get(key);
+    if (!raw) return; // no failure window open yet — nothing to update
+    const entry = JSON.parse(raw) as { count: number; firstAt: number; totalSeen?: number };
+    entry.totalSeen = (entry.totalSeen ?? 0) + 1;
+    await redis.set(key, JSON.stringify(entry), "PX", FAILURE_STREAK_WINDOW_MS);
+  } catch {
+    // in-memory fallback: if there's an entry, bump totalSeen
+    const entry = _memFailures.get(provider);
+    if (entry) entry.totalSeen = (entry.totalSeen ?? 0) + 1;
+  }
+}
 
 async function isProviderCooledDownMem(provider: string): Promise<boolean> {
   // Try Redis first
@@ -101,14 +118,16 @@ async function recordProviderFailureMem(provider: string): Promise<void> {
     const key = `fs:provider:${provider}`;
     const raw = await redis.get(key);
     const now = Date.now();
-    const entry = raw ? JSON.parse(raw) as { count: number; firstAt: number } : null;
+    const entry = raw ? JSON.parse(raw) as { count: number; firstAt: number; totalSeen: number } : null;
     if (!entry || now - entry.firstAt > FAILURE_STREAK_WINDOW_MS) {
-      await redis.set(key, JSON.stringify({ count: 1, firstAt: now }), "PX", FAILURE_STREAK_WINDOW_MS);
+      await redis.set(key, JSON.stringify({ count: 1, firstAt: now, totalSeen: 1 }), "PX", FAILURE_STREAK_WINDOW_MS);
       return;
     }
     entry.count += 1;
-    if (entry.count >= FAILURE_STREAK_THRESHOLD) {
-      await setProviderCooldownMem(provider, STREAK_COOLDOWN_MS, `failure streak: ${entry.count} fails in ${Math.round((now - entry.firstAt) / 1000)}s`);
+    entry.totalSeen = (entry.totalSeen ?? 0) + 1;
+    // Require minimum sample size: only trigger if count>=10 AND totalSeen>=20
+    if (entry.count >= FAILURE_STREAK_THRESHOLD && entry.totalSeen >= 20) {
+      await setProviderCooldownMem(provider, STREAK_COOLDOWN_MS, `failure streak: ${entry.count}/${entry.totalSeen} in ${Math.round((now - entry.firstAt) / 1000)}s`);
       await redis.del(key);
     } else {
       await redis.set(key, JSON.stringify(entry), "PX", FAILURE_STREAK_WINDOW_MS);
@@ -118,12 +137,13 @@ async function recordProviderFailureMem(provider: string): Promise<void> {
     const now = Date.now();
     const entry = _memFailures.get(provider);
     if (!entry || now - entry.firstAt > FAILURE_STREAK_WINDOW_MS) {
-      _memFailures.set(provider, { count: 1, firstAt: now });
+      _memFailures.set(provider, { count: 1, firstAt: now, totalSeen: 1 });
       return;
     }
     entry.count += 1;
-    if (entry.count >= FAILURE_STREAK_THRESHOLD) {
-      await setProviderCooldownMem(provider, STREAK_COOLDOWN_MS, `failure streak: ${entry.count}`);
+    entry.totalSeen = (entry.totalSeen ?? 0) + 1;
+    if (entry.count >= FAILURE_STREAK_THRESHOLD && entry.totalSeen >= 20) {
+      await setProviderCooldownMem(provider, STREAK_COOLDOWN_MS, `failure streak: ${entry.count}/${entry.totalSeen}`);
       _memFailures.delete(provider);
     }
   }
@@ -642,8 +662,8 @@ async function forwardToProvider(
     requestBody.options = { ...(requestBody.options as Record<string, unknown> ?? {}), num_ctx: 65536 };
   }
 
-  // P0-2: 12s per-attempt timeout for cloud providers, 30s for Ollama (local model load time)
-  const timeoutMs = provider === "ollama" ? 30_000 : 12_000;
+  // P0-2: 8s per-attempt timeout for cloud providers, 25s for Ollama (local model load time)
+  const timeoutMs = provider === "ollama" ? 25_000 : 8_000;
   const response = await fetch(url, {
     method: "POST",
     headers,
@@ -941,7 +961,7 @@ export async function POST(req: NextRequest) {
 
     if (process.env.LOG_LEVEL === "debug") console.log(`[DEBUG] spread=${spreadCandidates.length} top5=[${spreadCandidates.slice(0,5).map(c=>c.provider+'/'+c.model_id).join(', ')}]`);
 
-    const TOTAL_TIMEOUT_MS = 30_000;
+    const TOTAL_TIMEOUT_MS = 20_000;
 
     for (let i = 0, tried = 0; i < spreadCandidates.length && tried < MAX_RETRIES; i++) {
       if (Date.now() - startTime > TOTAL_TIMEOUT_MS) {
@@ -955,6 +975,8 @@ export async function POST(req: NextRequest) {
       if (await isCircuitOpen(provider)) { console.log(`[CIRCUIT-SKIP] ${provider} circuit open`); continue; }
       tried++;
       triedProviders.add(provider);
+      // Record attempt for sample-size guard (regardless of outcome)
+      recordProviderAttempt(provider).catch(() => { /* non-critical */ });
 
       // Check if this attempt is a half-open probe
       let wasProbing = false;

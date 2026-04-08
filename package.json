@@ -11,7 +11,12 @@
     "mcp": "node dist/mcp/server.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "migrate:data": "tsx scripts/migrate-sqlite-to-pg.ts"
+    "migrate:data": "tsx scripts/migrate-sqlite-to-pg.ts",
+    "loadtest:smoke": "k6 run loadtest/smoke.js",
+    "loadtest:dashboard": "k6 run loadtest/dashboard.js",
+    "loadtest:chat": "k6 run loadtest/chat.js",
+    "loadtest:ratelimit": "k6 run loadtest/ratelimit.js",
+    "loadtest:stress": "k6 run loadtest/stress.js"
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.49",

@@ -50,3 +50,8 @@ caddy.err.log
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# k6 load test results
+loadtest/results/
+loadtest/*.json
+loadtest/summary.html

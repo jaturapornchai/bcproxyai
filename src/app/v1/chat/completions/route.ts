@@ -10,6 +10,7 @@ import { getReputationScore } from "@/lib/worker/complaint";
 import { detectPromptCategory, recordRoutingResult, getBestModelsForCategory, getBestModelsByBenchmarkCategory, emitEvent, getRealAvgLatency } from "@/lib/routing-learn";
 import { getRedis } from "@/lib/redis";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { upstreamAgent } from "@/lib/upstream-agent";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -150,10 +151,38 @@ async function isCircuitOpen(provider: string): Promise<boolean> {
     const val = await redis.get(cbKey);
     if (val === null) return false;
     if (val === "half-open") return false; // allow probe
+    // val === "open" — check if we're in the last 30s of the cooldown
+    const ttl = await redis.ttl(cbKey);
+    if (ttl > 0 && ttl <= 30) {
+      // Promote to half-open so the next request becomes a probe
+      await redis.set(cbKey, "half-open", "EX", ttl);
+      return false;
+    }
     return true;
   } catch {
     return false;
   }
+}
+
+// P1-3: Record result of a half-open probe attempt
+async function recordCircuitProbeResult(provider: string, success: boolean): Promise<void> {
+  try {
+    const redis = getRedis();
+    const cbKey = `cb:open:${provider}`;
+    const state = await redis.get(cbKey);
+    if (state !== "half-open") return; // not currently probing
+    if (success) {
+      // Probe succeeded → fully close circuit + reset counters
+      await redis.del(cbKey);
+      await redis.del(`cb:fail:${provider}`);
+      await redis.del(`cb:succ:${provider}`);
+      console.log(`[CIRCUIT-CLOSE] ${provider} — half-open probe succeeded`);
+    } else {
+      // Probe failed → re-open for 4 minutes (escalating)
+      await redis.set(cbKey, "open", "EX", 240);
+      console.log(`[CIRCUIT-REOPEN] ${provider} — half-open probe failed → 4min`);
+    }
+  } catch { /* ignore */ }
 }
 
 // P1-3: Record provider failure for circuit breaker rolling window
@@ -621,6 +650,8 @@ async function forwardToProvider(
     headers,
     body: JSON.stringify(requestBody),
     signal: AbortSignal.timeout(timeoutMs),
+    // @ts-expect-error undici dispatcher not in standard fetch types
+    dispatcher: upstreamAgent,
   });
 
   if (response.status === 429) {
@@ -922,12 +953,21 @@ export async function POST(req: NextRequest) {
       tried++;
       triedProviders.add(provider);
 
+      // Check if this attempt is a half-open probe
+      let wasProbing = false;
+      try {
+        const redis = getRedis();
+        const cbState = await redis.get(`cb:open:${provider}`);
+        wasProbing = cbState === "half-open";
+      } catch { /* ignore */ }
+
       try {
         const response = await forwardToProvider(provider, actualModelId, body, isStream);
 
         if (response.ok) {
           const latency = Date.now() - startTime;
           await recordProviderSuccessMem(provider);
+          if (wasProbing) await recordCircuitProbeResult(provider, true);
           const SLOW_THRESHOLD_MS = 10_000;
           const SLOW_COOLDOWN_MINUTES = 10;
           if (latency > SLOW_THRESHOLD_MS && provider !== "ollama") {
@@ -1002,6 +1042,7 @@ export async function POST(req: NextRequest) {
         await recordRoutingResult(dbModelId, provider, promptCategory, false, Date.now() - startTime);
         await recordProviderFailureMem(provider);
         await recordCircuitFailure(provider);
+        if (wasProbing) await recordCircuitProbeResult(provider, false);
         const st = response.status;
         console.log(`[RETRY] ${tried}/${MAX_RETRIES} | ${provider}/${actualModelId} → HTTP ${st} | ${errText.slice(0, 200)}`);
         if (provider !== "ollama" && (st === 400 || st === 402 || st === 429 || st === 413 || st === 422 || st === 410 || st === 404 || st >= 500 || st === 401 || st === 403)) {
@@ -1033,6 +1074,7 @@ export async function POST(req: NextRequest) {
         await recordRoutingResult(dbModelId, provider, promptCategory, false, Date.now() - startTime);
         await recordProviderFailureMem(provider);
         await recordCircuitFailure(provider);
+        if (wasProbing) await recordCircuitProbeResult(provider, false);
         await emitEvent("provider_error", `${provider} เชื่อมต่อไม่ได้`, errStr.slice(0, 200), provider, actualModelId, "warn");
         continue;
       }

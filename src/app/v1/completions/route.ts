@@ -4,6 +4,7 @@ import { getNextApiKey } from "@/lib/api-keys";
 import { PROVIDER_COMPLETIONS_URLS } from "@/lib/providers";
 import { openAIError } from "@/lib/openai-compat";
 import crypto from "crypto";
+import { upstreamAgent } from "@/lib/upstream-agent";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -83,6 +84,8 @@ export async function POST(req: NextRequest) {
           method: "POST",
           headers,
           body: JSON.stringify({ ...body, model: model.model_id }),
+          // @ts-expect-error undici dispatcher not in standard fetch types
+          dispatcher: upstreamAgent,
         });
 
         if (response.ok) {

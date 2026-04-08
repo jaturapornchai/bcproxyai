@@ -1,6 +1,7 @@
 import { getSqlClient } from "@/lib/db/schema";
 import { getNextApiKey } from "@/lib/api-keys";
 import { PROVIDER_URLS } from "@/lib/providers";
+import { upstreamAgent } from "@/lib/upstream-agent";
 
 const NON_CHAT_KEYWORDS = [
   "whisper",
@@ -66,6 +67,8 @@ export async function pingModel(
       headers,
       body,
       signal: AbortSignal.timeout(timeoutMs),
+      // @ts-expect-error undici dispatcher not in standard fetch types
+      dispatcher: upstreamAgent,
     });
     const latency = Date.now() - start;
 
@@ -151,6 +154,8 @@ export async function testVisionSupport(
       headers,
       body,
       signal: AbortSignal.timeout(15000),
+      // @ts-expect-error undici dispatcher not in standard fetch types
+      dispatcher: upstreamAgent,
     });
 
     if (res.ok) return 1;
@@ -212,6 +217,8 @@ export async function testToolSupport(
       headers,
       body,
       signal: AbortSignal.timeout(15000),
+      // @ts-expect-error undici dispatcher not in standard fetch types
+      dispatcher: upstreamAgent,
     });
 
     if (res.ok) return 1;

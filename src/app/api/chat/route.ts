@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { getNextApiKey } from "@/lib/api-keys";
 import { PROVIDER_URLS } from "@/lib/providers";
+import { upstreamAgent } from "@/lib/upstream-agent";
 
 export const dynamic = "force-dynamic";
 
@@ -44,6 +45,8 @@ export async function POST(req: NextRequest) {
         stream: true,
         max_tokens: 2048,
       }),
+      // @ts-expect-error undici dispatcher not in standard fetch types
+      dispatcher: upstreamAgent,
     });
 
     if (!res.ok) {

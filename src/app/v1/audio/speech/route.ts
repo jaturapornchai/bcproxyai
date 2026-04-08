@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { getNextApiKey } from "@/lib/api-keys";
 import { openAIError } from "@/lib/openai-compat";
+import { upstreamAgent } from "@/lib/upstream-agent";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -44,6 +45,8 @@ export async function POST(req: NextRequest) {
         voice,
         response_format: responseFormat,
       }),
+      // @ts-expect-error undici dispatcher not in standard fetch types
+      dispatcher: upstreamAgent,
     });
 
     if (!response.ok) {

@@ -1,6 +1,7 @@
 import { getSqlClient } from "@/lib/db/schema";
 import { getNextApiKey } from "@/lib/api-keys";
 import { PROVIDER_URLS } from "@/lib/providers";
+import { upstreamAgent } from "@/lib/upstream-agent";
 
 // DeepSeek as judge (cheap + reliable)
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY ?? "";
@@ -164,6 +165,8 @@ export async function askModel(
         max_tokens: 300,
       }),
       signal: AbortSignal.timeout(30000),
+      // @ts-expect-error undici dispatcher not in standard fetch types
+      dispatcher: upstreamAgent,
     });
     const latency = Date.now() - start;
 
@@ -214,6 +217,8 @@ export async function judgeAnswer(
           max_tokens: 200,
         }),
         signal: AbortSignal.timeout(20000),
+        // @ts-expect-error undici dispatcher not in standard fetch types
+        dispatcher: upstreamAgent,
       });
 
       if (res.ok) {
@@ -245,6 +250,8 @@ export async function judgeAnswer(
           max_tokens: 200,
         }),
         signal: AbortSignal.timeout(20000),
+        // @ts-expect-error undici dispatcher not in standard fetch types
+        dispatcher: upstreamAgent,
       });
 
       if (!res.ok) continue;

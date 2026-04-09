@@ -4,6 +4,7 @@ import { checkHealth } from "./health";
 import { runExams } from "./exam";
 import { appointTeachers } from "@/lib/teacher";
 import { acquireLeader, renewLeader, releaseLeader } from "./leader";
+import { startWarmup } from "./warmup";
 
 export { scanModels } from "./scanner";
 export { checkHealth } from "./health";
@@ -91,7 +92,7 @@ export async function runWorkerCycle(): Promise<void> {
   await setState("status", "running");
   await setState("last_run", new Date().toISOString());
 
-  const next = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  const next = new Date(Date.now() + 15 * 60 * 1000).toISOString();
   await setState("next_run", next);
 
   await logWorker("worker", "Worker cycle started");
@@ -169,7 +170,7 @@ export async function runWorkerCycle(): Promise<void> {
 export function startWorker(): void {
   if (workerTimer) return; // already started
 
-  logWorker("worker", "Worker starting — running immediately then every 1h");
+  logWorker("worker", "Worker starting — running immediately then every 15 min");
 
   // Run once immediately (async, don't block)
   runWorkerCycle().catch((err) => {
@@ -178,14 +179,17 @@ export function startWorker(): void {
     setState("status", "error");
   });
 
-  // Then every 1 hour
+  // Then every 15 minutes
   workerTimer = setInterval(() => {
     runWorkerCycle().catch((err) => {
       logWorker("worker", `Scheduled cycle error: ${err}`, "error");
       isRunning = false;
       setState("status", "error");
     });
-  }, 60 * 60 * 1000);
+  }, 15 * 60 * 1000);
+
+  // Warmup pinger — keeps upstream sockets hot between cycles
+  startWarmup();
 }
 
 export async function getWorkerStatus(): Promise<WorkerStatus> {

@@ -1020,6 +1020,22 @@ export async function POST(req: NextRequest) {
       if (process.env.LOG_LEVEL === "debug") console.log(`[DEBUG] after provider-cooldown filter: ${finalCandidates.length} candidates`);
     }
 
+    // P1: Pre-flight size check — skip models whose context_length is too small for this request
+    const estTokens = estimateTokens(body);
+    const requiredContext = Math.ceil(estTokens * 1.4); // 30% headroom for response + safety margin
+    const sizeFiltered = finalCandidates.filter(c => {
+      if (!c.context_length || c.context_length >= requiredContext) return true;
+      console.log(`[SIZE-SKIP] ${c.provider}/${c.model_id} context ${c.context_length} < required ${requiredContext}`);
+      return false;
+    });
+    // Fall back to full list if everything was filtered (better to try than immediately 503)
+    if (sizeFiltered.length > 0) {
+      finalCandidates = sizeFiltered;
+      if (process.env.LOG_LEVEL === "debug") console.log(`[DEBUG] after size filter: ${finalCandidates.length} candidates (required ctx ${requiredContext})`);
+    } else {
+      console.log(`[SIZE-SKIP] All candidates too small for ${requiredContext} tokens — using full list as fallback`);
+    }
+
     // Weighted Load Balancing
     let spreadCandidates: typeof finalCandidates;
 

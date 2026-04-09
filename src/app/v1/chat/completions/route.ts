@@ -12,6 +12,7 @@ import { getRedis } from "@/lib/redis";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { getCachedResponse, setCachedResponse } from "@/lib/response-cache";
 import { recordBattleEvent, outcomeFromLatency } from "@/lib/battle-score";
+import { hasTpmHeadroom, recordTokenConsumption } from "@/lib/tpm-tracker";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -1135,6 +1136,9 @@ export async function POST(req: NextRequest) {
               usage?.prompt_tokens ?? 0, usage?.completion_tokens ?? 0, null, userMsg, content?.slice(0, 500) ?? null);
             await recordRoutingResult(winner.id, winner.provider, promptCategory, true, latency);
             await trackTokenUsage(winner.provider, winner.model_id, usage?.prompt_tokens ?? 0, usage?.completion_tokens ?? 0);
+            // P4: record token consumption for TPM tracking
+            const hedgeTotalTokens = (usage?.prompt_tokens ?? 0) + (usage?.completion_tokens ?? 0);
+            recordTokenConsumption(winner.provider, hedgeTotalTokens).catch(() => {});
             recordBattleEvent(outcomeFromLatency(latency, true)).catch(() => { /* cosmetic */ });
             if (content) {
               setCachedResponse(body, { content, provider: winner.provider, model: winner.model_id }).catch(() => { /* non-critical */ });
@@ -1204,6 +1208,12 @@ export async function POST(req: NextRequest) {
       const candidateKey = `${provider}:${actualModelId}`;
       if (caps.hasTools && KNOWN_BROKEN_TOOL_MODELS.has(candidateKey)) {
         console.log(`[BROKEN-TOOL-SKIP] ${candidateKey} — known broken tool support`);
+        continue;
+      }
+
+      // P4: Skip if provider TPM budget is exhausted
+      const estProjected = estTokens + 2000; // estimated response budget
+      if (!(await hasTpmHeadroom(provider, estProjected))) {
         continue;
       }
 
@@ -1292,6 +1302,9 @@ export async function POST(req: NextRequest) {
               }
 
               await trackTokenUsage(provider, actualModelId, usage?.prompt_tokens ?? 0, usage?.completion_tokens ?? 0);
+              // P4: record token consumption for TPM tracking
+              const totalTokens = (usage?.prompt_tokens ?? 0) + (usage?.completion_tokens ?? 0);
+              recordTokenConsumption(provider, totalTokens).catch(() => {});
               // Improvement C: store in response cache (non-stream, low-temp, no tools)
               if (content) {
                 setCachedResponse(body, { content, provider, model: actualModelId }).catch(() => { /* non-critical */ });

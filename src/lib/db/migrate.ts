@@ -396,6 +396,43 @@ export async function runMigrations(): Promise<void> {
     await sql`CREATE INDEX IF NOT EXISTS idx_dev_sugg_open ON dev_suggestions(status, severity, created_at DESC) WHERE status = 'open'`;
     await sql`CREATE INDEX IF NOT EXISTS idx_dev_sugg_recent ON dev_suggestions(created_at DESC)`;
 
+    // ─── Performance indexes (U5) ────────────────────────────────────────────
+    // Note: partial WHERE cooldown_until > now() ใช้ไม่ได้ (now() ไม่ IMMUTABLE)
+    // ใช้ WHERE cooldown_until IS NOT NULL แทน — queries กรอง > now() รันไปเถอะ
+    await sql`CREATE INDEX IF NOT EXISTS idx_health_cooldown_active ON health_logs(model_id, cooldown_until DESC) WHERE cooldown_until IS NOT NULL`.catch(
+      (e) => console.warn("[migrate] idx_health_cooldown_active skipped:", (e as Error).message),
+    );
+    await sql`CREATE INDEX IF NOT EXISTS idx_gateway_recent ON gateway_logs(created_at DESC, status)`.catch(
+      (e) => console.warn("[migrate] idx_gateway_recent skipped:", (e as Error).message),
+    );
+    await sql`CREATE INDEX IF NOT EXISTS idx_exam_passed_recent ON exam_attempts(model_id, started_at DESC) WHERE passed = true`.catch(
+      (e) => console.warn("[migrate] idx_exam_passed_recent skipped:", (e as Error).message),
+    );
+
+    // ─── Semantic cache (pgvector) ───────────────────────────────────────────
+    // pgvector อาจไม่ติดตั้งใน Postgres image — swallow error แล้วให้ระบบรันต่อ
+    try {
+      await sql`CREATE EXTENSION IF NOT EXISTS vector`;
+      await sql`
+        CREATE TABLE IF NOT EXISTS semantic_cache (
+          id BIGSERIAL PRIMARY KEY,
+          query_hash TEXT UNIQUE NOT NULL,
+          query TEXT NOT NULL,
+          embedding vector(768),
+          response JSONB NOT NULL,
+          provider TEXT,
+          model TEXT,
+          hit_count INT DEFAULT 0,
+          created_at TIMESTAMPTZ DEFAULT now(),
+          last_used_at TIMESTAMPTZ DEFAULT now()
+        )
+      `;
+      await sql`CREATE INDEX IF NOT EXISTS idx_semantic_cache_embedding ON semantic_cache USING ivfflat (embedding vector_cosine_ops)`;
+      console.log("[migrate] pgvector semantic_cache ready");
+    } catch (e) {
+      console.warn("[migrate] pgvector unavailable — semantic_cache skipped:", (e as Error).message);
+    }
+
     console.log("[migrate] All tables created/verified");
   } catch (err) {
     console.error("[migrate] Migration failed:", err);

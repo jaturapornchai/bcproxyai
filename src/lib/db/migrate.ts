@@ -331,4 +331,53 @@ export async function runMigrations(): Promise<void> {
     console.error("[migrate] Migration failed:", err);
     throw err;
   }
+
+  // ─── Semantic Cache (pgvector) ──────────────────────────────────────────────
+  // Graceful: if pgvector ext not available, log warning and skip — system still works
+  try {
+    await sql`CREATE EXTENSION IF NOT EXISTS vector`;
+    await sql`
+      CREATE TABLE IF NOT EXISTS semantic_cache (
+        id BIGSERIAL PRIMARY KEY,
+        query_hash TEXT UNIQUE NOT NULL,
+        query TEXT NOT NULL,
+        embedding vector(768),
+        response JSONB NOT NULL,
+        provider TEXT,
+        model TEXT,
+        hit_count INT DEFAULT 0,
+        created_at TIMESTAMPTZ DEFAULT now(),
+        last_used_at TIMESTAMPTZ DEFAULT now()
+      )
+    `;
+    await sql`
+      CREATE INDEX IF NOT EXISTS idx_semantic_cache_embedding
+      ON semantic_cache USING ivfflat (embedding vector_cosine_ops)
+      WITH (lists = 100)
+    `;
+    await sql`CREATE INDEX IF NOT EXISTS idx_semantic_cache_used ON semantic_cache(last_used_at DESC)`;
+    console.log("[migrate] pgvector + semantic_cache ready");
+  } catch (err) {
+    console.warn("[migrate] pgvector not available — semantic cache disabled:", String(err).slice(0, 150));
+  }
+
+  // ─── Performance indexes ─────────────────────────────────────────────────────
+  // Note: CREATE INDEX CONCURRENTLY cannot run inside transaction,
+  // so we use normal CREATE INDEX IF NOT EXISTS here
+  await sql`
+    CREATE INDEX IF NOT EXISTS idx_health_cooldown_active
+    ON health_logs(model_id, cooldown_until)
+    WHERE cooldown_until > now()
+  `.catch((err) => console.warn("[migrate] idx_health_cooldown_active:", String(err).slice(0, 100)));
+
+  await sql`
+    CREATE INDEX IF NOT EXISTS idx_gateway_recent
+    ON gateway_logs(created_at DESC, status)
+  `.catch((err) => console.warn("[migrate] idx_gateway_recent:", String(err).slice(0, 100)));
+
+  await sql`
+    CREATE INDEX IF NOT EXISTS idx_exam_passed_recent
+    ON exam_attempts(model_id, started_at DESC)
+    WHERE passed = true
+  `.catch((err) => console.warn("[migrate] idx_exam_passed_recent:", String(err).slice(0, 100)));
 }

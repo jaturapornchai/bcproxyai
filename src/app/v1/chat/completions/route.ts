@@ -17,6 +17,7 @@ import { recordOutcome, getProviderScore, getModelScore, isRecentlyDead } from "
 import { isProviderEnabledSync } from "@/lib/provider-toggle";
 import { canFitRequest, parseLimitHeaders, parseLimitError, recordLimit } from "@/lib/provider-limits";
 import { recordOutcomeLearning, recordFailStreak, canHandleTokens, getCategoryWinners, detectCategory } from "@/lib/learning";
+import { upstreamAgent } from "@/lib/upstream-agent";
 
 // Slow threshold แปรผันตาม context size — request ใหญ่ช้ากว่าปกติ
 function slowThresholdMs(estInputTokens: number): number {
@@ -214,8 +215,8 @@ async function recordCircuitFailure(provider: string): Promise<void> {
       if (successRate < 0.3) {
         // Open circuit for 2 minutes
         const cbKey = `cb:open:${provider}`;
-        await redis.set(cbKey, "open", "EX", 120);
-        console.log(`[CIRCUIT-OPEN] ${provider} — success rate ${(successRate * 100).toFixed(0)}% < 30% → circuit open 2min`);
+        await redis.set(cbKey, "open", "EX", 30);
+        console.log(`[CIRCUIT-OPEN] ${provider} — success rate ${(successRate * 100).toFixed(0)}% < 30% → circuit open 30s`);
       }
     }
   } catch { /* ignore */ }
@@ -679,19 +680,18 @@ async function forwardToProvider(
   }
 
   // Per-attempt timeout — scaled by estimated body size
-  // Small: 8s, Medium (5K+): 15s, Large (10K+): 25s, Ollama: 30s
   const bodySize = JSON.stringify(body).length;
   let timeoutMs: number;
   if (provider === "ollama") {
     timeoutMs = 30_000;
   } else if (bodySize > 40_000) {
-    timeoutMs = 30_000; // 10K+ tokens
+    timeoutMs = 60_000;
   } else if (bodySize > 20_000) {
-    timeoutMs = 20_000; // 5K+ tokens
+    timeoutMs = 35_000;
   } else if (bodySize > 10_000) {
-    timeoutMs = 12_000;
+    timeoutMs = 20_000;
   } else {
-    timeoutMs = 8_000;
+    timeoutMs = 12_000;
   }
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
   const signal = externalSignal
@@ -702,6 +702,8 @@ async function forwardToProvider(
     headers,
     body: JSON.stringify(requestBody),
     signal,
+    // @ts-expect-error undici dispatcher not in standard fetch types
+    dispatcher: upstreamAgent,
   });
 
   if (response.status === 429) {
@@ -713,28 +715,29 @@ async function forwardToProvider(
   return response;
 }
 
-// Improvement A: parallel hedge for top-2 cloud candidates
+// Improvement A: parallel hedge for top-N cloud candidates
 const FAST_STREAM_PROVIDERS_FOR_HEDGE = new Set(["groq", "cerebras", "together"]);
 
 async function hedgeRace(
-  topTwo: ModelRow[],
+  candidates: ModelRow[],
   body: Record<string, unknown>,
   isStream: boolean
-): Promise<{ response: Response; winner: ModelRow; loserIdx: number }> {
-  const controllers = topTwo.map(() => new AbortController());
+): Promise<{ response: Response; winner: ModelRow; losers: ModelRow[] }> {
+  const controllers = candidates.map(() => new AbortController());
 
-  const attempts = topTwo.map((candidate, idx) =>
+  const attempts = candidates.map((candidate, idx) =>
     forwardToProvider(candidate.provider, candidate.model_id, body, isStream, controllers[idx].signal)
       .then(res => {
-        if (res.ok) return { response: res, winner: candidate, loserIdx: idx === 0 ? 1 : 0 };
+        if (res.ok) return { response: res, winner: candidate, winnerIdx: idx };
         throw new Error(`HTTP ${res.status}`);
       })
   );
 
   const result = await Promise.any(attempts);
-  // Cancel the loser
-  controllers.forEach((c, i) => { if (topTwo[i] !== result.winner) c.abort(); });
-  return result;
+  // Cancel all losers
+  controllers.forEach((c, i) => { if (i !== result.winnerIdx) c.abort(); });
+  const losers = candidates.filter((_, i) => i !== result.winnerIdx);
+  return { response: result.response, winner: result.winner, losers };
 }
 
 // Improvement F: probe Ollama /api/ps to see if model is loaded in memory
@@ -1035,7 +1038,7 @@ export async function POST(req: NextRequest) {
       return openAIError(503, { message: reason });
     }
 
-    const MAX_RETRIES = 10;
+    const MAX_RETRIES = 25;
     let lastError = "";
     let lastProvider: string | null = null;
     let lastModelId: string | null = null;
@@ -1161,6 +1164,20 @@ export async function POST(req: NextRequest) {
 
     if (process.env.LOG_LEVEL === "debug") console.log(`[DEBUG] spread=${spreadCandidates.length} top5=[${spreadCandidates.slice(0,5).map(c=>c.provider+'/'+c.model_id).join(', ')}]`);
 
+    // Context-aware provider filter: for large requests, require 1.5x headroom
+    if (estInputTokens > 20_000) {
+      const beforeCount = spreadCandidates.length;
+      const filtered = spreadCandidates.filter(c => c.context_length >= estInputTokens * 1.5);
+      if (filtered.length > 0) {
+        spreadCandidates.splice(0, spreadCandidates.length, ...filtered);
+        console.log(`[CTX-FILTER:${_reqId}] kept=${spreadCandidates.length}/${beforeCount} for ${estInputTokens}tok`);
+      } else {
+        const fallback = spreadCandidates.slice(0, 10);
+        spreadCandidates.splice(0, spreadCandidates.length, ...fallback);
+        console.log(`[CTX-FILTER:${_reqId}] fallback (no provider with 1.5x headroom)`);
+      }
+    }
+
     // ถ้าไม่มี candidate เหลือเลยหลังผ่าน filter — ตอบ 503 พร้อม log ที่อ่านออก
     if (spreadCandidates.length === 0) {
       const reason = caps.hasImages
@@ -1176,26 +1193,26 @@ export async function POST(req: NextRequest) {
 
     // Total retry budget — ให้เวลาพอสำหรับ request ใหญ่ที่ model ต้องประมวลผลนาน
     const TOTAL_TIMEOUT_MS =
-      estTokens > 20_000 ? 60_000 :
-      estTokens > 10_000 ? 45_000 :
-      estTokens > 5_000  ? 30_000 :
-      20_000;
+      estTokens > 20_000 ? 120_000 :
+      estTokens > 10_000 ? 90_000 :
+      estTokens > 5_000  ? 60_000 :
+      30_000;
 
-    // Improvement A: parallel hedge top-2 cloud candidates (skip for stream / tools)
+    // Improvement A: parallel hedge top-3 cloud candidates (skip for stream / tools)
     let hedgeStartIdx = 0;
     if (
       !isStream &&
       !caps.hasTools &&
-      estTokens <= 15_000 &&
+      estTokens <= 20_000 &&
       spreadCandidates.length >= 2 &&
       spreadCandidates[0].provider !== "ollama" &&
       spreadCandidates[1].provider !== "ollama"
     ) {
-      const topTwo = spreadCandidates.slice(0, 2);
+      const topThree = spreadCandidates.slice(0, 3).filter(c => c.provider !== "ollama");
       try {
-        const hedgeResult = await hedgeRace(topTwo, body, isStream);
-        const { response: hedgeResp, winner, loserIdx } = hedgeResult;
-        const loser = topTwo[loserIdx];
+        const hedgeResult = await hedgeRace(topThree, body, isStream);
+        const { response: hedgeResp, winner, losers } = hedgeResult;
+        const loser = losers[0];
         const latency = Date.now() - startTime;
         console.log(`[HEDGE-WIN] ${winner.provider}/${winner.model_id} vs ${loser.provider}/${loser.model_id} | ${latency}ms`);
         // Record winner as success, loser as neutral (cancelled)
@@ -1263,16 +1280,16 @@ export async function POST(req: NextRequest) {
           // JSON parse failed — fall through to sequential
         }
       } catch {
-        // Both hedge candidates failed
+        // All hedge candidates failed
         const latency = Date.now() - startTime;
-        console.log(`[HEDGE-LOSS] both top-2 failed | ${latency}ms — continuing sequential`);
-        await recordProviderFailureMem(topTwo[0].provider);
-        await recordProviderFailureMem(topTwo[1].provider);
-        await recordCircuitFailure(topTwo[0].provider);
-        await recordCircuitFailure(topTwo[1].provider);
+        console.log(`[HEDGE-LOSS] all top-${topThree.length} failed | ${latency}ms — continuing sequential`);
+        for (const c of topThree) {
+          await recordProviderFailureMem(c.provider);
+          await recordCircuitFailure(c.provider);
+        }
       }
-      // After hedge (win bad-response or loss), skip first 2 in sequential loop
-      hedgeStartIdx = 2;
+      // After hedge (win bad-response or loss), skip first 3 in sequential loop
+      hedgeStartIdx = 3;
     }
 
     // Track skipped candidates for possible second-pass retry

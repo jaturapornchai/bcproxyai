@@ -13,15 +13,15 @@ import { getSqlClient } from "@/lib/db/schema";
 // ─── Phase 1: Fail Streak + Exponential Cooldown ──────────────────────────────
 
 /**
- * คำนวณ cooldown duration ตาม streak
- * 1 → 30s, 2 → 1min, 3 → 2min, 4 → 4min, 5+ → 8min (cap ไม่เกิน 8 นาที)
+ * คำนวณ cooldown duration ตาม streak (aggressive recovery — 4x faster)
+ * 1 → 10s, 2 → 20s, 3 → 40s, 4 → 1min, 5+ → 2min cap
  * เหตุผล: cooldown ยาวเกินทำให้ pool หาย → 503 cascade
  */
 export function computeCooldownMs(streakCount: number): number {
-  if (streakCount <= 0) return 30_000;
-  if (streakCount >= 5) return 8 * 60_000;
-  // 1→30s, 2→60s, 3→120s, 4→240s, 5→480s
-  return 30_000 * Math.pow(2, streakCount - 1);
+  if (streakCount <= 0) return 10_000;
+  if (streakCount >= 5) return 2 * 60_000;
+  // 1→10s, 2→20s, 3→40s, 4→80s, 5→120s(cap)
+  return 10_000 * Math.pow(2, streakCount - 1);
 }
 
 /**

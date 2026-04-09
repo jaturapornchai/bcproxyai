@@ -14,7 +14,7 @@ export function StatsCards({ stats, loading }: StatsCardsProps) {
     : 0;
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 mt-6">
+    <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-4 mt-6">
       {[
         { label: "โมเดลทั้งหมด",   value: stats?.totalModels ?? 0,       color: "from-indigo-500 to-purple-500",  delay: "stagger-1", suffix: "" },
         { label: "พร้อมใช้งาน",    value: stats?.availableModels ?? 0,   color: "from-emerald-500 to-teal-500",   delay: "stagger-2", suffix: "" },

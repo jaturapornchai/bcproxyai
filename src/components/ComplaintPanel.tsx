@@ -153,7 +153,7 @@ function HallOfFameShame({ topComplained }: { topComplained: TopComplained[] }) 
   if (topComplained.length === 0) return null;
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+    <div className="grid grid-cols-[repeat(auto-fit,minmax(360px,1fr))] gap-4 mb-4">
       {/* Hall of Shame */}
       <div className="bg-red-900/20 border border-red-800/30 rounded-xl p-4">
         <h4 className="text-red-400 font-bold mb-3 text-center">
@@ -253,7 +253,7 @@ export function ComplaintPanel() {
   return (
     <div>
       {/* Stats Bar */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(140px,1fr))] gap-3 mb-4">
         {[
           { label: "ร้องเรียนทั้งหมด", value: stats.total, color: "text-white" },
           { label: "รอสอบใหม่", value: stats.pending, color: "text-yellow-400" },

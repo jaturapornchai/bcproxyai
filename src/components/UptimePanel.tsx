@@ -81,7 +81,7 @@ export function UptimePanel() {
   return (
     <div className="space-y-4">
       {/* Uptime Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3">
         {uptimeStats.map(stat => {
           const hex = PROVIDER_HEX[stat.provider] ?? "#6366f1";
           const colors = PROVIDER_COLORS[stat.provider] ?? PROVIDER_COLORS.openrouter;

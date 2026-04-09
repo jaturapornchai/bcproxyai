@@ -514,7 +514,7 @@ export function InfraPanel() {
       </div>
 
       {/* Row 1: Five cards */}
-      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3">
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3">
         <PostgresCard d={data.postgres} />
         <RedisCard d={data.redis} />
         <ReplicasCard d={data.replicas} leader={data.workerLeader.hostname} />
@@ -523,7 +523,7 @@ export function InfraPanel() {
       </div>
 
       {/* Row 2: Two wider cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(320px,1fr))] gap-3">
         <CooldownsCard d={data.cooldowns} />
         <FailureStreaksCard d={data.failureStreaks} />
       </div>

@@ -63,7 +63,7 @@ export function ModelGrid({ sortedModels, availableCount, cooldownCount, unknown
       </div>
 
       {loading ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-4">
           {Array.from({ length: 8 }).map((_, i) => (
             <Skeleton key={i} className="h-40 rounded-xl" />
           ))}
@@ -74,7 +74,7 @@ export function ModelGrid({ sortedModels, availableCount, cooldownCount, unknown
           <p>ยังไม่มีนักเรียน — กด &quot;รันตอนนี้&quot; เพื่อเปิดรับสมัคร</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-4">
           {sortedModels.map((model) => {
             const pc = PROVIDER_COLORS[model.provider] ?? PROVIDER_COLORS.openrouter;
             const cooldownText = fmtCooldown(model.health.cooldownUntil);

@@ -190,7 +190,7 @@ export function TeachersPanel() {
                 <div className="text-[10px] text-indigo-400 uppercase tracking-wide mb-2">
                   📋 หัวหน้าแผนก (Heads) — ตรวจข้อสอบเฉพาะหมวด
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                <div className="grid grid-cols-[repeat(auto-fit,minmax(260px,1fr))] gap-2">
                   {data.heads.map((h) => (
                     <TeacherCard key={h.modelId} t={h} />
                   ))}
@@ -204,7 +204,7 @@ export function TeachersPanel() {
                 <div className="text-[10px] text-cyan-400 uppercase tracking-wide mb-2">
                   👥 ครูคุมสอบ (Proctors) — ยิงคำถาม วัดเวลา
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                <div className="grid grid-cols-[repeat(auto-fit,minmax(260px,1fr))] gap-2">
                   {data.proctors.map((p) => (
                     <TeacherCard key={p.modelId} t={p} />
                   ))}

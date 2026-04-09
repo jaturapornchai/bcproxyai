@@ -68,7 +68,7 @@ export function RoutingLearnPanel() {
   return (
     <div className="space-y-4">
       {/* Summary */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3">
         <div className="bg-gray-800/50 rounded-lg p-3 text-center">
           <div className="text-2xl font-bold text-indigo-400">{data.totalLearned}</div>
           <div className="text-xs text-gray-400">ครั้งที่ครูจำได้</div>
@@ -129,7 +129,7 @@ export function RoutingLearnPanel() {
       </div>
 
       {/* Best Models per Category */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(360px,1fr))] gap-4">
         {Object.entries(data.categories).map(([cat, models]) => {
           const catInfo = CATEGORY_LABELS[cat] ?? { label: cat, icon: "?" };
           return (

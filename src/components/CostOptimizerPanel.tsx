@@ -85,7 +85,7 @@ export function CostOptimizerPanel() {
   return (
     <div className="space-y-4">
       {/* Summary Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3">
         <div className="bg-gray-800/50 rounded-lg p-3 text-center">
           <div className="text-2xl font-bold text-emerald-400">${summary.totalCost.toFixed(4)}</div>
           <div className="text-xs text-gray-400">ค่าเทอม 30 วัน</div>
@@ -121,7 +121,7 @@ export function CostOptimizerPanel() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(360px,1fr))] gap-4">
         {/* Provider Cost Breakdown */}
         <div className="glass rounded-xl p-4">
           <h4 className="text-sm font-bold text-gray-300 mb-3">ต้นทุนแยกตาม Provider</h4>

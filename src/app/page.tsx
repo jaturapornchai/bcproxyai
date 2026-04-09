@@ -747,7 +747,7 @@ export default function Dashboard() {
               {providerStatuses.filter(p => p.status === "active").length}/{providerStatuses.length} ใช้งานได้
             </span>
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3">
             {providerStatuses.map((p) => {
               const c = PROVIDER_COLORS[p.provider] ?? { text: "text-gray-300", bg: "bg-gray-700/40", border: "border-gray-600/40", glow: "rgba(156,163,175,0.5)" };
               const statusConfig = ({

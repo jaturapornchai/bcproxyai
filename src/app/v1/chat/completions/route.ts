@@ -163,11 +163,10 @@ async function isCircuitOpen(provider: string): Promise<boolean> {
     const val = await redis.get(cbKey);
     if (val === null) return false;
     if (val === "half-open") return false; // allow probe
-    // val === "open" — check if we're in the last 30s of the cooldown
+    // val === "open" — U2: shorter 30s total cooldown, promote to half-open in the last 5s
     const ttl = await redis.ttl(cbKey);
-    if (ttl > 0 && ttl <= 30) {
-      // Promote to half-open so the next request becomes a probe
-      await redis.set(cbKey, "half-open", "EX", ttl);
+    if (ttl > 0 && ttl <= 5) {
+      await redis.set(cbKey, "half-open", "EX", 30);
       return false;
     }
     return true;
@@ -213,10 +212,10 @@ async function recordCircuitFailure(provider: string): Promise<void> {
     if (total >= 5) {
       const successRate = succs / total;
       if (successRate < 0.3) {
-        // Open circuit for 2 minutes
+        // U2: open circuit for 30s (faster recovery; half-open probe at end)
         const cbKey = `cb:open:${provider}`;
-        await redis.set(cbKey, "open", "EX", 120);
-        console.log(`[CIRCUIT-OPEN] ${provider} — success rate ${(successRate * 100).toFixed(0)}% < 30% → circuit open 2min`);
+        await redis.set(cbKey, "open", "EX", 30);
+        console.log(`[CIRCUIT-OPEN] ${provider} — success rate ${(successRate * 100).toFixed(0)}% < 30% → circuit open 30s`);
       }
     }
   } catch { /* ignore */ }
@@ -723,23 +722,22 @@ async function forwardToProvider(
 const FAST_STREAM_PROVIDERS_FOR_HEDGE = new Set(["groq", "cerebras", "together"]);
 
 async function hedgeRace(
-  topTwo: ModelRow[],
+  contenders: ModelRow[],
   body: Record<string, unknown>,
   isStream: boolean
-): Promise<{ response: Response; winner: ModelRow; loserIdx: number }> {
-  const controllers = topTwo.map(() => new AbortController());
+): Promise<{ response: Response; winner: ModelRow; winnerIdx: number }> {
+  const controllers = contenders.map(() => new AbortController());
 
-  const attempts = topTwo.map((candidate, idx) =>
+  const attempts = contenders.map((candidate, idx) =>
     forwardToProvider(candidate.provider, candidate.model_id, body, isStream, controllers[idx].signal)
       .then(res => {
-        if (res.ok) return { response: res, winner: candidate, loserIdx: idx === 0 ? 1 : 0 };
+        if (res.ok) return { response: res, winner: candidate, winnerIdx: idx };
         throw new Error(`HTTP ${res.status}`);
       })
   );
 
   const result = await Promise.any(attempts);
-  // Cancel the loser
-  controllers.forEach((c, i) => { if (topTwo[i] !== result.winner) c.abort(); });
+  controllers.forEach((c, i) => { if (i !== result.winnerIdx) c.abort(); });
   return result;
 }
 
@@ -755,6 +753,8 @@ async function isOllamaModelLoaded(modelId: string): Promise<boolean> {
     const baseUrl = process.env.OLLAMA_BASE_URL || "http://localhost:11434";
     const res = await fetch(`${baseUrl}/api/ps`, {
       signal: AbortSignal.timeout(1000),
+      // @ts-expect-error undici dispatcher not in standard fetch types
+      dispatcher: upstreamAgent,
     });
     if (!res.ok) {
       await redis.set(cacheKey, "0", "EX", 30);
@@ -1041,7 +1041,7 @@ export async function POST(req: NextRequest) {
       return openAIError(503, { message: reason });
     }
 
-    const MAX_RETRIES = 10;
+    const MAX_RETRIES = 25;
     let lastError = "";
     let lastProvider: string | null = null;
     let lastModelId: string | null = null;
@@ -1100,6 +1100,16 @@ export async function POST(req: NextRequest) {
       if (process.env.LOG_LEVEL === "debug") console.log(`[DEBUG] after size filter: ${finalCandidates.length} candidates (required ctx ${requiredContext})`);
     } else {
       console.log(`[SIZE-SKIP] All candidates too small for ${requiredContext} tokens — using full list as fallback`);
+    }
+
+    // U2: Context-aware provider filter for large requests
+    if (estTokens > 20_000) {
+      const ctxMin = Math.ceil(estTokens * 1.5);
+      const ctxFiltered = finalCandidates.filter(c => c.context_length > ctxMin);
+      if (ctxFiltered.length > 0) {
+        finalCandidates = ctxFiltered;
+      }
+      console.log(`[CTX-FILTER:${_reqId}] kept=${finalCandidates.length} for ${estTokens}tok`);
     }
 
     // ─── Provider-first selection ─────────────────────────────────────────
@@ -1180,30 +1190,30 @@ export async function POST(req: NextRequest) {
       return openAIError(503, { message: reason });
     }
 
-    // Total retry budget — ให้เวลาพอสำหรับ request ใหญ่ที่ model ต้องประมวลผลนาน
+    // Total retry budget — ขยายตาม estTokens (U2: aggressive overhaul)
     const TOTAL_TIMEOUT_MS =
-      estTokens > 20_000 ? 60_000 :
-      estTokens > 10_000 ? 45_000 :
-      estTokens > 5_000  ? 30_000 :
-      20_000;
+      estTokens > 40_000 ? 120_000 :
+      estTokens > 20_000 ? 90_000  :
+      estTokens > 10_000 ? 60_000  :
+      30_000;
 
-    // Improvement A: parallel hedge top-2 cloud candidates (skip for stream / tools)
+    // Improvement A (U2): parallel hedge top-3 cloud candidates (skip for stream / tools)
     let hedgeStartIdx = 0;
-    if (
+    const hedgeCount = Math.min(3, spreadCandidates.length);
+    const canHedge =
       !isStream &&
       !caps.hasTools &&
-      estTokens <= 15_000 &&
-      spreadCandidates.length >= 2 &&
-      spreadCandidates[0].provider !== "ollama" &&
-      spreadCandidates[1].provider !== "ollama"
-    ) {
-      const topTwo = spreadCandidates.slice(0, 2);
+      estTokens <= 20_000 &&
+      hedgeCount >= 2 &&
+      spreadCandidates.slice(0, hedgeCount).every(c => c.provider !== "ollama");
+    if (canHedge) {
+      const hedgeContenders = spreadCandidates.slice(0, hedgeCount);
       try {
-        const hedgeResult = await hedgeRace(topTwo, body, isStream);
-        const { response: hedgeResp, winner, loserIdx } = hedgeResult;
-        const loser = topTwo[loserIdx];
+        const hedgeResult = await hedgeRace(hedgeContenders, body, isStream);
+        const { response: hedgeResp, winner, winnerIdx } = hedgeResult;
+        const losers = hedgeContenders.filter((_, i) => i !== winnerIdx);
         const latency = Date.now() - startTime;
-        console.log(`[HEDGE-WIN] ${winner.provider}/${winner.model_id} vs ${loser.provider}/${loser.model_id} | ${latency}ms`);
+        console.log(`[HEDGE-WIN:${_reqId}] ${winner.provider}/${winner.model_id} vs [${losers.map(l => `${l.provider}/${l.model_id}`).join(", ")}] | ${latency}ms`);
         // Record winner as success, loser as neutral (cancelled)
         await recordProviderSuccessMem(winner.provider);
         // Parse and return the hedge winner response
@@ -1269,16 +1279,14 @@ export async function POST(req: NextRequest) {
           // JSON parse failed — fall through to sequential
         }
       } catch {
-        // Both hedge candidates failed
         const latency = Date.now() - startTime;
-        console.log(`[HEDGE-LOSS] both top-2 failed | ${latency}ms — continuing sequential`);
-        await recordProviderFailureMem(topTwo[0].provider);
-        await recordProviderFailureMem(topTwo[1].provider);
-        await recordCircuitFailure(topTwo[0].provider);
-        await recordCircuitFailure(topTwo[1].provider);
+        console.log(`[HEDGE-LOSS:${_reqId}] all top-${hedgeCount} failed | ${latency}ms — continuing sequential`);
+        await Promise.all(
+          hedgeContenders.flatMap(c => [recordProviderFailureMem(c.provider), recordCircuitFailure(c.provider)])
+        );
       }
-      // After hedge (win bad-response or loss), skip first 2 in sequential loop
-      hedgeStartIdx = 2;
+      // After hedge (win bad-response or loss), skip hedged candidates in sequential loop
+      hedgeStartIdx = hedgeCount;
     }
 
     // Track skipped candidates for possible second-pass retry

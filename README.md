@@ -7,19 +7,28 @@
 
 ## 💰 ประหยัดได้เท่าไหร่ (TL;DR)
 
-**ใช้งาน ~6.65M requests/เดือน ฟรี** เทียบเท่าค่าบริการจริง:
+**Free budget: ~20 พันล้าน tokens/เดือน** (คำนวณจาก documented TPD/TPM limits × practical utilization)
 
-| เทียบ Provider | ค่าใช้จ่าย/เดือน | ประหยัด/ปี |
-|---|---:|---:|
-| **Novita Llama 8B** (ถูกสุดในตลาด $0.02/1M) | ฿13,965 | **฿167,580** |
-| Groq paid (Llama 8B) | ฿34,895 | ฿418,740 |
-| DeepSeek V3.2 | ฿116,375 | ฿1,396,500 |
-| Gemini 2.5 Flash | ฿116,375 | ฿1,396,500 |
-| **GPT-4o** | ฿2,327,500 | **฿27,930,000** |
-| **Claude Sonnet 4** | ฿3,142,125 | **฿37,705,500** |
-| **Claude Opus 4** | ฿15,710,625 | **฿188,527,500** |
+**แจกแจง token:** 80% input (16B) + 20% output (4B) = **20B tokens/month**
 
-สมมติฐาน: 1 request ≈ 2,500 tokens (2K input + 500 output), practical 30% of theoretical max
+### 💵 เทียบเงินที่ประหยัดได้
+
+| Model | Input $/1M | Output $/1M | **$/เดือน** | **฿/เดือน** | ฿/ปี |
+|---|---:|---:|---:|---:|---:|
+| 🏆 **Novita Llama 3.1 8B** (ถูกสุด) | $0.02 | $0.02 | **$400** | **฿14,000** | ฿168,000 |
+| Groq paid (Llama 8B) | $0.06 | $0.06 | $1,200 | ฿42,000 | ฿504,000 |
+| Gemini Flash-Lite | $0.10 | $0.40 | $3,200 | ฿112,000 | ฿1,344,000 |
+| DeepSeek V3.2 | $0.14 | $0.28 | $3,360 | ฿117,600 | ฿1,411,200 |
+| GPT-4o mini | $0.15 | $0.60 | $4,800 | ฿168,000 | ฿2,016,000 |
+| DeepSeek V3 | $0.27 | $1.10 | $8,720 | ฿305,200 | ฿3,662,400 |
+| Claude Haiku 4.5 | $1.00 | $5.00 | $36,000 | ฿1,260,000 | ฿15,120,000 |
+| **GPT-4o** | $2.50 | $10.00 | **$80,000** | **฿2,800,000** | ฿33,600,000 |
+| **Claude Sonnet 4.6** | $3.00 | $15.00 | **$108,000** | **฿3,780,000** | ฿45,360,000 |
+| **Claude Opus 4.6** | $5.00 | $25.00 | **$180,000** | **฿6,300,000** | ฿75,600,000 |
+| GPT-5 | $10.00 | $30.00 | $280,000 | ฿9,800,000 | ฿117,600,000 |
+| **Claude Opus 4** (legacy) | $15.00 | $75.00 | **$540,000** | **฿18,900,000** | ฿226,800,000 |
+
+**หมายเหตุ:** ราคาจาก [OpenAI Pricing](https://openai.com/api/pricing/) และ [Anthropic Pricing](https://platform.claude.com/docs/en/about-claude/pricing) (Apr 2026) · Exchange rate ฿35/USD
 
 ---
 
@@ -608,42 +617,161 @@ Setup Modal → Toggle switch per provider
 
 ## 💵 Cost Comparison (Deep Dive)
 
-### Practical usage ~6.65M requests/month
+### Free Token Budget — คำนวณจาก documented TPD/TPM/RPM
 
-**Assumption:** 1 request ≈ 2,500 tokens (2K input + 500 output)
-**Total tokens:** 16.625B/month
+**Conservative practical estimate** (20% utilization of theoretical max):
 
-| Tier | Provider | Input $/1M | Output $/1M | Cost/month | บาท/เดือน | บาท/ปี |
+| Provider | Limit Source | Tokens/เดือน |
+|---|---|---:|
+| **Groq** | llama-8b 500K TPD + 6 other models | **~10B** |
+| **SambaNova** | 12 models × 20-30 RPM × 2.5K/req | **~5B** |
+| **Mistral** | 1 RPS cap + 1B tok/month per model | **~2B** |
+| **Chutes.ai** | Unlimited community GPU | **~1B** |
+| **LLM7.io** | 30 RPM × 2.5K × 24h | **~500M** |
+| **Pollinations** | Secret key unlimited | **~500M** |
+| **Together AI** | $25 signup + free models | **~500M** |
+| **glhf.chat** | Beta free (rate-limited) | **~200M** |
+| **Google Gemini** | 3 tiers × RPD caps | **~120M** |
+| **SiliconFlow** | 1000 RPD (w/$1 topup) | **~75M** |
+| **OpenRouter** | 1000 RPD (w/$10 credit) | **~75M** |
+| **Cerebras** | 1M tokens/day × 30 | **~30M** |
+| **GitHub Models** | 200 RPD × 2.5K | **~15M** |
+| **Reka AI** | $10/mo auto ÷ $0.75/1M | **~13M** |
+| **Ollama Cloud** | 16K tok/hr × 24h × 30 | **~11.5M** |
+| **Cloudflare AI** | 10K Neurons/day | **~3M** |
+| **Cohere** | 1000 req/month | **~2.5M** |
+| **HuggingFace** | $0.10/mo credits | **~2M** |
+| **NVIDIA NIM** | 1000 credits (÷ 30 amortize) | **~2.5M** |
+| **Hyperbolic** | $1 signup (÷ 30) | **~2.5M** |
+| **DashScope (Qwen)** | 1M tok × 90 days (÷ 3) | **~667K** |
+| **Z.AI (GLM)** | Signup credits (amortize) | **~1.7M** |
+| **Scaleway** | 1M tok lifetime (÷ 30) | **~33K** |
+| **Ollama local** | Unlimited (hardware only) | ∞ |
+| | | |
+| **รวม Practical** | | **~20 พันล้าน tokens/month** |
+
+### Token-based Cost (20B tokens = 16B input + 4B output)
+
+**ถ้าต้องจ่ายเงินแทน BCProxyAI:**
+
+| Tier | Model | Input | Output | Cost/month | ฿/month | ฿/year |
 |---|---|---:|---:|---:|---:|---:|
-| 🏆 Cheapest | **Novita Llama 8B** | $0.02 | $0.02 | **$399** | **฿13,965** | ฿167,580 |
-| | Groq paid (8B) | $0.06 | $0.06 | $997 | ฿34,895 | ฿418,740 |
-| | SiliconFlow (8B) | $0.06 | $0.06 | $997 | ฿34,895 | ฿418,740 |
-| | Gemini Flash-Lite | $0.10 | $0.40 | $3,325 | ฿116,375 | ฿1,396,500 |
-| | DeepSeek V3.2 | $0.14 | $0.28 | $3,325 | ฿116,375 | ฿1,396,500 |
-| | Gemini 2.5 Flash | $0.15 | $0.60 | $4,988 | ฿174,580 | ฿2,094,960 |
-| | DeepSeek V3 | $0.27 | $1.10 | $9,143 | ฿320,005 | ฿3,840,060 |
-| | GPT-4o mini | $0.15 | $0.60 | $4,988 | ฿174,580 | ฿2,094,960 |
-| 💎 Premium | **GPT-4o** | $2.50 | $10.00 | **$66,500** | **฿2,327,500** | ฿27,930,000 |
-| | Claude Sonnet 4 | $3.00 | $15.00 | $89,775 | ฿3,142,125 | ฿37,705,500 |
-| | GPT-5 | $10.00 | $30.00 | $299,250 | ฿10,473,750 | ฿125,685,000 |
-| 👑 Flagship | **Claude Opus 4** | $15.00 | $75.00 | **$448,875** | **฿15,710,625** | ฿188,527,500 |
+| 🏆 Cheapest | **Novita Llama 3.1 8B** | $0.02 | $0.02 | **$400** | **฿14,000** | ฿168,000 |
+| Cheap | Groq paid (Llama 8B) | $0.06 | $0.06 | $1,200 | ฿42,000 | ฿504,000 |
+| Cheap | SiliconFlow (8B) | $0.06 | $0.06 | $1,200 | ฿42,000 | ฿504,000 |
+| Cheap | Qwen3 4B (Novita) | $0.03 | $0.03 | $600 | ฿21,000 | ฿252,000 |
+| Budget | Gemini 2.5 Flash-Lite | $0.10 | $0.40 | $3,200 | ฿112,000 | ฿1,344,000 |
+| Budget | DeepSeek V3.2 | $0.14 | $0.28 | $3,360 | ฿117,600 | ฿1,411,200 |
+| Budget | GPT-4o mini | $0.15 | $0.60 | $4,800 | ฿168,000 | ฿2,016,000 |
+| Budget | Gemini 2.5 Flash | $0.15 | $0.60 | $4,800 | ฿168,000 | ฿2,016,000 |
+| Mid | DeepSeek V3 | $0.27 | $1.10 | $8,720 | ฿305,200 | ฿3,662,400 |
+| Mid | o4 mini | $0.55 | $2.20 | $17,600 | ฿616,000 | ฿7,392,000 |
+| Mid | Claude Haiku 4.5 | $1.00 | $5.00 | $36,000 | ฿1,260,000 | ฿15,120,000 |
+| Mid | Gemini 1.5 Pro | $1.25 | $5.00 | $40,000 | ฿1,400,000 | ฿16,800,000 |
+| 💎 Premium | **GPT-4o** | $2.50 | $10.00 | **$80,000** | **฿2,800,000** | ฿33,600,000 |
+| Premium | **Claude Sonnet 4.6** | $3.00 | $15.00 | **$108,000** | **฿3,780,000** | ฿45,360,000 |
+| Premium | **Claude Opus 4.6** | $5.00 | $25.00 | **$180,000** | **฿6,300,000** | ฿75,600,000 |
+| Premium | GPT-5 | $10.00 | $30.00 | $280,000 | ฿9,800,000 | ฿117,600,000 |
+| 👑 Flagship | **Claude Opus 4** (legacy) | $15.00 | $75.00 | **$540,000** | **฿18,900,000** | ฿226,800,000 |
 
-### อธิบายเปรียบเทียบ
-
-**BCProxyAI ฟรี แต่ได้ model quality ผสม:**
-- 40% ของ traffic → Tier small (Llama 8B class)
-- 40% ของ traffic → Tier mid (70B class เช่น Llama 3.3 70B, Mistral Medium)
-- 20% ของ traffic → Tier large (Qwen3-235B, DeepSeek R1, Kimi K2, Llama 405B)
-
-**Weighted blend = ~Llama 70B class**
-
-### คำนวณประหยัดแบบ weighted
+### การคำนวณ (16B input + 4B output)
 
 ```
-เทียบ GPT-4o class equivalent: $66,500/month × 0.70 confidence = ~$46,550/month
-เทียบ Claude Sonnet 4:        $89,775/month × 0.70 = ~$62,843/month
-เทียบ cheapest Novita 8B:     $399/month (apples-to-apples lower bound)
+Novita Llama 8B:
+  Input:  16,000M × $0.02/1M = $320
+  Output:  4,000M × $0.02/1M = $80
+  Total:                       $400/month
+
+GPT-4o:
+  Input:  16,000M × $2.50/1M = $40,000
+  Output:  4,000M × $10.0/1M = $40,000
+  Total:                       $80,000/month
+
+Claude Sonnet 4.6:
+  Input:  16,000M × $3.00/1M = $48,000
+  Output:  4,000M × $15.0/1M = $60,000
+  Total:                       $108,000/month
+
+Claude Opus 4 (legacy):
+  Input:  16,000M × $15.0/1M = $240,000
+  Output:  4,000M × $75.0/1M = $300,000
+  Total:                       $540,000/month
 ```
+
+### BCProxyAI Weighted Blend Quality
+
+**BCProxyAI ไม่ใช่ "เหมือน GPT-4o" แต่ผสมคุณภาพหลายตัว:**
+
+| % traffic | Quality tier | ตัวอย่าง model |
+|---:|---|---|
+| 35% | Small fast | Groq llama-8b, Qwen2.5-7B, mistral-small |
+| 40% | Mid (70B-120B) | Llama 3.3 70B, Mistral Medium, gpt-oss:120b, Qwen2.5-72B |
+| 20% | Large (235B-480B) | Qwen3-235B, Kimi K2, DeepSeek R1, Llama 3.1 405B, qwen3-coder:480b |
+| 5% | Flagship (671B+) | DeepSeek V3.1 671B (Ollama Cloud), Llama 405B |
+
+**Weighted equivalent quality ≈ Llama 3.3 70B / DeepSeek V3 class**
+
+### เปรียบเทียบ apples-to-apples (Llama 70B class)
+
+**Closest paid equivalent** = DeepSeek V3.2 ($0.14/$0.28) หรือ Llama 70B cheap providers
+
+```
+BCProxyAI (ฟรี)     vs  DeepSeek V3.2 paid    = ประหยัด $3,360/mo   (฿117,600)
+BCProxyAI (ฟรี)     vs  Gemini 2.5 Flash      = ประหยัด $4,800/mo   (฿168,000)
+BCProxyAI (ฟรี)     vs  GPT-4o mini           = ประหยัด $4,800/mo   (฿168,000)
+```
+
+### เปรียบเทียบ worst-case (ถ้าใช้แต่ flagship)
+
+```
+BCProxyAI (ฟรี)     vs  GPT-4o               = ประหยัด $80,000/mo  (฿2.8M)
+BCProxyAI (ฟรี)     vs  Claude Sonnet 4.6    = ประหยัด $108,000/mo (฿3.78M)
+BCProxyAI (ฟรี)     vs  Claude Opus 4.6      = ประหยัด $180,000/mo (฿6.3M)
+BCProxyAI (ฟรี)     vs  Claude Opus 4 legacy = ประหยัด $540,000/mo (฿18.9M)
+```
+
+### ตัวอย่าง use case จริง
+
+**Dev/prototype** (2B tokens/month):
+- BCProxyAI: ฿0
+- Novita 8B: ฿1,400
+- DeepSeek V3.2: ฿11,760
+- GPT-4o: ฿280,000
+- Claude Opus 4.6: ฿630,000
+
+**Production small** (5B tokens/month):
+- BCProxyAI: ฿0
+- Novita 8B: ฿3,500
+- GPT-4o: ฿700,000
+- Claude Sonnet 4.6: ฿945,000
+
+**Heavy usage** (20B tokens/month = budget เต็ม):
+- BCProxyAI: ฿0
+- Novita 8B: ฿14,000
+- GPT-4o: ฿2,800,000
+- Claude Sonnet 4.6: ฿3,780,000
+- Claude Opus 4: ฿18,900,000 (legacy pricing)
+
+### ROI Summary
+
+**ROI เทียบ tier ต่างๆ (20B tokens/month practical):**
+
+```
+🟢 Lower bound (Novita 8B):     ประหยัด ฿168,000/ปี
+🟡 Mid (DeepSeek V3.2):        ประหยัด ฿1,411,200/ปี
+🟠 GPT-4o mini:                ประหยัด ฿2,016,000/ปี
+🔴 GPT-4o:                     ประหยัด ฿33,600,000/ปี
+🔴 Claude Sonnet 4.6:          ประหยัด ฿45,360,000/ปี
+🔴 Claude Opus 4.6:            ประหยัด ฿75,600,000/ปี
+⚫ Claude Opus 4 legacy:        ประหยัด ฿226,800,000/ปี
+```
+
+**Sources ราคา (Apr 2026):**
+- [OpenAI Pricing](https://openai.com/api/pricing/) — GPT-4o, GPT-4o mini, GPT-5
+- [Anthropic Pricing](https://platform.claude.com/docs/en/about-claude/pricing) — Claude Haiku/Sonnet/Opus 4.6
+- [Novita AI](https://novita.ai/) — Llama 8B $0.02/1M (ถูกสุดในตลาด)
+- [DeepSeek Pricing](https://platform.deepseek.com/) — V3, V3.2
+- [Google AI Pricing](https://ai.google.dev/pricing) — Gemini Flash/Pro
 
 ---
 

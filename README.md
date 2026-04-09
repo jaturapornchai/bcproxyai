@@ -20,6 +20,7 @@
 - [🔌 API Endpoints](#-api-endpoints)
 - [🗃 Database Schema](#-database-schema)
 - [🔗 Integration Examples](#-integration-examples)
+- [⚡ Performance Optimizations](#-performance-optimizations)
 - [🛠 Troubleshooting](#-troubleshooting)
 - [❓ FAQ](#-faq)
 - [🔧 Development](#-development)
@@ -985,6 +986,118 @@ docker ps --format "{{.Names}}\t{{.Status}}" | grep bcproxyai                # U
 ```bash
 powershell -File "C:/Users/jatur/restart-caddy.ps1"
 ```
+
+---
+
+## ⚡ Performance Optimizations
+
+ระบบออกแบบให้ aggressive เต็มที่ — ขยาย parallel, ลด cooldown, cache กว้างขึ้น — โดยเคารพ provider rate limits เสมอ
+
+### 1. Response Cache Aggressive (1h TTL)
+
+- เปิดใช้งานโดย default (set `RESPONSE_CACHE_ENABLED=0` ถ้าต้องการปิด)
+- TTL 1 ชั่วโมง (ขยายจาก 5 นาที)
+- Cache ทุก non-stream request (รวม tools + temperature ใดๆ)
+- Hash key รวม model + messages + tools + tool_choice → ป้องกัน cross-contamination
+
+### 2. Hedge Top-3 Parallel (แทน Top-2)
+
+- ยิงคู่ขนาน top-3 candidate แทน 2 — first winner wins
+- ขยายเงื่อนไข hedge ได้ถึง `estTokens <= 20_000`
+- p99 latency ลดลงมากเพราะมีโอกาสเจอ model เร็ว 3 ใน 3
+
+### 3. Retry Budget ขยายตัว
+
+| Parameter | เดิม | ใหม่ |
+|---|---|---|
+| MAX_RETRIES | 10 | **25** |
+| TOTAL_TIMEOUT | 20-60s | **30-120s** ตาม estTokens |
+| Per-attempt | 8-30s | **12-60s** ตาม body size |
+
+### 4. Connection Pool (undici Agent)
+
+- ใช้ `upstreamAgent` ที่มี RetryAgent + keep-alive pool (128 connections/origin)
+- ลด TCP handshake overhead ~100-200ms ต่อ request
+
+### 5. Exponential Cooldown ลด 4×
+
+| Streak | เดิม | ใหม่ |
+|---:|---:|---:|
+| 1 | 30s | **10s** |
+| 2 | 1m | **20s** |
+| 3 | 2m | **40s** |
+| 4 | 4m | **1m** |
+| 5+ | 8m cap | **2m cap** |
+
+Pool recovery เร็วขึ้น 4× — ลด 503 cascade
+
+### 6. Smart Circuit Breaker Recovery
+
+- Half-open probe หลัง 30s (แทน 120s)
+- 1 successful probe → close ทันที
+
+### 7. Context-aware Provider Filter
+
+- Request > 20K tokens → กรองเหลือเฉพาะ provider ที่มี `context_length >= estTokens × 1.5`
+- Fail-fast: ไม่ลอง provider ที่ context เล็กเกิน
+
+### 8. Warmup Worker (Ping ทุก 2 นาที)
+
+- Background worker ยิง minimal ping (`"."`, max_tokens=1) ไปทุก model ที่ passed exam + ไม่ติด cooldown
+- Concurrency 5, max 30 models/รอบ
+- Keep connection warm + update live score real-time
+
+### 9. Worker Scan ทุก 15 นาที (แทน 1 ชั่วโมง)
+
+- เจอ model ใหม่เร็วขึ้น 4×
+- ใช้ leader election ป้องกัน duplicate cycle
+
+### 10. Semantic Cache (pgvector)
+
+- ใช้ Ollama local `nomic-embed-text` สำหรับ embedding
+- Cosine similarity > 0.92 → return cached response
+- Graceful: ถ้า pgvector ไม่มี หรือ Ollama ไม่รัน → no-op
+
+### 11. Valkey Tuning
+
+- maxmemory 1GB + `allkeys-lru` eviction
+- ปิด RDB snapshot + AOF (cache-only)
+- tcp-backlog 2048, tcp-keepalive 60s
+
+### 12. PostgreSQL Performance Indexes
+
+- `idx_health_cooldown_active` — partial index on active cooldowns
+- `idx_gateway_recent` — recent logs lookup
+- `idx_exam_passed_recent` — passed exam lookup
+- `idx_semantic_cache_embedding` — ivfflat vector cosine
+
+### 13. Prometheus Metrics Endpoint
+
+`GET /api/metrics` — Prometheus scrape target:
+
+- `bcproxy_models_total{provider}`, `bcproxy_models_active{provider}`, `bcproxy_models_cooldown{provider}`
+- `bcproxy_exam_passed{provider}`
+- `bcproxy_gateway_requests_1h{status}`
+- `bcproxy_latency_p50_seconds{provider}`, `bcproxy_latency_p99_seconds{provider}`
+- `bcproxy_provider_limit_remaining{provider,model,type}`
+- `bcproxy_active_fail_streaks`
+- `bcproxy_redis_used_memory_bytes`
+
+Wire to Prometheus:
+```yaml
+scrape_configs:
+  - job_name: bcproxyai
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['localhost:3334']
+    metrics_path: /api/metrics
+```
+
+### 14. Provider Limits Dashboard Panel
+
+- UI panel "โควต้า Provider" — real-time TPM/TPD remaining per model
+- Progress bar แยก TPM/TPD, สีแดง < 20%, เหลือง < 50%, เขียว ≥ 50%
+- อัพเดททุก 5 วินาที
 
 ---
 

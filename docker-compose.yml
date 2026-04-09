@@ -74,7 +74,23 @@ services:
     image: valkey/valkey:8-alpine
     ports:
       - "6382:6379"
-    command: ["valkey-server", "--maxmemory", "256mb", "--maxmemory-policy", "volatile-lru", "--appendonly", "yes"]
+    # Aggressive cache mode: LRU, 1GB, no persist
+    command:
+      - valkey-server
+      - --maxmemory
+      - 1gb
+      - --maxmemory-policy
+      - allkeys-lru
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --tcp-backlog
+      - "2048"
+      - --timeout
+      - "0"
+      - --tcp-keepalive
+      - "60"
     volumes:
       - bcproxyai-redis:/data
     healthcheck:

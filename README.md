@@ -988,6 +988,22 @@ powershell -File "C:/Users/jatur/restart-caddy.ps1"
 
 ---
 
+## ⚡ Performance Optimizations
+
+- **Response cache (Valkey-backed)** — 1h TTL, aggressive mode, skips only streaming. Cache key includes tools + tool_choice to prevent cross-request bleeding.
+- **Hedge top-3 parallel** — fires the top 3 ranked providers in parallel; first healthy response wins, stragglers aborted.
+- **Exponential cooldown with fast recovery** — fail streak ladder 10s / 20s / 40s / 80s / 2m cap. Auto-reset after 10 minutes idle.
+- **Warmup worker** — every 2 minutes pings passing models to keep undici keep-alive sockets warm and refresh live scores.
+- **Semantic cache (pgvector)** — embeddings via local Ollama `nomic-embed-text`; near-duplicate queries hit at cosine similarity ≥ 0.92. Gracefully degrades when the `vector` extension is absent.
+- **Valkey tuned (1GB LRU, cache-only)** — no persistence, LRU eviction, TCP keepalive 60s.
+- **Postgres performance indexes** — partial indexes for active cooldowns, recent gateway logs, and passed exams.
+- **Prometheus metrics** at `/api/metrics` — models, latency p50/p99, cache hit ratio, provider limit remaining.
+- **Connection pooling** — shared undici `RetryAgent` with keep-alive up to 60s, 256 connections per origin.
+- **Context-aware provider filter** — requests over 20K tokens skip providers with insufficient context window.
+- **Smart circuit breaker** — half-open probe 30s after trip; one success closes the breaker immediately.
+
+---
+
 ## 📐 Key Design Decisions
 
 1. **Rule-based exam > Judge AI** — ตรวจแบบ deterministic = 0 cost + 100ms + ไม่สุ่ม

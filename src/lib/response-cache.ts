@@ -1,19 +1,18 @@
 import { getRedis } from "./redis";
 
-// Response cache is DISABLED by default.
+// Response cache is ENABLED by default (aggressive mode).
 //
-// The 5-minute TTL cache caused cross-response bleeding in agentic flows:
-// n้องกุ้ง/OpenClaw sends many LLM sub-calls per user turn, and some of the
-// intermediate calls (summarize, synthesize final answer) look similar
-// across conversations, triggering cache hits with stale content from a
-// different user query.
+// Cached for 1 hour keyed by sha256 of {model, messages, temperature, tools,
+// tool_choice}. Because the full messages array and tool definitions are part
+// of the hash, cross-response bleeding between different conversations is
+// mitigated — two requests only collide if every field is byte-identical.
 //
-// Re-enable by setting RESPONSE_CACHE_ENABLED=1 in the environment IF
-// the caller guarantees unique per-conversation message arrays (which
-// agentic clients generally don't).
+// Streaming responses are never cached (streaming cache doesn't work).
+//
+// Disable entirely by setting RESPONSE_CACHE_ENABLED=0 in the environment.
 
-const CACHE_ENABLED = process.env.RESPONSE_CACHE_ENABLED === "1";
-const CACHE_TTL_SEC = 300;
+const CACHE_ENABLED = process.env.RESPONSE_CACHE_ENABLED !== "0";
+const CACHE_TTL_SEC = 3600;
 
 async function cacheKey(body: Record<string, unknown>): Promise<string> {
   const { createHash } = await import("crypto");
@@ -21,7 +20,8 @@ async function cacheKey(body: Record<string, unknown>): Promise<string> {
   const model = body.model ?? "auto";
   const temperature = body.temperature ?? 0;
   const tools = body.tools ?? null;
-  const payload = JSON.stringify({ model, messages, temperature, tools });
+  const tool_choice = body.tool_choice ?? null;
+  const payload = JSON.stringify({ model, messages, temperature, tools, tool_choice });
   const hash = createHash("sha256").update(payload).digest("hex").slice(0, 32);
   return `respcache:${hash}`;
 }
@@ -29,9 +29,6 @@ async function cacheKey(body: Record<string, unknown>): Promise<string> {
 function shouldSkip(body: Record<string, unknown>): boolean {
   if (!CACHE_ENABLED) return true;
   if (body.stream === true) return true;
-  const temp = typeof body.temperature === "number" ? body.temperature : 0;
-  if (temp > 0.3) return true;
-  if (Array.isArray(body.tools) && (body.tools as unknown[]).length > 0) return true;
   return false;
 }
 

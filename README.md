@@ -133,7 +133,7 @@ curl -X POST http://localhost:3334/v1/chat/completions \
             │  1. Filter: enabled + hasKey + passed_exam + not cooldown        │
             │  2. Category detect → boost winners                               │
             │  3. Rank: live_success × 100k + bench × 1k − latency             │
-            │  4. Hedge race top-2 cloud                                        │
+            │  4. Hedge race top-3 (1 per provider)                              │
             │  5. Fail → exponential cooldown → next candidate                  │
             └──────┬──────────┬──────────┬──────────┬──────────┬──────────────┘
                    ▼          ▼          ▼          ▼          ▼
@@ -158,7 +158,7 @@ curl -X POST http://localhost:3334/v1/chat/completions \
 | Framework | Next.js 16 (App Router) |
 | Runtime | Node.js + TypeScript 5 |
 | UI | React 19 + Tailwind v4 |
-| Database | PostgreSQL 17 (driver: `postgres`) |
+| Database | PostgreSQL 17 + pgvector (driver: `postgres`) |
 | Cache/State | Valkey 8 (Redis-compatible) |
 | Reverse Proxy | Caddy 2 |
 | Scheduler | node-cron |
@@ -171,7 +171,7 @@ curl -X POST http://localhost:3334/v1/chat/completions \
 |---|---|---|
 | `sml-gateway` | Next.js app (scalable) | internal `:3000` |
 | `caddy` | In-compose reverse proxy / load balancer | **`:3334`** |
-| `postgres` | PostgreSQL 17 | `:5434` |
+| `postgres` | PostgreSQL 17 + pgvector | `:5434` |
 | `redis` | Valkey 8 | `:6382` |
 
 ### Port Map

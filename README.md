@@ -67,7 +67,7 @@ curl -X POST http://localhost:3334/v1/chat/completions \
 - 🏆 **Category Winners** — เรียนรู้ว่า model ไหนเก่ง thai / code / math / tools / long-context
 - 📏 **Self-Learning Rate Limits** — อ่าน `x-ratelimit-*` + parse 429 message เรียนรู้ TPM/TPD เอง
 - 📐 **Capacity Learning** — p90 ของ token size ที่ model ทำได้จริง
-- ⏳ **Exponential Cooldown** — 30s → 1m → 2 → 4 → 8 min cap, reset อัตโนมัติ
+- ⏳ **Exponential Cooldown** — 10s → 20s → 40s → 80s → 2 min cap, reset อัตโนมัติ
 - ⚡ **Live Score EMA** — success rate อัพเดททุก request ไม่ต้องรอ benchmark
 - 🔄 **Adaptive Exam Retry** — สอบใหม่บ่อยตาม production performance (1h – 7 วัน)
 - 🌐 **26 Providers** — รวมทั้ง NVIDIA NIM, Chutes.ai, LLM7, Scaleway และอื่นๆ
@@ -469,11 +469,11 @@ Request ใหม่ → detect category → boost winners ขึ้นบน
 
 ### 4. Exponential Cooldown — `model_fail_streak`
 ```
-streak 1 → 30 วินาที
-streak 2 → 1 นาที
-streak 3 → 2 นาที
-streak 4 → 4 นาที
-streak 5+ → 8 นาที (cap)
+streak 1 → 10 วินาที
+streak 2 → 20 วินาที
+streak 3 → 40 วินาที
+streak 4 → 80 วินาที
+streak 5+ → 2 นาที (cap)
 ```
 - **Auto-reset** ถ้า fail ก่อนหน้าเกิน 10 นาที
 - **Success → reset streak = 0** ทันที
@@ -502,30 +502,30 @@ Request → Detect category (thai/code/tools/...)
        → Provider limits check (TPM/TPD remaining)
        → TPM hard check (request > limit → skip)
        → Rank by provider score × 100k + bench × 1k − latency
-       → Hedge race top-2 cloud (parallel fetch, non-tools only)
+       → Hedge race top-3 different providers (parallel, non-tools only)
        → Fail → Exponential cooldown → next candidate
        → All fail → Relaxed retry (ignore soft filters)
        → All fail → 503 with skip reasons breakdown
 ```
 
-### Per-attempt Timeout (dynamic)
+### Per-attempt Timeout (dynamic, non-stream)
 
 | Body Size | Timeout |
 |---|---|
-| < 10K chars | 8s |
-| 10K – 20K | 12s |
-| 20K – 40K | 20s |
-| > 40K | 30s |
+| < 10K chars | 12s |
+| 10K – 20K | 20s |
+| 20K – 40K | 35s |
+| > 40K | 60s |
 | Ollama | 30s |
 
 ### Total Retry Budget
 
 | Est Tokens | Budget |
 |---|---|
-| > 20K | 60s |
-| > 10K | 45s |
-| > 5K | 30s |
-| else | 20s |
+| > 40K | 120s |
+| > 20K | 90s |
+| > 10K | 60s |
+| else | 30s |
 
 ---
 
@@ -626,7 +626,7 @@ Every request gets a **Request ID** — trace ทั้ง chain ได้:
 
 ## ⚙️ Worker Cycle
 
-รันทุก **1 ชั่วโมง** (+ trigger manual ได้):
+รันทุก **15 นาที** (+ trigger manual ได้):
 
 ```
 Step 1: Scan     → ดึง model จากทุก provider ที่มี key + enabled
@@ -991,16 +991,17 @@ powershell -File "C:/Users/jatur/restart-caddy.ps1"
 ## ⚡ Performance Optimizations
 
 - **Response cache (Valkey-backed)** — 1h TTL, aggressive mode, skips only streaming. Cache key includes tools + tool_choice to prevent cross-request bleeding.
-- **Hedge top-3 parallel** — fires the top 3 ranked providers in parallel; first healthy response wins, stragglers aborted.
+- **Hedge top-3 parallel (per-provider dedup)** — fires top 3 candidates from **different** providers in parallel; first healthy response wins, stragglers aborted. Prevents same-provider concurrent rate-limiting.
 - **Exponential cooldown with fast recovery** — fail streak ladder 10s / 20s / 40s / 80s / 2m cap. Auto-reset after 10 minutes idle.
-- **Warmup worker** — every 2 minutes pings passing models to keep undici keep-alive sockets warm and refresh live scores.
+- **Warmup worker** — every 2 minutes pings passing models to keep connections warm and refresh live scores.
 - **Semantic cache (pgvector)** — embeddings via local Ollama `nomic-embed-text`; near-duplicate queries hit at cosine similarity ≥ 0.92. Gracefully degrades when the `vector` extension is absent.
 - **Valkey tuned (1GB LRU, cache-only)** — no persistence, LRU eviction, TCP keepalive 60s.
 - **Postgres performance indexes** — partial indexes for active cooldowns, recent gateway logs, and passed exams.
 - **Prometheus metrics** at `/api/metrics` — models, latency p50/p99, cache hit ratio, provider limit remaining.
-- **Connection pooling** — shared undici `RetryAgent` with keep-alive up to 60s, 256 connections per origin.
+- **Node built-in HTTP client** — uses Node 20's native `fetch` (undici internally with keep-alive). Custom undici dispatchers disabled due to compatibility issues with some providers.
 - **Context-aware provider filter** — requests over 20K tokens skip providers with insufficient context window.
 - **Smart circuit breaker** — half-open probe 30s after trip; one success closes the breaker immediately.
+- **RELAXED-RETRY budget signal** — second-pass retry passes remaining timeout budget via AbortSignal, preventing requests from outliving the total timeout.
 
 ---
 

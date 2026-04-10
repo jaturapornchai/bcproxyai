@@ -1198,16 +1198,32 @@ export async function POST(req: NextRequest) {
       30_000;
 
     // Improvement A (U2): parallel hedge top-3 cloud candidates (skip for stream / tools)
+    // Each contender must come from a DIFFERENT provider — sending concurrent requests
+    // to the same provider triggers rate-limiting (verified: 3x groq → all timeout).
+    // Only scan the first 10 candidates to keep hedgeStartIdx predictable.
     let hedgeStartIdx = 0;
-    const hedgeCount = Math.min(3, spreadCandidates.length);
+    const seenProviders = new Set<string>();
+    const hedgeContenders: typeof spreadCandidates = [];
+    let lastHedgeIdx = -1;
+    for (let hi = 0; hi < Math.min(10, spreadCandidates.length); hi++) {
+      const c = spreadCandidates[hi];
+      if (c.provider === "ollama") break;
+      if (!seenProviders.has(c.provider)) {
+        seenProviders.add(c.provider);
+        hedgeContenders.push(c);
+        lastHedgeIdx = hi;
+        if (hedgeContenders.length === 3) break;
+      }
+    }
+    // Sequential starts AFTER the last hedged position so we don't re-run the hedge slot
+    hedgeStartIdx = lastHedgeIdx + 1;
+    const hedgeCount = hedgeContenders.length;
     const canHedge =
       !isStream &&
       !caps.hasTools &&
       estTokens <= 20_000 &&
-      hedgeCount >= 2 &&
-      spreadCandidates.slice(0, hedgeCount).every(c => c.provider !== "ollama");
+      hedgeCount >= 2;
     if (canHedge) {
-      const hedgeContenders = spreadCandidates.slice(0, hedgeCount);
       try {
         const hedgeResult = await hedgeRace(hedgeContenders, body, isStream);
         const { response: hedgeResp, winner, winnerIdx } = hedgeResult;
@@ -1285,8 +1301,7 @@ export async function POST(req: NextRequest) {
           hedgeContenders.flatMap(c => [recordProviderFailureMem(c.provider), recordCircuitFailure(c.provider)])
         );
       }
-      // After hedge (win bad-response or loss), skip hedged candidates in sequential loop
-      hedgeStartIdx = hedgeCount;
+      // hedgeStartIdx already set above (lastHedgeIdx + 1) — no-op here
     }
 
     // Track skipped candidates for possible second-pass retry
@@ -1642,7 +1657,9 @@ export async function POST(req: NextRequest) {
         if (blockedProviders.has(provider)) continue;
         triedProviders.add(provider);
         try {
-          const response = await forwardToProvider(provider, actualModelId, body, isStream);
+          // Pass remaining budget as AbortSignal so RELAXED-RETRY can't outlive TOTAL_TIMEOUT
+          const relaxedRemaining = Math.max(3_000, TOTAL_TIMEOUT_MS - (Date.now() - startTime));
+          const response = await forwardToProvider(provider, actualModelId, body, isStream, AbortSignal.timeout(relaxedRemaining));
           if (response.ok) {
             const streamLatency = Date.now() - startTime;
             recordOutcome(provider, actualModelId, true, streamLatency);

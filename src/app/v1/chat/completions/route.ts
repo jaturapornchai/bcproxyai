@@ -1345,10 +1345,6 @@ export async function POST(req: NextRequest) {
       if (blockedProviders.has(provider)) { skippedCandidates.push(candidate); skipReasons.push(`${provider}/${actualModelId}:blocked`); continue; }
       if (await isProviderCooledDownMem(provider)) { skippedCandidates.push(candidate); skipReasons.push(`${provider}/${actualModelId}:provider-cooldown`); continue; }
       if (await isCircuitOpen(provider)) { skippedCandidates.push(candidate); skipReasons.push(`${provider}/${actualModelId}:circuit-open`); console.log(`[CIRCUIT-SKIP] ${provider} circuit open`); continue; }
-      tried++;
-      triedProviders.add(provider);
-      // Record attempt for sample-size guard (regardless of outcome)
-      recordProviderAttempt(provider).catch(() => { /* non-critical */ });
 
       // Improvement F: skip cold Ollama when cloud alternatives exist
       if (provider === "ollama") {
@@ -1414,6 +1410,11 @@ export async function POST(req: NextRequest) {
         console.log(`[CAPACITY-SKIP:${_reqId}] ${provider}/${actualModelId} — ${capCheck.reason}`);
         continue;
       }
+
+      // ── ผ่าน skip checks ทั้งหมดแล้ว → นับเป็น actual attempt ──
+      tried++;
+      triedProviders.add(provider);
+      recordProviderAttempt(provider).catch(() => { /* non-critical */ });
 
       // Check if this attempt is a half-open probe
       let wasProbing = false;

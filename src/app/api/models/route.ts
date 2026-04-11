@@ -72,6 +72,19 @@ export async function GET(req: NextRequest) {
             b.avg_score DESC, m.context_length DESC
         `;
 
+    // Fetch per-category scores
+    const catScoreRows = await sql<Array<{ model_id: string; category: string; score_pct: number }>>`
+      SELECT model_id, category, score_pct::int as score_pct
+      FROM model_category_scores
+      ORDER BY model_id, category
+    `;
+    const catScoreMap = new Map<string, Record<string, number>>();
+    for (const r of catScoreRows) {
+      const existing = catScoreMap.get(r.model_id) ?? {};
+      existing[r.category] = r.score_pct;
+      catScoreMap.set(r.model_id, existing);
+    }
+
     const now = new Date();
     const result = rows.map((r) => {
       let healthStatusFinal = (r.healthStatus as string) ?? "unknown";
@@ -104,6 +117,7 @@ export async function GET(req: NextRequest) {
                 totalQuestions: r.totalQuestions ?? 0,
               }
             : null,
+        categoryScores: catScoreMap.get(r.id as string) ?? null,
         firstSeen: r.firstSeen,
         lastSeen: r.lastSeen,
       };

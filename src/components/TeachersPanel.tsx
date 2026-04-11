@@ -32,6 +32,21 @@ interface TeachersResponse {
   recentGradings: Grading[];
 }
 
+const CATEGORY_THAI: Record<string, string> = {
+  thai: "ภาษาไทย",
+  code: "เขียนโค้ด",
+  math: "คณิตศาสตร์",
+  tools: "เครื่องมือ",
+  vision: "ดูรูป",
+  safety: "ความปลอดภัย",
+  reasoning: "เหตุผล",
+  instruction: "ทำตามคำสั่ง",
+  json: "JSON",
+  extraction: "ดึงข้อมูล",
+  classification: "จำแนก",
+  comprehension: "อ่านจับใจความ",
+};
+
 const ROLE_META: Record<
   Teacher["role"],
   { icon: string; label: string; border: string; bg: string; text: string }
@@ -61,31 +76,54 @@ const ROLE_META: Record<
 
 function TeacherCard({ t, highlight = false }: { t: Teacher; highlight?: boolean }) {
   const meta = ROLE_META[t.role];
+  const scorePct = t.score * 100;
+  const categoryThai = t.category ? (CATEGORY_THAI[t.category] ?? t.category) : null;
+  const scoreColor =
+    t.role === "head"
+      ? scorePct >= 80
+        ? "text-emerald-300"
+        : "text-cyan-300"
+      : meta.text;
+
   return (
     <div
       className={`rounded-lg border ${meta.border} ${meta.bg} p-3 ${highlight ? "shadow-lg shadow-amber-500/10" : ""}`}
     >
       <div className="flex items-center gap-2 mb-2">
         <span className="text-xl">{meta.icon}</span>
-        <div className="flex flex-col min-w-0">
+        <div className="flex flex-col min-w-0 flex-1">
           <span className={`text-[10px] uppercase tracking-wide ${meta.text}`}>
             {meta.label}
-            {t.category && ` · ${t.category}`}
           </span>
+          {categoryThai && (
+            <span className={`text-xs font-semibold ${scoreColor}`}>
+              {categoryThai}
+            </span>
+          )}
           <div className="flex items-center gap-1.5 mt-0.5">
             <ProviderBadge provider={t.provider} />
           </div>
         </div>
+        {t.role === "head" && (
+          <span
+            className={`text-base font-bold shrink-0 ${scoreColor}`}
+            title="exam category score"
+          >
+            {scorePct.toFixed(0)}%
+          </span>
+        )}
       </div>
       <div className="text-xs text-gray-300 font-mono truncate" title={t.modelId}>
         {t.modelId.replace(/^[a-z]+:/, "")}
       </div>
-      <div className="flex justify-between items-center mt-2">
-        <span className="text-[10px] text-gray-500">score</span>
-        <span className={`text-sm font-bold ${meta.text}`}>
-          {(t.score * 100).toFixed(1)}
-        </span>
-      </div>
+      {t.role !== "head" && (
+        <div className="flex justify-between items-center mt-2">
+          <span className="text-[10px] text-gray-500">score</span>
+          <span className={`text-sm font-bold ${meta.text}`}>
+            {scorePct.toFixed(1)}
+          </span>
+        </div>
+      )}
     </div>
   );
 }

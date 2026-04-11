@@ -19,6 +19,20 @@ import { canFitRequest, parseLimitHeaders, parseLimitError, recordLimit } from "
 import { recordOutcomeLearning, recordFailStreak, canHandleTokens, getCategoryWinners, detectCategory, isModelUnhealthyForCategory } from "@/lib/learning";
 import { upstreamAgent } from "@/lib/upstream-agent";
 
+// ── Category mapping: routing category → exam question category ──
+const ROUTING_TO_EXAM_CAT: Record<string, string> = {
+  "thai": "thai",
+  "code": "code",
+  "math": "math",
+  "tools": "tools",
+  "vision": "vision",
+  "long-context": "comprehension",
+  "medium-context": "instruction",
+  "translate": "thai",
+  "knowledge": "reasoning",
+  "general": "general",  // will use overall score
+};
+
 // Slow threshold แปรผันตาม context size — request ใหญ่ช้ากว่าปกติ
 function slowThresholdMs(estInputTokens: number): number {
   if (estInputTokens > 20_000) return 15_000;
@@ -309,7 +323,7 @@ async function getAvailableModels(caps: RequestCapabilities, benchmarkCategory?:
       FROM exam_attempts
       WHERE finished_at IS NOT NULL
       ORDER BY model_id, started_at DESC
-    ) ex ON m.id = ex.model_id AND ex.passed = true AND ex.score_pct >= 85
+    ) ex ON m.id = ex.model_id AND ex.score_pct >= 50
     LEFT JOIN (
       SELECT model_id, AVG(latency_ms)::float AS avg_lat_real
       FROM routing_stats
@@ -476,7 +490,7 @@ async function getAllModelsIncludingCooldown(caps: RequestCapabilities): Promise
     FROM models m
     LEFT JOIN (
       SELECT DISTINCT ON (model_id) model_id, score_pct, total_latency_ms
-      FROM exam_attempts WHERE passed = true AND score_pct >= 85
+      FROM exam_attempts WHERE score_pct >= 50
       ORDER BY model_id, started_at DESC
     ) ex ON m.id = ex.model_id
     WHERE m.context_length >= 32000
@@ -509,7 +523,7 @@ async function selectModelsByMode(
       FROM models m
       INNER JOIN (
         SELECT DISTINCT ON (model_id) model_id, score_pct, total_latency_ms
-        FROM exam_attempts WHERE passed = true AND score_pct >= 85
+        FROM exam_attempts WHERE score_pct >= 50
         ORDER BY model_id, started_at DESC
       ) ex ON m.id = ex.model_id
       LEFT JOIN (
@@ -1089,6 +1103,27 @@ export async function POST(req: NextRequest) {
       finalCandidates = [...winners, ...others];
       if (winners.length > 0) {
         console.log(`[CATEGORY-BOOST:${_reqId}] "${learningCategory}" → ${winners.length} winners: ${winners.slice(0,3).map(w => w.provider+'/'+w.model_id).join(', ')}`);
+      }
+    }
+
+    // ── Category-specific filtering: เลือก model ที่เก่งด้านนี้ ──
+    const examCat = ROUTING_TO_EXAM_CAT[learningCategory] ?? "general";
+    if (examCat !== "general" && finalCandidates.length > 3) {
+      try {
+        const sql = getSqlClient();
+        const catScores = await sql<{ model_id: string; score_pct: number }[]>`
+          SELECT model_id::text, score_pct FROM model_category_scores
+          WHERE category = ${examCat} AND score_pct >= 60
+        `;
+        const catScoreMap = new Map(catScores.map(r => [r.model_id, r.score_pct]));
+        const catFiltered = finalCandidates.filter(c => catScoreMap.has(String(c.id)));
+        if (catFiltered.length >= 2) {
+          const dropped = finalCandidates.length - catFiltered.length;
+          if (dropped > 0) console.log(`[CAT-FILTER:${_reqId}] ${learningCategory}→${examCat}: kept ${catFiltered.length}, dropped ${dropped} models with <60% in ${examCat}`);
+          finalCandidates = catFiltered;
+        }
+      } catch (e) {
+        console.log(`[CAT-FILTER:${_reqId}] error: ${e}`);
       }
     }
 

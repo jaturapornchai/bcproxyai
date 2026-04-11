@@ -76,7 +76,7 @@ async function fetchCandidates(): Promise<ModelStats[]> {
         model_id, score_pct, passed, total_questions, total_latency_ms
       FROM exam_attempts WHERE finished_at IS NOT NULL
       ORDER BY model_id, started_at DESC
-    ) ea ON m.id = ea.model_id AND ea.passed = true
+    ) ea ON m.id = ea.model_id AND ea.score_pct >= 50
     LEFT JOIN model_fail_streak fs ON fs.model_id = m.id
     LEFT JOIN (
       SELECT model_id,
@@ -91,7 +91,7 @@ async function fetchCandidates(): Promise<ModelStats[]> {
       FROM health_logs ORDER BY model_id, id DESC
     ) h ON h.model_id = m.id
     WHERE (h.cooldown_until IS NULL OR h.cooldown_until < now())
-      AND ea.score_pct >= 70
+      AND ea.score_pct >= 40
   `;
   return rows;
 }
@@ -120,29 +120,14 @@ export async function appointTeachers(): Promise<{
   // Pick principal: top 1 with tools support
   const principal = scored.find((c) => c.supports_tools === 1) ?? scored[0];
 
-  // Pick heads: top 1-2 per category (must support tools)
-  const categoryRows = await sql<{ category: string; model_id: string; wins: number }[]>`
-    SELECT category, model_id, wins
-    FROM category_winners
-    WHERE wins >= 3
-    ORDER BY category, wins DESC
+  // Pick heads: top 1 per exam category from model_category_scores (must score >= 80%)
+  const catHeadRows = await sql<{ model_id: string; category: string; score_pct: number }[]>`
+    SELECT DISTINCT ON (category) model_id, category, score_pct
+    FROM model_category_scores
+    WHERE score_pct >= 80
+      AND model_id IN (SELECT id FROM models WHERE COALESCE(supports_embedding, 0) != 1)
+    ORDER BY category, score_pct DESC, model_id
   `;
-
-  interface HeadPick {
-    model_id: string;
-    category: string;
-    score: number;
-  }
-  const headsByCategory = new Map<string, HeadPick[]>();
-  for (const row of categoryRows) {
-    const candidate = scored.find((c) => c.id === row.model_id && c.supports_tools === 1);
-    if (!candidate) continue;
-    if (!headsByCategory.has(row.category)) headsByCategory.set(row.category, []);
-    const list = headsByCategory.get(row.category)!;
-    if (list.length < HEADS_PER_CATEGORY) {
-      list.push({ model_id: row.model_id, category: row.category, score: candidate.score });
-    }
-  }
 
   // Pick proctors: top 10 overall (any model, must support tools)
   const proctors = scored
@@ -156,48 +141,27 @@ export async function appointTeachers(): Promise<{
   await sql`
     INSERT INTO teachers (model_id, role, category, score)
     VALUES (${principal.id}, 'principal', NULL, ${principal.score})
-    ON CONFLICT (model_id) DO UPDATE SET
-      role = EXCLUDED.role,
-      category = EXCLUDED.category,
-      score = EXCLUDED.score,
-      reappointed_count = teachers.reappointed_count + 1
   `;
 
-  // Heads (ไม่ overlap กับ principal)
+  // Heads — model เดียวเป็น head หลาย category ได้ (คนเก่งหลายอย่าง ก็แบ่งงานให้ทำ)
   let headCount = 0;
-  for (const [category, heads] of headsByCategory) {
-    for (const h of heads) {
-      if (h.model_id === principal.id) continue;
-      await sql`
-        INSERT INTO teachers (model_id, role, category, score)
-        VALUES (${h.model_id}, 'head', ${category}, ${h.score})
-        ON CONFLICT (model_id) DO UPDATE SET
-          role = EXCLUDED.role,
-          category = EXCLUDED.category,
-          score = EXCLUDED.score,
-          reappointed_count = teachers.reappointed_count + 1
-      `;
-      headCount++;
-    }
+  for (const row of catHeadRows) {
+    if (row.model_id === principal.id) continue;
+    await sql`
+      INSERT INTO teachers (model_id, role, category, score)
+      VALUES (${row.model_id}, 'head', ${row.category}, ${row.score_pct / 100})
+    `;
+    headCount++;
   }
 
   // Proctors (ไม่ overlap กับ principal/heads)
-  const headIds = new Set(
-    Array.from(headsByCategory.values())
-      .flat()
-      .map((h) => h.model_id)
-  );
+  const headIds = new Set(catHeadRows.map(r => r.model_id));
   let proctorCount = 0;
   for (const p of proctors) {
     if (p.id === principal.id || headIds.has(p.id)) continue;
     await sql`
       INSERT INTO teachers (model_id, role, category, score)
       VALUES (${p.id}, 'proctor', NULL, ${p.score})
-      ON CONFLICT (model_id) DO UPDATE SET
-        role = EXCLUDED.role,
-        category = EXCLUDED.category,
-        score = EXCLUDED.score,
-        reappointed_count = teachers.reappointed_count + 1
     `;
     proctorCount++;
   }

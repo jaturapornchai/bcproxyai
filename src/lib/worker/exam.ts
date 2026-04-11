@@ -80,7 +80,7 @@ function stripThink(text: string): string {
   return text.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
 }
 
-// ─── ข้อสอบ 18 ข้อ — เน้นใช้งานจริง + กรอง model คุณภาพสูง ──────────────────
+// ─── ข้อสอบ 25 ข้อ — เน้นใช้งานจริง + กรอง model คุณภาพสูง ──────────────────
 
 export const EXAM_QUESTIONS: ExamQuestion[] = [
   // ═══════════════════════════════════════════════════════════════════════════
@@ -153,25 +153,7 @@ No extra text, no explanation, no greetings. Just the 3 lines.`,
   //  Section B: Reasoning & Math (คิดเป็น)
   // ═══════════════════════════════════════════════════════════════════════════
 
-  // ───── Q4: Multi-step math ─────
-  {
-    id: "math_multistep_v1",
-    category: "math",
-    question:
-      "A shop sells items at 350 baht each. A customer buys 4 items and gets a 10% discount on the total. Then pays with a 2000 baht bill. How much change does the customer receive? Reply with ONLY the number in baht (no units, no explanation).",
-    expected: "740",
-    check: (answer) => {
-      const text = stripThink(answer).trim();
-      const match = text.match(/[-+]?\d+\.?\d*/);
-      if (!match) return { passed: false, reason: "no number found" };
-      const num = Number(match[0]);
-      // 4×350 = 1400, 10% off = 1260, change = 2000-1260 = 740
-      if (Math.abs(num - 740) < 1) return { passed: true, reason: "correct: 740" };
-      return { passed: false, reason: `expected 740, got ${num}` };
-    },
-  },
-
-  // ───── Q5: Logic / deduction ─────
+  // ───── Q4: Logic / deduction ─────
   {
     id: "logic_deduction_v1",
     category: "reasoning",
@@ -350,6 +332,35 @@ Include only emails and phone numbers (not fax).`,
       const clean = stripThink(answer);
       if (/ภาคใต้|ใต้/.test(clean)) return { passed: true, reason: "correct: ภาคใต้" };
       return { passed: false, reason: `expected ภาคใต้: "${clean.slice(0, 80)}"` };
+    },
+  },
+
+  // ───── Q10a: เพลงชาติไทย — ต้องเขียนเนื้อเพลงได้ถูกต้อง ─────
+  {
+    id: "thai_anthem_v1",
+    category: "thai",
+    question: `เขียนเนื้อเพลงชาติไทย (ฉบับปัจจุบัน) ทั้งหมด ภาษาไทย ไม่ต้องอธิบาย เขียนเนื้อเพลงอย่างเดียว`,
+    expected: "ประเทศไทยรวมเลือดเนื้อชาติเชื้อไทย...มีชัย ชโย",
+    check: (answer) => {
+      const clean = stripThink(answer);
+      const phrases = [
+        /ประเทศไทยรวมเลือดเนื้อชาติเชื้อไทย/,
+        /เป็นประชารัฐ/,
+        /ไผทของไทยทุกส่วน/,
+        /ดำรงคงไว้ได้ทั้งมวล/,
+        /รักสามัคคี/,
+        /ไทยนี้รักสงบ/,
+        /แต่ถึงรบไม่ขลาด/,
+        /เอกราชจะไม่ให้ใครข่มขี่/,
+        /สละเลือดทุกหยาด/,
+        /เป็นชาติพลี/,
+        /เถลิงประเทศชาติไทยทวี/,
+        /มีชัย\s*ชโย/,
+      ];
+      const matched = phrases.filter(r => r.test(clean)).length;
+      if (matched >= 8) return { passed: true, reason: `correct: ${matched}/12 key phrases` };
+      if (matched >= 5) return { passed: false, reason: `partial: only ${matched}/12 phrases (need 8+)` };
+      return { passed: false, reason: `too few phrases: ${matched}/12 — "${clean.slice(0, 100)}"` };
     },
   },
 
@@ -807,6 +818,7 @@ async function examineModel(model: DbModel): Promise<void> {
   let skippedCount = 0;
   let totalLatency = 0;
   let fatalError: string | null = null;
+  const catResults = new Map<string, { passed: number; total: number }>();
 
   for (const q of EXAM_QUESTIONS) {
     // ข้อ tool call — ถ้า model ไม่รองรับ tool → skip
@@ -837,6 +849,10 @@ async function examineModel(model: DbModel): Promise<void> {
       if (/401|403|404/.test(error)) {
         fatalError = error;
       }
+      // นับ total++ แต่ไม่นับ passed++ สำหรับ error
+      const catErr = catResults.get(q.category) ?? { passed: 0, total: 0 };
+      catErr.total++;
+      catResults.set(q.category, catErr);
       await sql`
         INSERT INTO exam_answers (attempt_id, question_id, category, question, expected, answer, passed, check_method, fail_reason, latency_ms)
         VALUES (${attemptId}, ${q.id}, ${q.category}, ${q.question.slice(0, 500)}, ${q.expected}, ${null}, ${false}, ${"error"}, ${error}, ${latency})
@@ -846,6 +862,13 @@ async function examineModel(model: DbModel): Promise<void> {
 
     const check = q.check(answer);
     if (check.passed) passedCount++;
+
+    // track per-category result
+    const cat = q.category;
+    const prev = catResults.get(cat) ?? { passed: 0, total: 0 };
+    prev.total++;
+    if (check.passed) prev.passed++;
+    catResults.set(cat, prev);
 
     await sql`
       INSERT INTO exam_answers (attempt_id, question_id, category, question, expected, answer, passed, check_method, fail_reason, latency_ms)
@@ -862,6 +885,21 @@ async function examineModel(model: DbModel): Promise<void> {
   const attemptedCount = EXAM_QUESTIONS.length - skippedCount;
   const scorePct = attemptedCount > 0 ? (passedCount / attemptedCount) * 100 : 0;
   const passed = scorePct >= PASS_THRESHOLD_PCT;
+
+  // Upsert per-category scores
+  for (const [cat, r] of catResults) {
+    const pct = r.total > 0 ? (r.passed / r.total) * 100 : 0;
+    await sql`
+      INSERT INTO model_category_scores (model_id, category, score_pct, passed_count, total_count, attempt_id, updated_at)
+      VALUES (${model.id}, ${cat}, ${pct}, ${r.passed}, ${r.total}, ${attemptId}, now())
+      ON CONFLICT (model_id, category) DO UPDATE SET
+        score_pct = EXCLUDED.score_pct,
+        passed_count = EXCLUDED.passed_count,
+        total_count = EXCLUDED.total_count,
+        attempt_id = EXCLUDED.attempt_id,
+        updated_at = now()
+    `;
+  }
 
   // Adaptive retry: ดูจาก live production success rate + exam fail streak
   const liveRate = await getLiveSuccessRate(model.id);

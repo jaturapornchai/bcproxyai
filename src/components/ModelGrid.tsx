@@ -144,6 +144,28 @@ export function ModelGrid({ sortedModels, availableCount, cooldownCount, unknown
                   )}
                 </div>
 
+                {/* Category scores */}
+                {model.categoryScores && Object.keys(model.categoryScores).length > 0 && (
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {Object.entries(model.categoryScores)
+                      .sort(([,a], [,b]) => b - a)
+                      .map(([cat, score]) => (
+                        <span
+                          key={cat}
+                          className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                            score >= 80 ? "bg-emerald-500/20 text-emerald-300" :
+                            score >= 60 ? "bg-cyan-500/20 text-cyan-300" :
+                            score >= 40 ? "bg-amber-500/20 text-amber-300" :
+                            "bg-red-500/20 text-red-300"
+                          }`}
+                          title={`${cat}: ${score}%`}
+                        >
+                          {cat} {score}%
+                        </span>
+                      ))}
+                  </div>
+                )}
+
                 {/* Cooldown */}
                 {cooldownText && (
                   <div className="mt-2 text-xs text-amber-400 bg-amber-500/10 rounded px-2 py-1">

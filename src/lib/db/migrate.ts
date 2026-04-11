@@ -329,9 +329,12 @@ export async function runMigrations(): Promise<void> {
     // ─── Teacher Hierarchy ───────────────────────────────────────────────────
     // role: 'principal' (1), 'head' (per-category), 'proctor' (5-10)
     // ครูถูกเลือกอัตโนมัติจาก exam/live score ทุกรอบ worker
+    // เปลี่ยน PK จาก model_id → BIGSERIAL เพื่อให้ model เดียวเป็น head หลาย category ได้
+    await sql`DROP TABLE IF EXISTS teachers CASCADE`;
     await sql`
       CREATE TABLE IF NOT EXISTS teachers (
-        model_id TEXT PRIMARY KEY REFERENCES models(id) ON DELETE CASCADE,
+        id BIGSERIAL PRIMARY KEY,
+        model_id TEXT NOT NULL REFERENCES models(id) ON DELETE CASCADE,
         role TEXT NOT NULL CHECK (role IN ('principal', 'head', 'proctor')),
         category TEXT,
         score REAL NOT NULL DEFAULT 0,
@@ -395,6 +398,21 @@ export async function runMigrations(): Promise<void> {
     `;
     await sql`CREATE INDEX IF NOT EXISTS idx_dev_sugg_open ON dev_suggestions(status, severity, created_at DESC) WHERE status = 'open'`;
     await sql`CREATE INDEX IF NOT EXISTS idx_dev_sugg_recent ON dev_suggestions(created_at DESC)`;
+
+    // ─── Per-category exam scores ────────────────────────────────────────────
+    await sql`
+      CREATE TABLE IF NOT EXISTS model_category_scores (
+        model_id TEXT NOT NULL,
+        category TEXT NOT NULL,
+        score_pct REAL NOT NULL DEFAULT 0,
+        passed_count INT NOT NULL DEFAULT 0,
+        total_count INT NOT NULL DEFAULT 0,
+        attempt_id BIGINT,
+        updated_at TIMESTAMPTZ DEFAULT now(),
+        PRIMARY KEY (model_id, category)
+      )
+    `;
+    await sql`CREATE INDEX IF NOT EXISTS idx_mcs_lookup ON model_category_scores(category, score_pct DESC)`;
 
     // ─── Performance indexes (U5) ────────────────────────────────────────────
     // Note: partial WHERE cooldown_until > now() ใช้ไม่ได้ (now() ไม่ IMMUTABLE)

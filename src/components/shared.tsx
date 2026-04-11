@@ -74,6 +74,7 @@ export interface ModelData {
     questionsAnswered: number;
     totalQuestions: number;
   } | null;
+  categoryScores: Record<string, number> | null;
   firstSeen: string;
   lastSeen: string;
 }

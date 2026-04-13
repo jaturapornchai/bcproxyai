@@ -1,13 +1,105 @@
-name: bcproxyai
+name: sml-gateway
 services:
-  bcproxyai:
-    image: bcproxyai
+  sml-gateway:
+    image: sml-gateway
     build: .
-    ports:
-      - "3333:3000"
+    expose:
+      - "3000"
     env_file:
       - .env.local
+    environment:
+      DATABASE_URL: postgres://sml:sml@postgres:5432/smlgateway
+      REDIS_URL: redis://redis:6379
+      # Ollama runs on the Docker host, not inside the sml-gateway container.
+      # host.docker.internal resolves to the host on Docker Desktop / Linux 20.10+.
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     volumes:
-      - bcproxyai-data:/app/data
+      - sml-gateway-data:/app/data
+      - ./exam-images:/app/exam-images:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "3334:80"
+    volumes:
+      - ./caddy-docker.Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      sml-gateway:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: pgvector/pgvector:pg17
+    ports:
+      - "5434:5432"
+    environment:
+      POSTGRES_USER: sml
+      POSTGRES_PASSWORD: sml
+      POSTGRES_DB: smlgateway
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_buffers=256MB"
+      - "-c"
+      - "work_mem=16MB"
+      - "-c"
+      - "effective_cache_size=2GB"
+      - "-c"
+      - "max_wal_size=2GB"
+      - "-c"
+      - "random_page_cost=1.1"
+      - "-c"
+      - "shared_preload_libraries=pg_stat_statements"
+    volumes:
+      - sml-gateway-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sml -d smlgateway"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: valkey/valkey:8-alpine
+    ports:
+      - "6382:6379"
+    command:
+      - valkey-server
+      - --maxmemory
+      - 1gb
+      - --maxmemory-policy
+      - allkeys-lru
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --tcp-backlog
+      - "2048"
+      - --timeout
+      - "0"
+      - --tcp-keepalive
+      - "60"
+    volumes:
+      - sml-gateway-redis:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
 volumes:
-  bcproxyai-data:
+  sml-gateway-data:
+  sml-gateway-pg:
+  sml-gateway-redis:

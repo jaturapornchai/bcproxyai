@@ -15,6 +15,11 @@ const PROVIDER_EMOJI: Record<string, string> = {
   sambanova:  "\u{1F680}",  // 🚀
   mistral:    "\u{1F4A8}",  // 💨
   ollama:     "\u{1F4BB}",  // 💻
+  github:     "\u{1F431}",  // 🐱
+  fireworks:  "\u{1F386}",  // 🎆
+  cohere:     "\u{1F4E1}",  // 📡
+  cloudflare: "\u2601\uFE0F", // ☁️
+  huggingface: "\u{1F917}",  // 🤗
 };
 
 const PROVIDER_HEX: Record<string, string> = {
@@ -26,6 +31,11 @@ const PROVIDER_HEX: Record<string, string> = {
   sambanova:  "#14b8a6",
   mistral:    "#38bdf8",
   ollama:     "#84cc16",
+  github:     "#9ca3af",
+  fireworks:  "#ef4444",
+  cohere:     "#ec4899",
+  cloudflare: "#f59e0b",
+  huggingface: "#fbbf24",
 };
 
 // ─── Types ────────────────────────────────────────────────────────────────────

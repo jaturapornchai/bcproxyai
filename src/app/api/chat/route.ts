@@ -28,8 +28,8 @@ export async function POST(req: NextRequest) {
     };
     if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
     if (provider === "openrouter") {
-      headers["HTTP-Referer"] = "https://bcproxyai.app";
-      headers["X-Title"] = "BCProxyAI";
+      headers["HTTP-Referer"] = "https://sml-gateway.app";
+      headers["X-Title"] = "SMLGateway";
     }
 
     // Simple messages format — only role + content string

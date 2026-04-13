@@ -1,0 +1,125 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 384" width="256" height="384">
+  <defs>
+    <!-- Body gradients -->
+    <linearGradient id="coatGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0a0f0a"/>
+      <stop offset="0.5" stop-color="#051a0f"/>
+      <stop offset="1" stop-color="#020806"/>
+    </linearGradient>
+    <linearGradient id="skinGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#d4a574"/>
+      <stop offset="1" stop-color="#8a6340"/>
+    </linearGradient>
+    <linearGradient id="bladeGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.5" stop-color="#baffc9"/>
+      <stop offset="1" stop-color="#00ff41"/>
+    </linearGradient>
+    <linearGradient id="rimGreen" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#00ff41" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#00ff41" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="auraGreen" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#00ff41" stop-opacity="0.4"/>
+      <stop offset="1" stop-color="#00ff41" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Glow filter -->
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="strongGlow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="6" result="b1"/>
+      <feGaussianBlur stdDeviation="12" result="b2"/>
+      <feMerge>
+        <feMergeNode in="b2"/>
+        <feMergeNode in="b1"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background aura -->
+  <ellipse cx="128" cy="220" rx="110" ry="150" fill="url(#auraGreen)"/>
+
+  <!-- Shadow on ground -->
+  <ellipse cx="128" cy="365" rx="60" ry="8" fill="#000" opacity="0.6"/>
+
+  <!-- Long coat — back panel -->
+  <path d="M80 180 Q60 280 70 360 L186 360 Q196 280 176 180 Q160 160 128 160 Q96 160 80 180 Z"
+        fill="url(#coatGrad)" stroke="#001a0c" stroke-width="1"/>
+
+  <!-- Coat open flaps -->
+  <path d="M100 180 Q92 260 96 340 L128 335 L128 175 Z" fill="#0a0f0a" stroke="#00ff41" stroke-width="0.6" stroke-opacity="0.5"/>
+  <path d="M156 180 Q164 260 160 340 L128 335 L128 175 Z" fill="#0a0f0a" stroke="#00ff41" stroke-width="0.6" stroke-opacity="0.5"/>
+
+  <!-- Inner shirt -->
+  <path d="M110 165 L146 165 L145 260 L111 260 Z" fill="#020806"/>
+  <!-- Thai pattern stripe on shirt -->
+  <g stroke="#00ff41" stroke-width="0.5" fill="none" opacity="0.8">
+    <path d="M114 200 L142 200"/>
+    <path d="M114 205 Q118 202 122 205 T130 205 T138 205 T142 205"/>
+    <path d="M114 240 L142 240"/>
+  </g>
+
+  <!-- Belt -->
+  <rect x="104" y="250" width="48" height="6" fill="#001a0c" stroke="#00ff41" stroke-width="0.5"/>
+
+  <!-- Neck + Head -->
+  <rect x="120" y="115" width="16" height="20" fill="url(#skinGrad)"/>
+  <!-- Head -->
+  <ellipse cx="128" cy="100" rx="22" ry="26" fill="url(#skinGrad)"/>
+  <!-- Hair (short, dark) -->
+  <path d="M106 92 Q106 72 128 70 Q150 72 150 92 Q148 82 140 78 Q130 74 128 76 Q118 76 114 82 Q108 85 106 92 Z" fill="#0a0a0a"/>
+  <!-- Eyes -->
+  <ellipse cx="120" cy="100" rx="2" ry="1.5" fill="#00ff41" filter="url(#glow)"/>
+  <ellipse cx="136" cy="100" rx="2" ry="1.5" fill="#00ff41" filter="url(#glow)"/>
+  <!-- Determined mouth -->
+  <path d="M122 114 L134 114" stroke="#4a2a15" stroke-width="1.5" stroke-linecap="round"/>
+
+  <!-- Right arm extended with sword -->
+  <path d="M148 175 L180 220 L200 280" stroke="url(#coatGrad)" stroke-width="14" stroke-linecap="round" fill="none"/>
+  <!-- Hand -->
+  <circle cx="202" cy="282" r="6" fill="url(#skinGrad)"/>
+
+  <!-- Sword — glowing katana -->
+  <g filter="url(#strongGlow)">
+    <!-- Blade -->
+    <path d="M206 280 L246 140 L252 142 L214 286 Z" fill="url(#bladeGrad)"/>
+    <!-- Guard -->
+    <rect x="200" y="276" width="20" height="4" rx="1" fill="#001a0c" stroke="#00ff41" stroke-width="0.5"/>
+    <!-- Hilt -->
+    <rect x="204" y="280" width="12" height="22" fill="#0a0f0a" stroke="#00ff41" stroke-width="0.5"/>
+    <!-- Pommel -->
+    <circle cx="210" cy="305" r="3" fill="#00ff41"/>
+  </g>
+
+  <!-- Left arm back at hip -->
+  <path d="M108 180 L86 230 L82 280" stroke="url(#coatGrad)" stroke-width="14" stroke-linecap="round" fill="none"/>
+  <circle cx="82" cy="282" r="5" fill="url(#skinGrad)"/>
+
+  <!-- Legs in stance -->
+  <path d="M106 340 Q100 365 96 378" stroke="#020806" stroke-width="16" stroke-linecap="round" fill="none"/>
+  <path d="M150 340 Q160 365 170 378" stroke="#020806" stroke-width="16" stroke-linecap="round" fill="none"/>
+
+  <!-- Code particles swirling -->
+  <g fill="#00ff41" font-family="monospace" font-size="10" filter="url(#glow)">
+    <text x="30" y="120" opacity="0.8">ก</text>
+    <text x="220" y="180" opacity="0.7">๓</text>
+    <text x="40" y="220" opacity="0.6">ข</text>
+    <text x="230" y="250" opacity="0.7">ม</text>
+    <text x="20" y="300" opacity="0.5">๙</text>
+    <text x="240" y="330" opacity="0.6">ห</text>
+    <text x="50" y="80" opacity="0.5">ต</text>
+  </g>
+
+  <!-- Rim light (left side) -->
+  <path d="M80 180 Q60 280 70 360" stroke="#00ff41" stroke-width="2" fill="none" opacity="0.8" filter="url(#glow)"/>
+
+  <!-- Cyan highlight on sword arm -->
+  <path d="M148 175 L180 220" stroke="#00ff41" stroke-width="1.5" fill="none" opacity="0.7" filter="url(#glow)"/>
+</svg>

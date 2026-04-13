@@ -1,11 +1,14 @@
-import { getDb } from "@/lib/db/schema";
+import { getSqlClient } from "@/lib/db/schema";
 import { scanModels } from "./scanner";
 import { checkHealth } from "./health";
-import { runBenchmarks } from "./benchmark";
+import { runExams } from "./exam";
+import { appointTeachers } from "@/lib/teacher";
+import { acquireLeader, renewLeader, releaseLeader } from "./leader";
+import { startWarmup } from "./warmup";
 
 export { scanModels } from "./scanner";
 export { checkHealth } from "./health";
-export { runBenchmarks } from "./benchmark";
+export { runExams } from "./exam";
 
 export interface WorkerStatus {
   status: "idle" | "running" | "error";
@@ -14,124 +17,152 @@ export interface WorkerStatus {
   stats: {
     scan?: { found: number; new: number };
     health?: { checked: number; available: number; cooldown: number };
-    benchmark?: { tested: number; questions: number };
+    exam?: { examined: number; passed: number; failed: number };
   };
 }
 
 let workerTimer: ReturnType<typeof setInterval> | null = null;
 let isRunning = false;
 
-function getState(key: string): string | null {
+async function getState(key: string): Promise<string | null> {
   try {
-    const db = getDb();
-    const row = db
-      .prepare("SELECT value FROM worker_state WHERE key = ?")
-      .get(key) as { value: string } | undefined;
-    return row?.value ?? null;
+    const sql = getSqlClient();
+    const rows = await sql<{ value: string }[]>`
+      SELECT value FROM worker_state WHERE key = ${key}
+    `;
+    return rows[0]?.value ?? null;
   } catch {
     return null;
   }
 }
 
-function setState(key: string, value: string) {
+async function setState(key: string, value: string): Promise<void> {
   try {
-    const db = getDb();
-    db.prepare(
-      "INSERT OR REPLACE INTO worker_state (key, value) VALUES (?, ?)"
-    ).run(key, value);
+    const sql = getSqlClient();
+    await sql`
+      INSERT INTO worker_state (key, value) VALUES (${key}, ${value})
+      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+    `;
   } catch {
     // silent
   }
 }
 
-function logWorker(step: string, message: string, level = "info") {
+async function logWorker(step: string, message: string, level = "info"): Promise<void> {
   try {
-    const db = getDb();
-    db.prepare(
-      "INSERT INTO worker_logs (step, message, level) VALUES (?, ?, ?)"
-    ).run(step, message, level);
+    const sql = getSqlClient();
+    await sql`
+      INSERT INTO worker_logs (step, message, level) VALUES (${step}, ${message}, ${level})
+    `;
   } catch {
     // silent
   }
 }
 
-function cleanOldLogs(): void {
+async function cleanOldLogs(): Promise<void> {
   try {
-    const db = getDb();
-    const workerResult = db
-      .prepare("DELETE FROM worker_logs WHERE created_at < datetime('now', '-30 days')")
-      .run();
-    const healthResult = db
-      .prepare("DELETE FROM health_logs WHERE checked_at < datetime('now', '-30 days')")
-      .run();
-    const gatewayResult = db
-      .prepare("DELETE FROM gateway_logs WHERE created_at < datetime('now', '-30 days')")
-      .run();
-    logWorker(
+    const sql = getSqlClient();
+    const workerResult = await sql`DELETE FROM worker_logs WHERE created_at < now() - interval '3 days'`;
+    const healthResult = await sql`DELETE FROM health_logs WHERE checked_at < now() - interval '3 days'`;
+    const gatewayResult = await sql`DELETE FROM gateway_logs WHERE created_at < now() - interval '7 days'`;
+    await logWorker(
       "cleanup",
-      `🧹 ลบ log เก่า: worker ${workerResult.changes}, health ${healthResult.changes}, gateway ${gatewayResult.changes} แถว`
+      `🧹 ลบ log เก่า: worker ${workerResult.count}, health ${healthResult.count}, gateway ${gatewayResult.count} แถว`
     );
   } catch (err) {
-    logWorker("cleanup", `Log cleanup failed: ${err}`, "error");
+    await logWorker("cleanup", `Log cleanup failed: ${err}`, "error");
   }
 }
 
 export async function runWorkerCycle(): Promise<void> {
   if (isRunning) {
-    logWorker("worker", "Cycle skipped — already running", "warn");
+    await logWorker("worker", "Cycle skipped — already running", "warn");
+    return;
+  }
+
+  // Leader election — only one replica runs the cycle when scaled horizontally.
+  // Falls through to "true" if Redis is unreachable (single-replica dev setup).
+  const isLeader = await acquireLeader();
+  if (!isLeader) {
+    await logWorker("worker", "Cycle skipped — another replica holds the leader lock", "info");
     return;
   }
 
   isRunning = true;
-  setState("status", "running");
-  setState("last_run", new Date().toISOString());
+  await setState("status", "running");
+  await setState("last_run", new Date().toISOString());
 
-  const next = new Date(Date.now() + 60 * 60 * 1000).toISOString();
-  setState("next_run", next);
+  const next = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+  await setState("next_run", next);
 
-  logWorker("worker", "Worker cycle started");
+  await logWorker("worker", "Worker cycle started");
 
   // Clean old logs before scanning
-  cleanOldLogs();
+  await cleanOldLogs();
 
   let scanResult = { found: 0, new: 0 };
   let healthResult = { checked: 0, available: 0, cooldown: 0 };
-  let benchmarkResult = { tested: 0, questions: 0 };
+  let examResult = { examined: 0, passed: 0, failed: 0 };
 
   try {
     // Step 1: Scan
-    logWorker("worker", "Step 1: Scanning models");
+    await logWorker("worker", "Step 1: Scanning models");
     scanResult = await scanModels();
   } catch (err) {
-    logWorker("worker", `Step 1 (scan) failed: ${err}`, "error");
+    await logWorker("worker", `Step 1 (scan) failed: ${err}`, "error");
   }
+
+  // Extend leader lock before the potentially long health check
+  await renewLeader();
 
   try {
     // Step 2: Health check
-    logWorker("worker", "Step 2: Health check");
+    await logWorker("worker", "Step 2: Health check");
     healthResult = await checkHealth();
   } catch (err) {
-    logWorker("worker", `Step 2 (health) failed: ${err}`, "error");
+    await logWorker("worker", `Step 2 (health) failed: ${err}`, "error");
   }
+
+  await renewLeader();
 
   try {
-    // Step 3: Benchmark
-    logWorker("worker", "Step 3: Benchmark");
-    benchmarkResult = await runBenchmarks();
+    // Step 3: สอบคัดเลือก — model ต้องผ่านสอบถึงจะได้ทำงาน
+    await logWorker("worker", "Step 3: Exam");
+    examResult = await runExams();
   } catch (err) {
-    logWorker("worker", `Step 3 (benchmark) failed: ${err}`, "error");
+    await logWorker("worker", `Step 3 (exam) failed: ${err}`, "error");
   }
 
-  setState("status", "idle");
-  setState(
+  // Step 4: Appoint teachers — principal, heads, proctors จาก performance จริง
+  try {
+    await logWorker("worker", "Step 4: Appointing teachers");
+    const appointed = await appointTeachers();
+    if (appointed.principal) {
+      await logWorker(
+        "worker",
+        `👑 Teacher hierarchy: principal=${appointed.principal} | heads=${appointed.heads} | proctors=${appointed.proctors}`,
+        "success"
+      );
+    } else {
+      await logWorker("worker", "ยังไม่มี model พอที่จะแต่งตั้งเป็นครู", "warn");
+    }
+  } catch (err) {
+    await logWorker("worker", `Step 4 (teachers) failed: ${err}`, "error");
+  }
+
+  await setState("status", "idle");
+  await setState(
     "last_stats",
-    JSON.stringify({ scan: scanResult, health: healthResult, benchmark: benchmarkResult })
+    JSON.stringify({ scan: scanResult, health: healthResult, exam: examResult })
   );
 
-  logWorker(
+  await logWorker(
     "worker",
-    `Cycle complete — scan:${scanResult.found}/${scanResult.new} health:${healthResult.available}/${healthResult.checked} benchmark:${benchmarkResult.tested}/${benchmarkResult.questions}`
+    `Cycle complete — scan:${scanResult.found}/${scanResult.new} health:${healthResult.available}/${healthResult.checked} exam:${examResult.passed}✅/${examResult.failed}❌`
   );
+
+  // Release leader lock at end of cycle so it naturally rotates between replicas
+  await releaseLeader();
 
   isRunning = false;
 }
@@ -139,7 +170,7 @@ export async function runWorkerCycle(): Promise<void> {
 export function startWorker(): void {
   if (workerTimer) return; // already started
 
-  logWorker("worker", "Worker starting — running immediately then every 1h");
+  logWorker("worker", "Worker starting — running immediately then every 15 min");
 
   // Run once immediately (async, don't block)
   runWorkerCycle().catch((err) => {
@@ -148,21 +179,24 @@ export function startWorker(): void {
     setState("status", "error");
   });
 
-  // Then every 1 hour
+  // Then every 15 minutes
   workerTimer = setInterval(() => {
     runWorkerCycle().catch((err) => {
       logWorker("worker", `Scheduled cycle error: ${err}`, "error");
       isRunning = false;
       setState("status", "error");
     });
-  }, 60 * 60 * 1000);
+  }, 15 * 60 * 1000);
+
+  // Warmup pinger — keeps upstream sockets hot between cycles
+  startWarmup();
 }
 
-export function getWorkerStatus(): WorkerStatus {
-  const status = (getState("status") ?? "idle") as WorkerStatus["status"];
-  const lastRun = getState("last_run");
-  const nextRun = getState("next_run");
-  const statsRaw = getState("last_stats");
+export async function getWorkerStatus(): Promise<WorkerStatus> {
+  const status = ((await getState("status")) ?? "idle") as WorkerStatus["status"];
+  const lastRun = await getState("last_run");
+  const nextRun = await getState("next_run");
+  const statsRaw = await getState("last_stats");
 
   let stats: WorkerStatus["stats"] = {};
   if (statsRaw) {

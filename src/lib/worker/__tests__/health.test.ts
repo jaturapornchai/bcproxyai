@@ -162,8 +162,8 @@ describe("pingModel", () => {
 
     const callArgs = mockFetch.mock.calls[0];
     const headers = callArgs[1].headers;
-    expect(headers["HTTP-Referer"]).toBe("https://bcproxyai.app");
-    expect(headers["X-Title"]).toBe("BCProxyAI");
+    expect(headers["HTTP-Referer"]).toBe("https://sml-gateway.app");
+    expect(headers["X-Title"]).toBe("SMLGateway");
   });
 
   it("does not set OpenRouter headers for other providers", async () => {

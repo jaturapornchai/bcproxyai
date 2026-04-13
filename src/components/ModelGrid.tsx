@@ -12,35 +12,16 @@ import {
 } from "./shared";
 import type { ModelData } from "./shared";
 
-// ─── Fun Grade System ─────────────────────────────────────────────────────────
-
-function getGrade(pct: number): { grade: string; label: string; color: string; emoji: string } {
-  if (pct >= 90) return { grade: "A+", label: "นักเรียนดีเด่น", color: "text-yellow-300", emoji: "🏆" };
-  if (pct >= 80) return { grade: "A", label: "เก่งมาก", color: "text-emerald-300", emoji: "⭐" };
-  if (pct >= 70) return { grade: "B+", label: "ดี", color: "text-cyan-300", emoji: "👍" };
-  if (pct >= 60) return { grade: "B", label: "พอใช้", color: "text-blue-300", emoji: "📘" };
-  if (pct >= 50) return { grade: "C+", label: "ผ่านหวุดหวิด", color: "text-amber-300", emoji: "😅" };
-  if (pct >= 40) return { grade: "C", label: "ต้องปรับปรุง", color: "text-orange-300", emoji: "📝" };
-  if (pct >= 30) return { grade: "D", label: "สอบตก", color: "text-red-300", emoji: "😢" };
-  return { grade: "F", label: "ไม่ผ่าน", color: "text-red-400", emoji: "💀" };
-}
+// ─── Fun Status ───────────────────────────────────────────────────────────────
 
 function getFunStatus(model: ModelData): { text: string; emoji: string } {
   if (model.health.status === "cooldown") {
-    return { text: "ไปพักผ่อนก่อน", emoji: "😴" };
+    return { text: "พักแป๊บ", emoji: "😴" };
   }
   if (model.health.status === "unknown") {
-    return { text: "ยังไม่มาเรียน", emoji: "🤷" };
+    return { text: "รอสแกน", emoji: "✏️" };
   }
-  if (!model.benchmark) {
-    return { text: "รอเข้าห้องสอบ", emoji: "✏️" };
-  }
-  const pct = (model.benchmark.avgScore / model.benchmark.maxScore) * 100;
-  if (pct >= 90) return { text: "หัวหน้าห้อง!", emoji: "👑" };
-  if (pct >= 70) return { text: "ขยันดีมาก", emoji: "💪" };
-  if (pct >= 50) return { text: "พอถูไถได้", emoji: "🙂" };
-  if (pct >= 30) return { text: "ต้องติวเพิ่ม", emoji: "📚" };
-  return { text: "ซ้ำชั้นเลย", emoji: "🫠" };
+  return { text: "พร้อมรับงาน", emoji: "💪" };
 }
 
 function getSpeedLabel(ms: number): { text: string; emoji: string } {
@@ -82,7 +63,7 @@ export function ModelGrid({ sortedModels, availableCount, cooldownCount, unknown
       </div>
 
       {loading ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-4">
           {Array.from({ length: 8 }).map((_, i) => (
             <Skeleton key={i} className="h-40 rounded-xl" />
           ))}
@@ -93,16 +74,11 @@ export function ModelGrid({ sortedModels, availableCount, cooldownCount, unknown
           <p>ยังไม่มีนักเรียน — กด &quot;รันตอนนี้&quot; เพื่อเปิดรับสมัคร</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-4">
           {sortedModels.map((model) => {
             const pc = PROVIDER_COLORS[model.provider] ?? PROVIDER_COLORS.openrouter;
             const cooldownText = fmtCooldown(model.health.cooldownUntil);
             const funStatus = getFunStatus(model);
-            const hasBenchmark = model.benchmark && model.benchmark.avgScore > 0;
-            const pct = hasBenchmark
-              ? Math.round((model.benchmark!.avgScore / model.benchmark!.maxScore) * 100)
-              : 0;
-            const gradeInfo = hasBenchmark ? getGrade(pct) : null;
             const speedInfo = model.health.latencyMs > 0 ? getSpeedLabel(model.health.latencyMs) : null;
 
             return (
@@ -114,78 +90,81 @@ export function ModelGrid({ sortedModels, availableCount, cooldownCount, unknown
                   "border border-white/5 opacity-40"
                 }`}
               >
-                {/* Header: name + grade badge */}
+                {/* Header: name + tier badge */}
                 <div className="flex items-start justify-between gap-2 mb-2">
                   <div className="flex items-center gap-2 min-w-0">
                     <GlowDot status={model.health.status} />
                     <div className="min-w-0">
-                      {model.nickname && (
-                        <span className="text-sm font-bold text-amber-300 truncate block leading-tight">{model.nickname}</span>
-                      )}
-                      <span className={`${model.nickname ? "text-xs text-gray-500" : "text-sm text-gray-100 font-medium"} truncate block leading-tight`}>{model.name}</span>
+                      <span className="text-sm text-gray-100 font-medium truncate block leading-tight">{model.provider}</span>
+                      <span className="text-xs text-gray-500 truncate block leading-tight font-mono">{model.modelId}</span>
                     </div>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
-                    {gradeInfo && (
-                      <span className={`text-xs px-1.5 py-0.5 rounded font-black ${gradeInfo.color} bg-white/5 border border-white/10`}>
-                        {gradeInfo.grade}
-                      </span>
-                    )}
                     <span className={`text-xs px-1.5 py-0.5 rounded font-bold ${TIER_COLORS[model.tier] ?? TIER_COLORS.small}`}>
                       {TIER_LABELS[model.tier] ?? "S"}
                     </span>
                   </div>
                 </div>
 
-                {/* Provider + context */}
-                <div className="flex items-center gap-1.5 mb-2">
+                {/* Provider + context + capabilities */}
+                <div className="flex items-center gap-1.5 mb-2 flex-wrap">
                   <span className={`text-xs px-1.5 py-0.5 rounded font-semibold ${pc.text} ${pc.bg} border ${pc.border}`}>
                     {model.provider}
                   </span>
                   <span className="text-xs text-gray-600">{fmtCtx(model.contextLength)}</span>
+                  {model.supportsVision && (
+                    <span className="text-[10px] px-1 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30" title="อ่านรูปภาพได้">👁 ดูรูปได้</span>
+                  )}
+                  {model.supportsTools && (
+                    <span className="text-[10px] px-1 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30" title="รองรับ Tool Calling">🔧 tools</span>
+                  )}
                   {speedInfo && (
                     <span className="text-xs text-gray-600">{speedInfo.emoji} {fmtMs(model.health.latencyMs)}</span>
                   )}
                 </div>
 
-                {/* Benchmark score + grade */}
-                {hasBenchmark ? (
-                  <div className="mb-2">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-xs text-gray-500">
-                        {model.benchmark!.avgScore.toFixed(1)}/{model.benchmark!.maxScore}
-                      </span>
-                      <span className={`text-xs font-bold ${gradeInfo?.color ?? "text-indigo-300"}`}>
-                        {pct}%
-                      </span>
-                    </div>
-                    <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden">
-                      <div
-                        className={`h-full rounded-full transition-all duration-1000 ${
-                          pct >= 80 ? "bg-gradient-to-r from-yellow-500 to-amber-400" :
-                          pct >= 60 ? "bg-gradient-to-r from-indigo-500 to-cyan-500" :
-                          pct >= 40 ? "bg-gradient-to-r from-amber-500 to-orange-500" :
-                          "bg-gradient-to-r from-red-500 to-pink-500"
-                        }`}
-                        style={{ width: `${pct}%` }}
-                      />
-                    </div>
-                  </div>
-                ) : (
-                  <div className="mb-2" />
-                )}
-
-                {/* Fun status line */}
-                <div className="flex items-center justify-between">
+                {/* Fun status line + benchmark score */}
+                <div className="flex items-center justify-between mb-2">
                   <span className="text-xs text-gray-500">
                     {funStatus.emoji} {funStatus.text}
                   </span>
-                  {gradeInfo && (
-                    <span className={`text-xs ${gradeInfo.color}`}>
-                      {gradeInfo.emoji} {gradeInfo.label}
+                  {model.benchmark ? (
+                    <span
+                      className={`text-xs font-bold px-1.5 py-0.5 rounded ${
+                        model.benchmark.avgScore >= 8 ? "bg-emerald-500/20 text-emerald-300" :
+                        model.benchmark.avgScore >= 5 ? "bg-amber-500/20 text-amber-300" :
+                        "bg-red-500/20 text-red-300"
+                      }`}
+                      title={`${model.benchmark.questionsAnswered}/${model.benchmark.totalQuestions} ข้อ`}
+                    >
+                      ★ {model.benchmark.avgScore.toFixed(1)}
                     </span>
+                  ) : (
+                    <span className="text-[10px] text-gray-700">ยังไม่ได้สอบ</span>
                   )}
                 </div>
+
+                {/* Category scores */}
+                {model.categoryScores && Object.keys(model.categoryScores).length > 0 && (
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {Object.entries(model.categoryScores)
+                      .sort(([,a], [,b]) => b - a)
+                      .map(([cat, score]) => (
+                        <span
+                          key={cat}
+                          className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                            score >= 80 ? "bg-emerald-500/20 text-emerald-300" :
+                            score >= 60 ? "bg-cyan-500/20 text-cyan-300" :
+                            score >= 40 ? "bg-amber-500/20 text-amber-300" :
+                            "bg-red-500/20 text-red-300"
+                          }`}
+                          title={`${cat}: ${score}%`}
+                        >
+                          {cat} {score}%
+                        </span>
+                      ))}
+                  </div>
+                )}
 
                 {/* Cooldown */}
                 {cooldownText && (

@@ -1,0 +1,36 @@
+{
+	admin off
+	auto_https off
+}
+
+:3333 {
+	reverse_proxy 127.0.0.1:3334 {
+		flush_interval -1
+		transport http {
+			read_timeout 300s
+			write_timeout 300s
+		}
+	}
+
+	log {
+		output stdout
+		format console
+		level INFO
+	}
+}
+
+:18790 {
+	reverse_proxy 127.0.0.1:18791 {
+		flush_interval -1
+		transport http {
+			read_timeout 600s
+			write_timeout 600s
+		}
+	}
+
+	log {
+		output stdout
+		format console
+		level INFO
+	}
+}

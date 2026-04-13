@@ -87,8 +87,8 @@ describe("askModel", () => {
     await askModel("openrouter", "test-model", "hi");
 
     const headers = mockFetch.mock.calls[0][1].headers;
-    expect(headers["HTTP-Referer"]).toBe("https://bcproxyai.app");
-    expect(headers["X-Title"]).toBe("BCProxyAI");
+    expect(headers["HTTP-Referer"]).toBe("https://sml-gateway.app");
+    expect(headers["X-Title"]).toBe("SMLGateway");
   });
 });
 

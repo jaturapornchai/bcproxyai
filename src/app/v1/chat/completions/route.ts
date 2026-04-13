@@ -1,45 +1,57 @@
-import { NextRequest, NextResponse } from "next/server";
-import { getDb } from "@/lib/db/schema";
-import { getNextApiKey, markKeyCooldown } from "@/lib/api-keys";
+import { NextRequest } from "next/server";
+import { getSqlClient } from "@/lib/db/schema";
+import { getNextApiKey, markKeyCooldown, hasProviderKey } from "@/lib/api-keys";
 import { PROVIDER_URLS } from "@/lib/providers";
-import { getCached, setCache, clearCache } from "@/lib/cache";
+import { clearCache } from "@/lib/cache";
 import { compressMessages } from "@/lib/prompt-compress";
-import { jsonrepair } from "jsonrepair";
-import { v4 as uuidv4 } from "uuid";
+import { openAIError, ensureChatCompletionFields } from "@/lib/openai-compat";
+import { autoDetectComplaint } from "@/lib/auto-complaint";
+import { getReputationScore } from "@/lib/worker/complaint";
+import { detectPromptCategory, recordRoutingResult, getBestModelsForCategory, getBestModelsByBenchmarkCategory, emitEvent, getRealAvgLatency } from "@/lib/routing-learn";
+import { getRedis } from "@/lib/redis";
+import { checkRateLimit } from "@/lib/rate-limit";
+import { getCachedResponse, setCachedResponse } from "@/lib/response-cache";
+import { recordBattleEvent, outcomeFromLatency } from "@/lib/battle-score";
+import { hasTpmHeadroom, recordTokenConsumption } from "@/lib/tpm-tracker";
+import { recordOutcome, getProviderScore, getModelScore, isRecentlyDead } from "@/lib/live-score";
+import { isProviderEnabledSync } from "@/lib/provider-toggle";
+import { canFitRequest, parseLimitHeaders, parseLimitError, recordLimit } from "@/lib/provider-limits";
+import { recordOutcomeLearning, recordFailStreak, canHandleTokens, getCategoryWinners, detectCategory, isModelUnhealthyForCategory } from "@/lib/learning";
+import { upstreamAgent } from "@/lib/upstream-agent";
+import { repairToolCallArguments, hasStructurallyBrokenToolCalls } from "@/lib/tool-repair";
+
+// ── Category mapping: routing category → exam question category ──
+const ROUTING_TO_EXAM_CAT: Record<string, string> = {
+  "thai": "thai",
+  "code": "code",
+  "math": "math",
+  "tools": "tools",
+  "vision": "vision",
+  "long-context": "comprehension",
+  "medium-context": "instruction",
+  "translate": "thai",
+  "knowledge": "reasoning",
+  "general": "general",  // will use overall score
+};
+
+// Slow threshold แปรผันตาม context size — request ใหญ่ช้ากว่าปกติ
+function slowThresholdMs(estInputTokens: number): number {
+  if (estInputTokens > 20_000) return 15_000;
+  if (estInputTokens > 10_000) return 10_000;
+  if (estInputTokens > 5_000)  return 7_000;
+  return 5_000;
+}
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-// Budget check: returns { ok, percentUsed } — blocks at 95%
-function checkBudget(): { ok: boolean; preferCheap: boolean; percentUsed: number } {
+async function trackTokenUsage(provider: string, modelId: string, inputTokens: number, outputTokens: number) {
   try {
-    const db = getDb();
-    const configRow = db.prepare("SELECT value FROM budget_config WHERE key = 'daily_token_limit'").get() as { value: string } | undefined;
-    const dailyLimit = configRow ? Number(configRow.value) : 1000000;
-
-    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-    const usage = db.prepare(
-      "SELECT COALESCE(SUM(input_tokens + output_tokens), 0) AS total FROM token_usage WHERE created_at >= ?"
-    ).get(`${today}T00:00:00`) as { total: number };
-
-    const percentUsed = dailyLimit > 0 ? (usage.total / dailyLimit) * 100 : 0;
-    return {
-      ok: percentUsed < 95,
-      preferCheap: percentUsed >= 80,
-      percentUsed,
-    };
-  } catch {
-    return { ok: true, preferCheap: false, percentUsed: 0 };
-  }
-}
-
-// Track token usage after a successful response
-function trackTokenUsage(provider: string, modelId: string, inputTokens: number, outputTokens: number) {
-  try {
-    const db = getDb();
-    db.prepare(
-      "INSERT INTO token_usage (provider, model_id, input_tokens, output_tokens, estimated_cost_usd) VALUES (?, ?, ?, ?, 0)"
-    ).run(provider, modelId, inputTokens, outputTokens);
+    const sql = getSqlClient();
+    await sql`
+      INSERT INTO token_usage (provider, model_id, input_tokens, output_tokens, estimated_cost_usd)
+      VALUES (${provider}, ${modelId}, ${inputTokens}, ${outputTokens}, 0)
+    `;
   } catch {
     // non-critical
   }
@@ -52,10 +64,176 @@ interface ModelRow {
   supports_tools: number;
   supports_vision: number;
   tier: string;
+  context_length: number;
   avg_score: number | null;
   avg_latency: number | null;
   health_status: string | null;
   cooldown_until: string | null;
+}
+
+// ─── Redis-backed Provider Cooldown (in-memory fallback) ───
+const _memCooldowns = new Map<string, { until: number; reason: string }>();
+const _memFailures = new Map<string, { count: number; firstAt: number; totalSeen: number }>();
+const FAILURE_STREAK_THRESHOLD = 10;
+const FAILURE_STREAK_WINDOW_MS = 3 * 60 * 1000;
+const STREAK_COOLDOWN_MS = 30 * 60 * 1000;
+
+// Track every attempt (success or failure) for sample-size guard
+async function recordProviderAttempt(provider: string): Promise<void> {
+  try {
+    const redis = getRedis();
+    const key = `fs:provider:${provider}`;
+    const raw = await redis.get(key);
+    if (!raw) return; // no failure window open yet — nothing to update
+    const entry = JSON.parse(raw) as { count: number; firstAt: number; totalSeen?: number };
+    entry.totalSeen = (entry.totalSeen ?? 0) + 1;
+    await redis.set(key, JSON.stringify(entry), "PX", FAILURE_STREAK_WINDOW_MS);
+  } catch {
+    // in-memory fallback: if there's an entry, bump totalSeen
+    const entry = _memFailures.get(provider);
+    if (entry) entry.totalSeen = (entry.totalSeen ?? 0) + 1;
+  }
+}
+
+async function isProviderCooledDownMem(provider: string): Promise<boolean> {
+  // Try Redis first
+  try {
+    const redis = getRedis();
+    const val = await redis.get(`cd:provider:${provider}`);
+    if (val !== null) return true;
+  } catch { /* fall through */ }
+  // Fallback: in-memory
+  const cd = _memCooldowns.get(provider);
+  if (!cd) return false;
+  if (Date.now() > cd.until) { _memCooldowns.delete(provider); return false; }
+  return true;
+}
+
+async function setProviderCooldownMem(provider: string, ms: number, reason: string): Promise<void> {
+  console.log(`[COOLDOWN] ${provider} → ${Math.round(ms / 60000)}min | ${reason}`);
+  try {
+    const redis = getRedis();
+    await redis.set(`cd:provider:${provider}`, reason, "PX", ms);
+  } catch {
+    // Fallback: in-memory
+    _memCooldowns.set(provider, { until: Date.now() + ms, reason });
+  }
+}
+
+async function recordProviderFailureMem(provider: string): Promise<void> {
+  try {
+    const redis = getRedis();
+    const key = `fs:provider:${provider}`;
+    const raw = await redis.get(key);
+    const now = Date.now();
+    const entry = raw ? JSON.parse(raw) as { count: number; firstAt: number; totalSeen: number } : null;
+    if (!entry || now - entry.firstAt > FAILURE_STREAK_WINDOW_MS) {
+      await redis.set(key, JSON.stringify({ count: 1, firstAt: now, totalSeen: 1 }), "PX", FAILURE_STREAK_WINDOW_MS);
+      return;
+    }
+    entry.count += 1;
+    entry.totalSeen = (entry.totalSeen ?? 0) + 1;
+    // Require minimum sample size: only trigger if count>=10 AND totalSeen>=20
+    if (entry.count >= FAILURE_STREAK_THRESHOLD && entry.totalSeen >= 20) {
+      await setProviderCooldownMem(provider, STREAK_COOLDOWN_MS, `failure streak: ${entry.count}/${entry.totalSeen} in ${Math.round((now - entry.firstAt) / 1000)}s`);
+      await redis.del(key);
+    } else {
+      await redis.set(key, JSON.stringify(entry), "PX", FAILURE_STREAK_WINDOW_MS);
+    }
+  } catch {
+    // Fallback: in-memory
+    const now = Date.now();
+    const entry = _memFailures.get(provider);
+    if (!entry || now - entry.firstAt > FAILURE_STREAK_WINDOW_MS) {
+      _memFailures.set(provider, { count: 1, firstAt: now, totalSeen: 1 });
+      return;
+    }
+    entry.count += 1;
+    entry.totalSeen = (entry.totalSeen ?? 0) + 1;
+    if (entry.count >= FAILURE_STREAK_THRESHOLD && entry.totalSeen >= 20) {
+      await setProviderCooldownMem(provider, STREAK_COOLDOWN_MS, `failure streak: ${entry.count}/${entry.totalSeen}`);
+      _memFailures.delete(provider);
+    }
+  }
+}
+
+async function recordProviderSuccessMem(provider: string): Promise<void> {
+  try {
+    const redis = getRedis();
+    await redis.del(`fs:provider:${provider}`);
+    // Circuit breaker: record success in rolling window
+    const succKey = `cb:succ:${provider}`;
+    const cur = await redis.get(succKey);
+    const newVal = (Number(cur ?? 0) + 1).toString();
+    await redis.set(succKey, newVal, "EX", 30);
+  } catch { /* ignore */ }
+  _memFailures.delete(provider);
+}
+
+// P1-3: Circuit breaker — check if provider circuit is open
+async function isCircuitOpen(provider: string): Promise<boolean> {
+  try {
+    const redis = getRedis();
+    const cbKey = `cb:open:${provider}`;
+    const val = await redis.get(cbKey);
+    if (val === null) return false;
+    if (val === "half-open") return false; // allow probe
+    // val === "open" — U2: shorter 30s total cooldown, promote to half-open in the last 5s
+    const ttl = await redis.ttl(cbKey);
+    if (ttl > 0 && ttl <= 5) {
+      await redis.set(cbKey, "half-open", "EX", 30);
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// P1-3: Record result of a half-open probe attempt
+async function recordCircuitProbeResult(provider: string, success: boolean): Promise<void> {
+  try {
+    const redis = getRedis();
+    const cbKey = `cb:open:${provider}`;
+    const state = await redis.get(cbKey);
+    if (state !== "half-open") return; // not currently probing
+    if (success) {
+      // Probe succeeded → fully close circuit + reset counters
+      await redis.del(cbKey);
+      await redis.del(`cb:fail:${provider}`);
+      await redis.del(`cb:succ:${provider}`);
+      console.log(`[CIRCUIT-CLOSE] ${provider} — half-open probe succeeded`);
+    } else {
+      // Probe failed → re-open for 4 minutes (escalating)
+      await redis.set(cbKey, "open", "EX", 240);
+      console.log(`[CIRCUIT-REOPEN] ${provider} — half-open probe failed → 4min`);
+    }
+  } catch { /* ignore */ }
+}
+
+// P1-3: Record provider failure for circuit breaker rolling window
+async function recordCircuitFailure(provider: string): Promise<void> {
+  try {
+    const redis = getRedis();
+    const failKey = `cb:fail:${provider}`;
+    const succKey = `cb:succ:${provider}`;
+    const cur = await redis.get(failKey);
+    const newVal = (Number(cur ?? 0) + 1).toString();
+    await redis.set(failKey, newVal, "EX", 30);
+
+    const fails = Number(newVal);
+    const succs = Number((await redis.get(succKey)) ?? 0);
+    const total = fails + succs;
+    if (total >= 5) {
+      const successRate = succs / total;
+      if (successRate < 0.3) {
+        // U2: open circuit for 30s (faster recovery; half-open probe at end)
+        const cbKey = `cb:open:${provider}`;
+        await redis.set(cbKey, "open", "EX", 30);
+        console.log(`[CIRCUIT-OPEN] ${provider} — success rate ${(successRate * 100).toFixed(0)}% < 30% → circuit open 30s`);
+      }
+    }
+  } catch { /* ignore */ }
 }
 
 interface RequestCapabilities {
@@ -67,124 +245,164 @@ interface RequestCapabilities {
 function detectRequestCapabilities(body: Record<string, unknown>): RequestCapabilities {
   const hasTools = Array.isArray(body.tools) && (body.tools as unknown[]).length > 0;
 
-  // Check if any message contains image_url content
   const messages = (body.messages as Array<{ role: string; content: unknown }>) || [];
   let hasImages = false;
   for (const msg of messages) {
     if (Array.isArray(msg.content)) {
       for (const part of msg.content as Array<{ type: string }>) {
-        if (part.type === "image_url") {
-          hasImages = true;
-          break;
-        }
+        if (part.type === "image_url") { hasImages = true; break; }
       }
     }
     if (hasImages) break;
   }
 
-  // Check for json_schema response_format
   const responseFormat = body.response_format as { type?: string; json_schema?: unknown } | undefined;
-  const needsJsonSchema =
-    responseFormat?.type === "json_schema" && responseFormat?.json_schema != null;
+  const needsJsonSchema = responseFormat?.type === "json_schema" && responseFormat?.json_schema != null;
 
   return { hasTools, hasImages, needsJsonSchema };
 }
 
-// Rough token estimate: ~4 chars per token for English, ~2 for Thai/CJK
 function estimateTokens(body: Record<string, unknown>): number {
-  const str = JSON.stringify(body.messages ?? []);
-  // Mix of Thai + English → ~3 chars per token average
-  return Math.ceil(str.length / 3);
+  // นับเฉพาะ text — ไม่นับ image base64 (แต่ละรูป ~1K tokens คงที่)
+  let textLen = 0;
+  let imageCount = 0;
+  const msgs = body.messages;
+  if (Array.isArray(msgs)) {
+    for (const msg of msgs as Array<{ content?: unknown }>) {
+      if (typeof msg.content === "string") {
+        textLen += msg.content.length;
+      } else if (Array.isArray(msg.content)) {
+        for (const part of msg.content as Array<{ type?: string; text?: string; image_url?: unknown }>) {
+          if (part.type === "text" && part.text) textLen += part.text.length;
+          else if (part.type === "image_url") imageCount++;
+        }
+      }
+    }
+  }
+  // tools/other fields
+  const toolsStr = body.tools ? JSON.stringify(body.tools) : "";
+  textLen += toolsStr.length;
+  return Math.ceil(textLen / 3) + imageCount * 1000;
 }
 
-function getAvailableModels(caps: RequestCapabilities): ModelRow[] {
-  // No cache — SQLite query < 1ms, cache causes Ollama priority issues
+const VISION_PRIORITY_PROVIDERS = ["google", "groq", "ollama", "github"];
 
-  const db = getDb();
-  const now = new Date().toISOString();
+// P2: OpenRouter free-tier models that claim supports_tools=1 in DB but 404 at runtime
+// NOTE: No hardcoded broken tool models.
+// System learns from production signals: model_samples (fail count per category=tools),
+// category_winners (tools category loss_streak), and exam_answers (tools question pass rate).
+// See `recordOutcomeLearning()` and `getCategoryWinners("tools")`.
 
-  const filters: string[] = [
-    "(h.status IS NULL OR h.status = 'available' OR h.status = 'error')",
-    "(h.cooldown_until IS NULL OR h.cooldown_until < ?)",
-  ];
-  if (caps.hasTools) filters.push("m.supports_tools = 1");
-  if (caps.hasImages) filters.push("m.supports_vision = 1");
-  // No context filter — let provider return 413 if too large, gateway will fallback
+async function getAvailableModels(caps: RequestCapabilities, benchmarkCategory?: string, estTokens?: number): Promise<ModelRow[]> {
+  const sql = getSqlClient();
 
-  const whereClause = filters.join(" AND ");
-  // Prioritize: benchmarked models first (score > 0), then by score, then large context, then latency
-  const orderClause = caps.needsJsonSchema
-    ? "CASE WHEN m.tier = 'large' THEN 0 ELSE 1 END ASC, CASE WHEN avg_score > 0 THEN 0 ELSE 1 END ASC, avg_score DESC, m.context_length DESC, avg_latency ASC"
-    : "CASE WHEN avg_score > 0 THEN 0 ELSE 1 END ASC, avg_score DESC, m.context_length DESC, avg_latency ASC";
+  const visionFilter = caps.hasImages ? `AND m.supports_vision = 1` : "";
+  const toolsFilter = caps.hasTools ? `AND m.supports_tools = 1` : "";
+  const visionBoost = caps.hasImages
+    ? `, CASE WHEN m.provider IN ('google','groq','ollama','github') THEN 0 ELSE 1 END as vision_priority`
+    : "";
+  const visionOrder = caps.hasImages ? "vision_priority ASC," : "";
+  const toolsBoost = caps.hasTools
+    ? "CASE WHEN m.context_length >= 128000 THEN 0 WHEN m.context_length >= 32000 THEN 1 ELSE 2 END ASC,"
+    : "";
 
-  const rows = db
-    .prepare(
-      `
-      SELECT
-        m.id,
-        m.provider,
-        m.model_id,
-        m.supports_tools,
-        m.supports_vision,
-        m.tier,
-        m.context_length,
-        COALESCE(b.avg_score, 0) as avg_score,
-        COALESCE(b.avg_latency, 9999999) as avg_latency,
-        h.status as health_status,
-        h.cooldown_until
-      FROM models m
-      LEFT JOIN (
-        SELECT model_id, AVG(score) as avg_score, AVG(latency_ms) as avg_latency
-        FROM benchmark_results
-        GROUP BY model_id
-      ) b ON m.id = b.model_id
-      LEFT JOIN (
-        SELECT hl.model_id, hl.status, hl.cooldown_until
-        FROM health_logs hl
-        INNER JOIN (
-          SELECT model_id, MAX(checked_at) as max_checked
-          FROM health_logs
-          GROUP BY model_id
-        ) latest ON hl.model_id = latest.model_id AND hl.checked_at = latest.max_checked
-      ) h ON m.id = h.model_id
-      WHERE ${whereClause}
-      ORDER BY ${orderClause}
-    `
-    )
-    .all(now) as ModelRow[];
+  // ระบบสอบใหม่: ใช้ exam_attempts เป็น source of truth
+  // ต้อง passed=true ใน attempt ล่าสุดถึงจะได้ทำงาน
+  void benchmarkCategory; // kept for API compat (was used for per-category benchmark)
+  const rows = await sql.unsafe(`
+    SELECT
+      m.id, m.provider, m.model_id, m.supports_tools, m.supports_vision, m.tier, m.context_length,
+      COALESCE(ex.score_pct, 0) as avg_score,
+      COALESCE(rs.avg_lat_real, ex.total_latency_ms::float, 9999999) as avg_latency,
+      h.status as health_status,
+      h.cooldown_until
+      ${visionBoost}
+    FROM models m
+    INNER JOIN (
+      SELECT DISTINCT ON (model_id)
+        model_id, score_pct, passed, total_latency_ms
+      FROM exam_attempts
+      WHERE finished_at IS NOT NULL
+      ORDER BY model_id, started_at DESC
+    ) ex ON m.id = ex.model_id AND ex.score_pct >= 50
+    LEFT JOIN (
+      SELECT model_id, AVG(latency_ms)::float AS avg_lat_real
+      FROM routing_stats
+      WHERE created_at >= now() - interval '24 hours'
+      GROUP BY model_id
+      HAVING COUNT(*) >= 3
+    ) rs ON m.id = rs.model_id
+    LEFT JOIN (
+      SELECT hl.model_id, hl.status, hl.cooldown_until
+      FROM health_logs hl
+      INNER JOIN (
+        SELECT model_id, MAX(id) as max_id FROM health_logs GROUP BY model_id
+      ) latest ON hl.model_id = latest.model_id AND hl.id = latest.max_id
+    ) h ON m.id = h.model_id
+    WHERE (h.cooldown_until IS NULL OR h.cooldown_until < now())
+      AND COALESCE(m.supports_embedding, 0) != 1
+      AND COALESCE(m.supports_audio_output, 0) != 1
+      AND COALESCE(m.supports_image_gen, 0) != 1
+      ${visionFilter}
+      ${toolsFilter}
+    ORDER BY ${toolsBoost} ${visionOrder}
+      ${caps.needsJsonSchema ? "CASE WHEN m.tier = 'large' THEN 0 ELSE 1 END ASC," : ""}
+      ex.score_pct DESC,
+      m.context_length DESC,
+      COALESCE(rs.avg_lat_real, ex.total_latency_ms::float, 9999999) ASC
+  `) as ModelRow[];
 
-  return rows;
+  // Apply Ollama slowness penalty: push Ollama to end if any cloud provider is available
+  const cloudRows = rows.filter(r => r.provider !== "ollama");
+  const ollamaRows = rows.filter(r => r.provider === "ollama");
+  let reorderedRows = cloudRows.length > 0 ? [...cloudRows, ...ollamaRows] : rows;
+
+  // Improvement D: fast-stream provider boost — subtract 500ms from effective latency for sorting
+  const FAST_STREAM_PROVIDERS = new Set(["groq", "cerebras", "together"]);
+  if (reorderedRows.length > 1) {
+    reorderedRows = [...reorderedRows].sort((a, b) => {
+      const adjA = (a.avg_latency ?? 9999999)
+        - (FAST_STREAM_PROVIDERS.has(a.provider) ? 500 : 0)
+        + (estTokens != null && estTokens > 10_000 && a.provider === "mistral" ? 5_000 : 0);
+      const adjB = (b.avg_latency ?? 9999999)
+        - (FAST_STREAM_PROVIDERS.has(b.provider) ? 500 : 0)
+        + (estTokens != null && estTokens > 10_000 && b.provider === "mistral" ? 5_000 : 0);
+      // Keep Ollama at end regardless
+      if (a.provider === "ollama" && b.provider !== "ollama") return 1;
+      if (b.provider === "ollama" && a.provider !== "ollama") return -1;
+      return adjA - adjB;
+    });
+  }
+
+  if (process.env.LOG_LEVEL === "debug") {
+    const providerCount: Record<string, number> = {};
+    for (const r of reorderedRows) providerCount[r.provider] = (providerCount[r.provider] || 0) + 1;
+    console.log(`[DEBUG] mode=auto candidates=${reorderedRows.length} providers=${JSON.stringify(providerCount)}`);
+    if (reorderedRows.length > 0) {
+      const top3 = reorderedRows.slice(0, 3).map(r => `${r.provider}/${r.model_id}(${r.avg_latency}ms)`);
+      console.log(`[DEBUG] after boost: candidates=${reorderedRows.length} top3=[${top3}]`);
+    }
+  }
+
+  return reorderedRows;
 }
 
-function logGateway(
-  requestModel: string,
-  resolvedModel: string | null,
-  provider: string | null,
-  status: number,
-  latencyMs: number,
-  inputTokens: number,
-  outputTokens: number,
-  error: string | null,
-  userMessage: string | null,
-  assistantMessage: string | null
+async function logGateway(
+  requestModel: string, resolvedModel: string | null, provider: string | null,
+  status: number, latencyMs: number, inputTokens: number, outputTokens: number,
+  error: string | null, userMessage: string | null, assistantMessage: string | null
 ) {
   try {
-    const db = getDb();
-    db.prepare(
-      `INSERT INTO gateway_logs (request_model, resolved_model, provider, status, latency_ms, input_tokens, output_tokens, error, user_message, assistant_message)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(
-      requestModel,
-      resolvedModel,
-      provider,
-      status,
-      latencyMs,
-      inputTokens,
-      outputTokens,
-      error,
-      userMessage?.slice(0, 500) ?? null,
-      assistantMessage?.slice(0, 500) ?? null
-    );
+    const sql = getSqlClient();
+    await sql`
+      INSERT INTO gateway_logs (request_model, resolved_model, provider, status, latency_ms,
+        input_tokens, output_tokens, error, user_message, assistant_message)
+      VALUES (
+        ${requestModel}, ${resolvedModel}, ${provider}, ${status}, ${latencyMs},
+        ${inputTokens}, ${outputTokens}, ${error},
+        ${userMessage?.slice(0, 500) ?? null}, ${assistantMessage?.slice(0, 500) ?? null}
+      )
+    `;
   } catch {
     // non-critical
   }
@@ -195,33 +413,37 @@ function extractUserMessage(body: Record<string, unknown>): string | null {
   if (!messages || messages.length === 0) return null;
   const last = messages[messages.length - 1];
   if (typeof last.content === "string") return last.content.slice(0, 500);
+  if (Array.isArray(last.content)) {
+    return (last.content as Array<{ type: string; text?: string }>)
+      .filter((p) => p.type === "text" && p.text).map((p) => p.text).join("").slice(0, 500) || null;
+  }
   return JSON.stringify(last.content).slice(0, 500);
 }
 
-function logCooldown(modelId: string, errorMsg: string, httpStatus = 0) {
+async function logCooldown(modelId: string, errorMsg: string, httpStatus = 0, overrideMinutes?: number) {
   try {
-    const db = getDb();
-    // Smart cooldown based on error type
+    const sql = getSqlClient();
     let cooldownMs: number;
-    if (httpStatus === 413) {
-      cooldownMs = 15 * 60 * 1000;    // 15 นาที — request ใหญ่เกินไป (ลองใหม่ได้เร็ว)
+    if (overrideMinutes !== undefined) {
+      cooldownMs = overrideMinutes * 60 * 1000;
+    } else if (httpStatus === 402) {
+      cooldownMs = 24 * 60 * 60 * 1000;
     } else if (httpStatus === 429) {
-      cooldownMs = 30 * 60 * 1000;    // 30 นาที — rate limit
-    } else if (httpStatus === 400) {
-      cooldownMs = 10 * 60 * 1000;    // 10 นาที — bad request (อาจเป็น rate limit แฝง)
-    } else if (httpStatus >= 500) {
-      cooldownMs = 60 * 60 * 1000;    // 1 ชม. — server error (provider มีปัญหา)
+      cooldownMs = 2 * 60 * 1000;
+    } else if (httpStatus === 410) {
+      cooldownMs = 24 * 60 * 60 * 1000;
     } else if (httpStatus === 401 || httpStatus === 403) {
-      cooldownMs = 24 * 60 * 60 * 1000; // 24 ชม. — auth error (key หมดอายุ/ผิด)
+      cooldownMs = 60 * 60 * 1000;
+    } else if (httpStatus >= 500) {
+      cooldownMs = 5 * 60 * 1000;
     } else {
-      cooldownMs = 30 * 60 * 1000;    // 30 นาที — default
+      cooldownMs = 1 * 60 * 1000;
     }
     const cooldownUntil = new Date(Date.now() + cooldownMs).toISOString();
-    db.prepare(
-      `INSERT INTO health_logs (model_id, status, error, cooldown_until, checked_at)
-       VALUES (?, 'rate_limited', ?, ?, datetime('now'))`
-    ).run(modelId, errorMsg, cooldownUntil);
-    // Clear model cache so next request gets fresh data
+    await sql`
+      INSERT INTO health_logs (model_id, status, error, cooldown_until, checked_at)
+      VALUES (${modelId}, 'available', ${errorMsg}, ${cooldownUntil}, now())
+    `;
     clearCache("models:");
     clearCache("allmodels:");
   } catch {
@@ -229,101 +451,114 @@ function logCooldown(modelId: string, errorMsg: string, httpStatus = 0) {
   }
 }
 
+async function cooldownProvider(provider: string, httpStatus: number, errorMsg: string): Promise<void> {
+  let cooldownMs: number;
+  if (httpStatus === 402) cooldownMs = 24 * 60 * 60 * 1000;
+  else if (httpStatus === 429) cooldownMs = 5 * 60 * 1000;
+  else if (httpStatus === 401 || httpStatus === 403) cooldownMs = 60 * 60 * 1000;
+  else cooldownMs = 5 * 60 * 1000;
+  await setProviderCooldownMem(provider, cooldownMs, `HTTP ${httpStatus}: ${errorMsg}`);
+}
+
 function parseModelField(model: string): {
   mode: "auto" | "fast" | "tools" | "thai" | "consensus" | "direct" | "match";
   provider?: string;
   modelId?: string;
 } {
-  if (!model || model === "auto" || model === "bcproxy/auto") {
-    return { mode: "auto" };
-  }
-  if (model === "bcproxy/fast") return { mode: "fast" };
-  if (model === "bcproxy/tools") return { mode: "tools" };
-  if (model === "bcproxy/thai") return { mode: "thai" };
-  if (model === "bcproxy/consensus") return { mode: "consensus" };
+  // SML Gateway modes
+  if (!model || model === "auto" || model === "sml/auto") return { mode: "auto" };
+  if (model === "sml/fast") return { mode: "fast" };
+  if (model === "sml/tools") return { mode: "tools" };
+  if (model === "sml/thai") return { mode: "thai" };
+  if (model === "sml/consensus") return { mode: "consensus" };
 
-  // openrouter/xxx, kilo/xxx, groq/xxx
-  const providerMatch = model.match(/^(openrouter|kilo|groq|cerebras|sambanova|mistral|ollama)\/(.+)$/);
-  if (providerMatch) {
-    return { mode: "direct", provider: providerMatch[1], modelId: providerMatch[2] };
-  }
+  const providerMatch = model.match(/^(openrouter|kilo|google|groq|cerebras|sambanova|mistral|ollama|github|fireworks|cohere|cloudflare|huggingface|nvidia|chutes|llm7|scaleway|pollinations|ollamacloud|siliconflow|glhf|together|hyperbolic|zai|dashscope|reka)\/(.+)$/);
+  if (providerMatch) return { mode: "direct", provider: providerMatch[1], modelId: providerMatch[2] };
 
   return { mode: "match", modelId: model };
 }
 
-// Last resort: get ALL models including cooldown ones — better than 503
-function getAllModelsIncludingCooldown(caps: RequestCapabilities): ModelRow[] {
-  const db = getDb();
-  const filters: string[] = ["m.context_length >= 32000"];
-  if (caps.hasTools) filters.push("m.supports_tools = 1");
-  if (caps.hasImages) filters.push("m.supports_vision = 1");
-  const whereClause = filters.join(" AND ");
+async function getAllModelsIncludingCooldown(caps: RequestCapabilities): Promise<ModelRow[]> {
+  const sql = getSqlClient();
+  const visionFilter = caps.hasImages ? "AND m.supports_vision = 1" : "";
+  const orderClause = caps.hasImages
+    ? "CASE WHEN m.provider IN ('google','groq','ollama') THEN 0 ELSE 1 END ASC, RANDOM()"
+    : "RANDOM()";
 
-  const result = db.prepare(`
+  return await sql.unsafe(`
     SELECT m.id, m.provider, m.model_id, m.supports_tools, m.supports_vision, m.tier, m.context_length,
-      COALESCE(b.avg_score, 0) as avg_score, COALESCE(b.avg_latency, 9999999) as avg_latency
+      COALESCE(ex.score_pct, 0) as avg_score, COALESCE(ex.total_latency_ms::float, 9999999) as avg_latency
     FROM models m
-    LEFT JOIN (SELECT model_id, AVG(score) as avg_score, AVG(latency_ms) as avg_latency FROM benchmark_results GROUP BY model_id) b ON m.id = b.model_id
-    WHERE ${whereClause}
-    ORDER BY RANDOM()
+    LEFT JOIN (
+      SELECT DISTINCT ON (model_id) model_id, score_pct, total_latency_ms
+      FROM exam_attempts WHERE score_pct >= 50
+      ORDER BY model_id, started_at DESC
+    ) ex ON m.id = ex.model_id
+    WHERE m.context_length >= 32000
+      AND COALESCE(m.supports_embedding, 0) != 1
+      AND COALESCE(m.supports_audio_output, 0) != 1
+      AND COALESCE(m.supports_image_gen, 0) != 1
+      ${visionFilter}
+    ORDER BY ${orderClause}
     LIMIT 20
-  `).all() as ModelRow[];
-
-  return result;
+  `) as ModelRow[];
 }
 
-function selectModelsByMode(
+async function selectModelsByMode(
   mode: string,
-  caps: RequestCapabilities
-): ModelRow[] {
-  const db = getDb();
-  const now = new Date().toISOString();
+  caps: RequestCapabilities,
+  benchmarkCategory?: string,
+  estTokens?: number
+): Promise<ModelRow[]> {
+  const sql = getSqlClient();
 
   if (mode === "fast") {
-    // fastest = lowest latency, still apply capability filters
-    const filters: string[] = [
-      "(h.status IS NULL OR h.status = 'available' OR h.status = 'error')",
-      "(h.cooldown_until IS NULL OR h.cooldown_until < ?)",
-    ];
-    if (caps.hasTools) filters.push("m.supports_tools = 1");
-    if (caps.hasImages) filters.push("m.supports_vision = 1");
-    const whereClause = filters.join(" AND ");
-
-    const rows = db
-      .prepare(
-        `
-        SELECT
-          m.id, m.provider, m.model_id, m.supports_tools, m.supports_vision, m.tier, m.context_length,
-          COALESCE(b.avg_score, 0) as avg_score,
-          COALESCE(b.avg_latency, 9999999) as avg_latency,
-          h.status as health_status,
-          h.cooldown_until
-        FROM models m
-        LEFT JOIN (
-          SELECT model_id, AVG(score) as avg_score, AVG(latency_ms) as avg_latency
-          FROM benchmark_results GROUP BY model_id
-        ) b ON m.id = b.model_id
-        LEFT JOIN (
-          SELECT hl.model_id, hl.status, hl.cooldown_until
-          FROM health_logs hl
-          INNER JOIN (
-            SELECT model_id, MAX(checked_at) as max_checked FROM health_logs GROUP BY model_id
-          ) latest ON hl.model_id = latest.model_id AND hl.checked_at = latest.max_checked
-        ) h ON m.id = h.model_id
-        WHERE ${whereClause}
-        ORDER BY avg_latency ASC, avg_score DESC
-      `
-      )
-      .all(now) as ModelRow[];
-    return rows;
+    const visionFilter = caps.hasImages ? "AND m.supports_vision = 1" : "";
+    const fastRows = await sql.unsafe(`
+      SELECT
+        m.id, m.provider, m.model_id, m.supports_tools, m.supports_vision, m.tier, m.context_length,
+        ex.score_pct as avg_score,
+        COALESCE(rs.avg_lat_real, ex.total_latency_ms::float, 9999999) as avg_latency,
+        h.status as health_status,
+        h.cooldown_until
+      FROM models m
+      INNER JOIN (
+        SELECT DISTINCT ON (model_id) model_id, score_pct, total_latency_ms
+        FROM exam_attempts WHERE score_pct >= 50
+        ORDER BY model_id, started_at DESC
+      ) ex ON m.id = ex.model_id
+      LEFT JOIN (
+        SELECT model_id, AVG(latency_ms)::float AS avg_lat_real
+        FROM routing_stats
+        WHERE created_at >= now() - interval '24 hours'
+        GROUP BY model_id
+        HAVING COUNT(*) >= 3
+      ) rs ON m.id = rs.model_id
+      LEFT JOIN (
+        SELECT hl.model_id, hl.status, hl.cooldown_until
+        FROM health_logs hl
+        INNER JOIN (
+          SELECT model_id, MAX(id) as max_id FROM health_logs GROUP BY model_id
+        ) latest ON hl.model_id = latest.model_id AND hl.id = latest.max_id
+      ) h ON m.id = h.model_id
+      WHERE (h.cooldown_until IS NULL OR h.cooldown_until < now())
+        AND COALESCE(m.supports_embedding, 0) != 1
+        AND COALESCE(m.supports_audio_output, 0) != 1
+        AND COALESCE(m.supports_image_gen, 0) != 1
+        ${visionFilter}
+      ORDER BY
+        CASE WHEN m.provider = 'ollama' THEN 1 ELSE 0 END ASC,
+        COALESCE(rs.avg_lat_real, ex.total_latency_ms::float, 9999999) ASC,
+        ex.score_pct DESC
+    `) as ModelRow[];
+    return fastRows;
   }
 
   if (mode === "tools") {
-    return getAvailableModels({ ...caps, hasTools: true });
+    return getAvailableModels({ ...caps, hasTools: true }, benchmarkCategory, estTokens);
   }
 
-  // auto / thai → no context filter, let provider handle 413
-  return getAvailableModels(caps);
+  return getAvailableModels(caps, benchmarkCategory, estTokens);
 }
 
 async function forwardToProvider(
@@ -331,7 +566,7 @@ async function forwardToProvider(
   actualModelId: string,
   body: Record<string, unknown>,
   stream: boolean,
-  signal?: AbortSignal
+  externalSignal?: AbortSignal
 ): Promise<Response> {
   const url = PROVIDER_URLS[provider];
   if (!url) throw new Error(`Unknown provider: ${provider}`);
@@ -344,10 +579,9 @@ async function forwardToProvider(
     Authorization: `Bearer ${apiKey}`,
   };
 
-  // OpenRouter requires extra headers
   if (provider === "openrouter") {
-    headers["HTTP-Referer"] = "https://bcproxy.ai";
-    headers["X-Title"] = "BCProxyAI Gateway";
+    headers["HTTP-Referer"] = "https://smlgateway.ai";
+    headers["X-Title"] = "SMLGateway Gateway";
   }
 
   // Whitelist: only pass known OpenAI-compatible fields to upstream providers
@@ -411,7 +645,85 @@ async function forwardToProvider(
     // Keep tools/tool_choice so model can make proper function calls
   }
 
-  // Compress messages if they are large (> 30K estimated tokens)
+  delete requestBody.store;
+  delete requestBody.stream_options;
+  if (requestBody.max_completion_tokens && !requestBody.max_tokens) {
+    requestBody.max_tokens = requestBody.max_completion_tokens;
+    delete requestBody.max_completion_tokens;
+  }
+
+  if (Array.isArray(requestBody.messages)) {
+    for (const msg of requestBody.messages as Array<Record<string, unknown>>) {
+      if (msg.reasoning !== undefined) delete msg.reasoning;
+      if (msg.reasoning_content !== undefined) delete msg.reasoning_content;
+
+      if (Array.isArray(msg.tool_calls)) {
+        const tcs = msg.tool_calls as Array<Record<string, unknown>>;
+        if (tcs.length === 0) {
+          delete msg.tool_calls;
+        } else {
+          for (const tc of tcs) {
+            if (tc.type !== "function") tc.type = "function";
+          }
+          if (msg.content === "") msg.content = null;
+        }
+      }
+
+      if (msg.role === "assistant" && !msg.tool_calls) {
+        if (msg.content === null || msg.content === undefined || msg.content === "") {
+          msg.content = " ";
+        }
+      }
+    }
+  }
+
+  if (provider === "mistral" && Array.isArray(requestBody.messages)) {
+    const idMap = new Map<string, string>();
+    let counter = 0;
+    const msgs = requestBody.messages as Array<{ role: string; tool_calls?: Array<{ id: string }>; tool_call_id?: string }>;
+    for (const msg of msgs) {
+      if (msg.tool_calls) {
+        for (const tc of msg.tool_calls) {
+          if (tc.id && (tc.id.length !== 9 || !/^[a-zA-Z0-9]+$/.test(tc.id))) {
+            if (!idMap.has(tc.id)) idMap.set(tc.id, `tc${String(counter++).padStart(7, "0")}`);
+            tc.id = idMap.get(tc.id)!;
+          }
+        }
+      }
+      if (msg.role === "tool" && msg.tool_call_id) {
+        if (idMap.has(msg.tool_call_id)) {
+          msg.tool_call_id = idMap.get(msg.tool_call_id)!;
+        } else if (msg.tool_call_id.length !== 9 || !/^[a-zA-Z0-9]+$/.test(msg.tool_call_id)) {
+          const newId = `tc${String(counter++).padStart(7, "0")}`;
+          idMap.set(msg.tool_call_id, newId);
+          msg.tool_call_id = newId;
+        }
+      }
+    }
+    if (idMap.size > 0) console.log(`[FWD] Fixed ${idMap.size} tool_call_ids for Mistral compatibility`);
+    if (requestBody.max_tokens && (requestBody.max_tokens as number) > 16384) requestBody.max_tokens = 16384;
+  }
+
+  if (provider === "ollama" && Array.isArray(requestBody.messages)) {
+    const msgs = requestBody.messages as Array<{ role: string; content: unknown }>;
+    for (const msg of msgs) {
+      if (Array.isArray(msg.content)) {
+        for (const part of msg.content as Array<{ type: string; image_url?: { url?: string } }>) {
+          if (part.type === "image_url" && part.image_url?.url && !part.image_url.url.startsWith("data:")) {
+            try {
+              const imgRes = await fetch(part.image_url.url, { signal: AbortSignal.timeout(10000) });
+              if (imgRes.ok) {
+                const buf = Buffer.from(await imgRes.arrayBuffer());
+                const mime = imgRes.headers.get("content-type") || "image/jpeg";
+                part.image_url.url = `data:${mime};base64,${buf.toString("base64")}`;
+              }
+            } catch { /* keep original URL */ }
+          }
+        }
+      }
+    }
+  }
+
   if (Array.isArray(requestBody.messages)) {
     const compressed = compressMessages(requestBody.messages as { role: string; content: unknown }[]);
     if (compressed.compressed) {
@@ -420,22 +732,77 @@ async function forwardToProvider(
     }
   }
 
-  // Ollama: set large context window via options.num_ctx
+  const hasImagesInReq = Array.isArray(requestBody.messages) && (requestBody.messages as Array<{content: unknown}>).some(
+    m => Array.isArray(m.content) && (m.content as Array<{type: string}>).some(p => p.type === "image_url")
+  );
+  let toolsStripped = false;
+  if (hasImagesInReq && requestBody.tools) {
+    console.log(`[FWD] Stripping tools (images+tools incompatible) for ${provider}/${actualModelId}`);
+    delete requestBody.tools;
+    delete requestBody.tool_choice;
+    toolsStripped = true;
+  }
+  if (!toolsStripped) {
+    try {
+      const sql = getSqlClient();
+      const rows = await sql<{ supports_tools: number }[]>`
+        SELECT supports_tools FROM models WHERE provider = ${provider} AND model_id = ${actualModelId}
+      `;
+      if (rows.length > 0 && rows[0].supports_tools !== 1 && requestBody.tools) {
+        console.log(`[FWD] Stripping tools (supports_tools=${rows[0].supports_tools}) for ${provider}/${actualModelId}`);
+        delete requestBody.tools;
+        delete requestBody.tool_choice;
+        toolsStripped = true;
+      }
+    } catch { /* non-critical */ }
+  }
+
+  if (toolsStripped && Array.isArray(requestBody.messages)) {
+    const msgs = requestBody.messages as Array<{ role: string; tool_calls?: unknown; tool_call_id?: string }>;
+    requestBody.messages = msgs.filter(m => {
+      if (m.role === "tool") return false;
+      if (m.role === "assistant" && m.tool_calls) delete m.tool_calls;
+      return true;
+    });
+    console.log(`[FWD] Cleaned tool messages: ${msgs.length} → ${(requestBody.messages as unknown[]).length} msgs`);
+  }
+
   if (provider === "ollama") {
     requestBody.options = { ...(requestBody.options as Record<string, unknown> ?? {}), num_ctx: 65536 };
   }
 
+  // Per-attempt timeout — non-stream only
+  // Streaming requests MUST NOT have a hard timeout — they're bound by
+  // TOTAL_TIMEOUT_MS in the caller, and the client controls abort via externalSignal
+  const bodySize = JSON.stringify(body).length;
+  let signal: AbortSignal | undefined = externalSignal;
+  if (!stream) {
+    let timeoutMs: number;
+    if (provider === "ollama") {
+      timeoutMs = 30_000;
+    } else if (bodySize > 40_000) {
+      timeoutMs = 60_000;
+    } else if (bodySize > 20_000) {
+      timeoutMs = 35_000;
+    } else if (bodySize > 10_000) {
+      timeoutMs = 20_000;
+    } else {
+      timeoutMs = 12_000;
+    }
+    const timeoutSignal = AbortSignal.timeout(timeoutMs);
+    signal = externalSignal ? AbortSignal.any([timeoutSignal, externalSignal]) : timeoutSignal;
+  }
   const response = await fetch(url, {
     method: "POST",
     headers,
     body: JSON.stringify(requestBody),
-    ...(signal ? { signal } : {}),
+    signal,
+    // @ts-expect-error undici dispatcher not in standard fetch types
+    dispatcher: upstreamAgent,
   });
 
-  // On 429, mark this key as rate-limited and cooldown 5 minutes
   if (response.status === 429) {
     markKeyCooldown(provider, apiKey, 300000);
-    // Return a new response with the body text so caller can read it
     const text = await response.text();
     return new Response(text, { status: 429, headers: response.headers });
   }
@@ -443,58 +810,67 @@ async function forwardToProvider(
   return response;
 }
 
-function isRetryableStatus(status: number): boolean {
-  return status === 413 || status === 429 || status >= 500;
+// Improvement A: parallel hedge for top-2 cloud candidates
+const FAST_STREAM_PROVIDERS_FOR_HEDGE = new Set(["groq", "cerebras", "together"]);
+
+async function hedgeRace(
+  contenders: ModelRow[],
+  body: Record<string, unknown>,
+  isStream: boolean
+): Promise<{ response: Response; winner: ModelRow; winnerIdx: number }> {
+  const controllers = contenders.map(() => new AbortController());
+
+  const attempts = contenders.map((candidate, idx) =>
+    forwardToProvider(candidate.provider, candidate.model_id, body, isStream, controllers[idx].signal)
+      .then(res => {
+        if (res.ok) return { response: res, winner: candidate, winnerIdx: idx };
+        throw new Error(`HTTP ${res.status}`);
+      })
+  );
+
+  const result = await Promise.any(attempts);
+  controllers.forEach((c, i) => { if (i !== result.winnerIdx) c.abort(); });
+  return result;
 }
 
-// Pattern B+: Check if tool_calls are structurally broken (needs retry, not just repair)
-function hasStructurallyBrokenToolCalls(json: Record<string, unknown>): { broken: boolean; reason: string } {
-  const choices = json.choices as Array<Record<string, unknown>> | undefined;
-  if (!choices?.[0]) return { broken: false, reason: "" };
-  const msg = (choices[0] as Record<string, unknown>).message as Record<string, unknown> | undefined;
-  if (!msg) return { broken: false, reason: "" };
-  const toolCalls = msg.tool_calls;
-  if (!toolCalls) return { broken: false, reason: "" };
-  
-  // tool_calls must be array
-  if (!Array.isArray(toolCalls)) {
-    return { broken: true, reason: "tool_calls is not an array" };
+// Improvement F: probe Ollama /api/ps to see if model is loaded in memory
+async function isOllamaModelLoaded(modelId: string): Promise<boolean> {
+  try {
+    const redis = getRedis();
+    const cacheKey = `ollama:loaded:${modelId}`;
+    const cached = await redis.get(cacheKey);
+    if (cached === "1") return true;
+    if (cached === "0") return false;
+
+    const baseUrl = process.env.OLLAMA_BASE_URL || "http://localhost:11434";
+    const res = await fetch(`${baseUrl}/api/ps`, {
+      signal: AbortSignal.timeout(1000),
+      // @ts-expect-error undici dispatcher not in standard fetch types
+      dispatcher: upstreamAgent,
+    });
+    if (!res.ok) {
+      await redis.set(cacheKey, "0", "EX", 30);
+      return false;
+    }
+    const data = await res.json() as { models?: Array<{ model: string }> };
+    const loaded = data.models?.some(m => m.model === modelId || m.model.startsWith(modelId)) ?? false;
+    await redis.set(cacheKey, loaded ? "1" : "0", "EX", 30);
+    return loaded;
+  } catch {
+    return false; // probe failed → skip to be safe
   }
-  
-  for (let i = 0; i < toolCalls.length; i++) {
-    const tc = toolCalls[i] as Record<string, unknown>;
-    const fn = tc.function as Record<string, unknown> | undefined;
-    
-    // Must have function.name
-    if (!fn?.name || typeof fn.name !== "string" || fn.name.trim() === "") {
-      return { broken: true, reason: `tool_call[${i}] missing function.name` };
-    }
-    
-    // Arguments too large → skip repair, needs retry
-    const args = fn.arguments;
-    if (typeof args === "string" && args.length > 100000) {
-      return { broken: true, reason: `tool_call[${i}] arguments too large (${args.length} chars)` };
-    }
-    
-    // Null/undefined arguments with valid name → broken
-    if (args === null || args === undefined) {
-      return { broken: true, reason: `tool_call[${i}] missing arguments` };
-    }
-  }
-  
-  return { broken: false, reason: "" };
 }
 
-// Pattern B+: Retry with a tools-capable model
-interface RetryResult { response: Response; provider: string; modelId: string; }
+// ── Pattern B+: Retry with a tools-capable model ──
+interface ToolRetryResult { response: Response; provider: string; modelId: string; dbModelId: string; }
 
 async function retryWithToolsModel(
   body: Record<string, unknown>,
   caps: RequestCapabilities,
   excludeModelId: string,
   isStream: boolean
-): Promise<RetryResult | null> {
-  const candidates = getAvailableModels({ ...caps, hasTools: true });
+): Promise<ToolRetryResult | null> {
+  const candidates = await getAvailableModels({ ...caps, hasTools: true });
   const filtered = candidates.filter(c => c.model_id !== excludeModelId);
   if (!filtered.length) {
     console.log("[ToolRepair] No tools-capable models available for retry");
@@ -502,73 +878,149 @@ async function retryWithToolsModel(
   }
   const pick = filtered[0];
   console.log(`[ToolRepair] Retry with ${pick.provider}/${pick.model_id}`);
-  
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 10000);
+
   try {
-    const resp = await forwardToProvider(pick.provider, pick.model_id, body, isStream, controller.signal);
-    clearTimeout(timeoutId);
-    return { response: resp, provider: pick.provider, modelId: pick.model_id };
+    const resp = await forwardToProvider(pick.provider, pick.model_id, body, isStream, AbortSignal.timeout(15_000));
+    return { response: resp, provider: pick.provider, modelId: pick.model_id, dbModelId: pick.id };
   } catch (err) {
-    clearTimeout(timeoutId);
     console.log(`[ToolRepair] Retry failed: ${String(err)}`);
     return null;
   }
 }
 
+function isRetryableStatus(status: number): boolean {
+  return status === 413 || status === 429 || status === 410 || status >= 500;
+}
+
+const XML_TOOL_CALL_RE = /<tool_call>|<functioncall>|<function_calls>/i;
+const THINK_TAG_RE = /<think>[\s\S]*?<\/think>/g;
+
+function isResponseBad(content: string, hadTools: boolean, hasToolCalls = false): string | null {
+  // Empty content is acceptable ONLY if the model produced real tool_calls.
+  // If hadTools=true but content is empty AND no tool_calls, the model returned
+  // nothing useful — n้องกุ้ง (OpenClaw) agents will stall on this, so we reject
+  // the response and retry the next candidate.
+  if (!content && hadTools && !hasToolCalls) return "empty response with no tool_calls";
+  if (!content && !hadTools) return "empty content";
+  if (hadTools && XML_TOOL_CALL_RE.test(content)) return "tool_call XML leak";
+  if (content.length > 0 && content.length < 3) return "response too short";
+  return null;
+}
+
+function cleanResponseContent(content: string): string {
+  return content.replace(THINK_TAG_RE, "").trim();
+}
+
+let _staleModelsCleanedUp = false;
+
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as Record<string, unknown>;
+    if (process.env.LOG_LEVEL === "debug") {
+      const debugKeys = Object.keys(body);
+      const toolCount = Array.isArray(body.tools) ? (body.tools as unknown[]).length : 0;
+      const msgCount = Array.isArray(body.messages) ? (body.messages as unknown[]).length : 0;
+      console.log(`[DEBUG] keys=[${debugKeys}] msgs=${msgCount} tools=${toolCount} stream=${body.stream}`);
+    }
 
-    // Validate request body
     if (!body.messages || !Array.isArray(body.messages) || body.messages.length === 0) {
-      return NextResponse.json(
-        { error: { message: "messages is required and must be a non-empty array", type: "invalid_request_error" } },
-        { status: 400 }
-      );
+      return openAIError(400, { message: "messages is required and must be a non-empty array", param: "messages" });
     }
     if (typeof body.model !== "string" && body.model !== undefined) {
-      return NextResponse.json(
-        { error: { message: "model must be a string", type: "invalid_request_error" } },
-        { status: 400 }
-      );
+      return openAIError(400, { message: "model must be a string", param: "model" });
     }
 
     const modelField = (body.model as string) || "auto";
     const isStream = body.stream === true;
     const caps = detectRequestCapabilities(body);
+    const _reqTime = Date.now();
+    const _reqMsg = extractUserMessage(body)?.slice(0, 80) ?? "-";
+    const _reqId = Math.random().toString(36).slice(2, 8); // short id สำหรับไล่ log
+    const _msgCount = Array.isArray(body.messages) ? (body.messages as unknown[]).length : 0;
+    const _estTokensInit = estimateTokens(body);
+    const _imgCount = caps.hasImages ? ((body.messages as Array<{content: unknown}>).reduce((n, m) => n + (Array.isArray(m.content) ? (m.content as Array<{type: string}>).filter(p => p.type === "image_url").length : 0), 0)) : 0;
+    const _toolCount = Array.isArray(body.tools) ? (body.tools as unknown[]).length : 0;
+    console.log(`[REQ:${_reqId}] ${modelField} | stream=${isStream} | img=${_imgCount} | tools=${_toolCount} | msgs=${_msgCount} | est=${_estTokensInit}tok | "${_reqMsg}"`);
 
-    // Budget check — block at 95%
-    const budget = checkBudget();
-    if (!budget.ok) {
-      return NextResponse.json(
+    // Rate limiting — 100 req/60s per IP
+    // Caddy sets X-Real-IP and X-Forwarded-For to exactly the true client IP
+    // (trusted_proxies + header_up override in caddy-docker.Caddyfile). We
+    // prefer X-Real-IP because it's a single value with no chain, and fall
+    // back to the LAST entry of X-Forwarded-For (right-most = closest to us)
+    // just in case the deployment sits behind another proxy someday.
+    const xffChain = req.headers.get("x-forwarded-for")?.split(",").map(s => s.trim()).filter(Boolean) ?? [];
+    const ip = req.headers.get("x-real-ip")?.trim()
+      ?? xffChain[xffChain.length - 1]
+      ?? "unknown";
+    const rl = await checkRateLimit(`chat:${ip}`, 100, 60);
+    if (!rl.allowed) {
+      return new Response(
+        JSON.stringify({ error: { message: "Rate limit exceeded. Try again in a moment.", type: "rate_limit_exceeded", code: "rate_limit_exceeded" } }),
         {
-          error: {
-            message: `Daily budget exceeded (${budget.percentUsed.toFixed(1)}% used). ลองใหม่พรุ่งนี้หรือเพิ่ม limit ผ่าน /api/budget`,
-            type: "rate_limit_error",
-            code: 429,
+          status: 429,
+          headers: {
+            "Content-Type": "application/json",
+            "X-RateLimit-Limit": "100",
+            "X-RateLimit-Remaining": "0",
+            "X-RateLimit-Reset": String(Math.floor(Date.now() / 1000) + rl.resetIn),
+            "Access-Control-Allow-Origin": "*",
           },
-        },
-        { status: 429 }
+        }
       );
+    }
+
+    // Fix B: Fire-and-forget — put known-stale Cerebras models on 365-day cooldown
+    if (!_staleModelsCleanedUp) {
+      _staleModelsCleanedUp = true;
+      getSqlClient()`
+        INSERT INTO health_logs (model_id, status, error, cooldown_until, checked_at)
+        SELECT m.id, 'available', 'stale model removed from API', now() + interval '365 days', now()
+        FROM models m
+        WHERE m.provider = 'cerebras'
+          AND m.model_id IN ('gpt-oss-120b', 'zai-glm-4.7', 'qwen-3-32b-fast-scheduler-offline')
+          AND NOT EXISTS (
+            SELECT 1 FROM health_logs h WHERE h.model_id = m.id AND h.cooldown_until > now() + interval '100 days'
+          )
+      `.catch(() => {});
+    }
+
+    // Improvement C: response cache check (non-stream, low-temperature, no tools)
+    const cachedHit = await getCachedResponse(body);
+    if (cachedHit) {
+      console.log(`[CACHE-HIT] ${cachedHit.provider}/${cachedHit.model}`);
+      const cacheHeaders = new Headers();
+      cacheHeaders.set("Content-Type", "application/json");
+      cacheHeaders.set("X-SMLGateway-Provider", cachedHit.provider);
+      cacheHeaders.set("X-SMLGateway-Model", cachedHit.model);
+      cacheHeaders.set("X-SMLGateway-Cache", "HIT");
+      cacheHeaders.set("Access-Control-Allow-Origin", "*");
+      const cacheBody = {
+        id: `chatcmpl-cache-${Date.now()}`,
+        object: "chat.completion",
+        created: Math.floor(Date.now() / 1000),
+        model: cachedHit.model,
+        choices: [{
+          index: 0,
+          message: { role: "assistant", content: cachedHit.content },
+          finish_reason: "stop",
+        }],
+        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+      };
+      return new Response(JSON.stringify(cacheBody), { status: 200, headers: cacheHeaders });
     }
 
     const parsed = parseModelField(modelField);
 
-    // If budget >= 80%, prefer fast/cheap mode
-    if (budget.preferCheap && parsed.mode === "auto") {
-      parsed.mode = "fast" as typeof parsed.mode;
-    }
-
     const estInputTokens = estimateTokens(body);
+    const promptCategory = detectPromptCategory(extractUserMessage(body) ?? "");
+    console.log(`[CAT:${_reqId}] ${promptCategory}`);
 
-    // ---- Consensus mode: send to 3 providers, pick best answer ----
+    // ---- Consensus mode ----
     if (parsed.mode === "consensus") {
       const userMsg = extractUserMessage(body);
       const consensusStart = Date.now();
 
-      // Get top 3 models from different providers
-      const allModels = getAvailableModels(caps);
+      const allModels = await getAvailableModels(caps);
       const picked: ModelRow[] = [];
       const usedProviders = new Set<string>();
       for (const m of allModels) {
@@ -579,9 +1031,7 @@ export async function POST(req: NextRequest) {
       }
 
       if (picked.length > 0) {
-        // Force non-streaming for consensus (need full response to compare)
         const consensusBody = { ...body, stream: false };
-
         const results = await Promise.all(
           picked.map(async (m) => {
             const start = Date.now();
@@ -591,16 +1041,11 @@ export async function POST(req: NextRequest) {
               const json = await res.json();
               const content = (json as { choices?: Array<{ message?: { content?: string } }> }).choices?.[0]?.message?.content ?? "";
               return { model: m, content, latency: Date.now() - start, json };
-            } catch {
-              return null;
-            }
+            } catch { return null; }
           })
         );
 
-        // Pick best: longest content, then lowest latency
-        const valid = results.filter(
-          (r): r is NonNullable<typeof r> => r != null && r.content.length > 0
-        );
+        const valid = results.filter((r): r is NonNullable<typeof r> => r != null && r.content.length > 0);
 
         if (valid.length > 0) {
           valid.sort((a, b) => {
@@ -610,267 +1055,872 @@ export async function POST(req: NextRequest) {
 
           const best = valid[0];
           const totalLatency = Date.now() - consensusStart;
-
-          // Track token usage for winning model
           const usage = (best.json as { usage?: { prompt_tokens?: number; completion_tokens?: number } }).usage;
           if (usage) {
-            trackTokenUsage(best.model.provider, best.model.model_id, usage.prompt_tokens ?? 0, usage.completion_tokens ?? 0);
+            await trackTokenUsage(best.model.provider, best.model.model_id, usage.prompt_tokens ?? 0, usage.completion_tokens ?? 0);
           }
 
-          logGateway(
-            "bcproxy/consensus",
-            best.model.model_id,
-            best.model.provider,
-            200,
-            totalLatency,
-            usage?.prompt_tokens ?? 0,
-            usage?.completion_tokens ?? 0,
-            null,
-            userMsg,
+          await logGateway(
+            "sml/consensus", best.model.model_id, best.model.provider, 200, totalLatency,
+            usage?.prompt_tokens ?? 0, usage?.completion_tokens ?? 0, null, userMsg,
             `[consensus: ${valid.map((v) => v.model.provider + "/" + v.model.model_id).join(", ")}] ${best.content.slice(0, 300)}`
           );
 
           const headers = new Headers();
           headers.set("Content-Type", "application/json");
-          headers.set("X-BCProxy-Provider", best.model.provider);
-          headers.set("X-BCProxy-Model", best.model.model_id);
-          headers.set(
-            "X-BCProxy-Consensus",
-            valid.map((v) => `${v.model.provider}/${v.model.model_id}(${v.content.length}chars/${v.latency}ms)`).join(", ")
-          );
+          headers.set("X-SMLGateway-Provider", best.model.provider);
+          headers.set("X-SMLGateway-Model", best.model.model_id);
+          headers.set("X-SMLGateway-Consensus", valid.map((v) => `${v.model.provider}/${v.model.model_id}(${v.content.length}chars/${v.latency}ms)`).join(", "));
           headers.set("Access-Control-Allow-Origin", "*");
-
           return new Response(JSON.stringify(best.json), { status: 200, headers });
         }
       }
 
-      // Fallback: no consensus candidates or all failed → fall through to normal auto routing
       parsed.mode = "auto" as typeof parsed.mode;
     }
 
-    // ---- Direct provider routing (openrouter/xxx, kilo/xxx, groq/xxx) ----
+    // ---- Direct provider routing ----
     if (parsed.mode === "direct") {
       const { provider, modelId } = parsed;
       const response = await forwardToProvider(provider!, modelId!, body, isStream);
+      // Parse rate limit headers regardless of success/fail
+      const hdrLimit = parseLimitHeaders(response.headers);
+      if (hdrLimit) recordLimit(provider!, modelId!, hdrLimit).catch(() => {});
 
       if (!response.ok && isRetryableStatus(response.status)) {
         const errText = await response.text();
-        return NextResponse.json(
-          { error: { message: errText, type: "provider_error", code: response.status } },
-          { status: response.status }
-        );
+        if (response.status === 429) {
+          const parsed429 = parseLimitError(errText);
+          if (parsed429) recordLimit(provider!, modelId!, parsed429).catch(() => {});
+        }
+        return openAIError(response.status, { message: errText || `Provider ${provider} returned ${response.status}` });
       }
-
+      console.log(`[RES:${_reqId}] ${response.status} | ${provider}/${modelId} | ${Date.now() - _reqTime}ms | direct`);
       return buildProxiedResponse(response, provider!, modelId!, isStream, estInputTokens);
     }
 
     // ---- Match by model string ----
     if (parsed.mode === "match") {
-      const db = getDb();
-      const row = db
-        .prepare(`SELECT id, provider, model_id FROM models WHERE id = ? OR model_id = ? LIMIT 1`)
-        .get(parsed.modelId, parsed.modelId) as
-        | { id: string; provider: string; model_id: string }
-        | undefined;
+      const sql = getSqlClient();
+      const rows = await sql<{ id: string; provider: string; model_id: string }[]>`
+        SELECT id, provider, model_id FROM models WHERE id = ${parsed.modelId!} OR model_id = ${parsed.modelId!} LIMIT 1
+      `;
 
-      if (!row) {
-        return NextResponse.json(
-          {
-            error: {
-              message: `Model not found: ${parsed.modelId}`,
-              type: "invalid_request_error",
-              code: 404,
-            },
-          },
-          { status: 404 }
-        );
+      if (rows.length === 0) {
+        return openAIError(404, { message: `The model '${parsed.modelId}' does not exist`, param: "model" });
       }
 
+      const row = rows[0];
       const response = await forwardToProvider(row.provider, row.model_id, body, isStream);
       if (!response.ok && isRetryableStatus(response.status)) {
         const errText = await response.text();
-        return NextResponse.json(
-          { error: { message: errText, type: "provider_error", code: response.status } },
-          { status: response.status }
-        );
+        return openAIError(response.status, { message: errText || `Provider ${row.provider} returned ${response.status}` });
       }
+      console.log(`[RES:${_reqId}] ${response.status} | ${row.provider}/${row.model_id} | ${Date.now() - _reqTime}ms | match`);
       return buildProxiedResponse(response, row.provider, row.model_id, isStream, estInputTokens);
     }
 
     // ---- Smart routing: auto / fast / tools / thai ----
-    const candidates = selectModelsByMode(parsed.mode, caps);
+    const benchmarkCategory = caps.hasImages ? "vision" : promptCategory;
+    const candidates = await selectModelsByMode(parsed.mode, caps, benchmarkCategory, estInputTokens);
+    if (process.env.LOG_LEVEL === "debug") {
+      const candByProv: Record<string, number> = {};
+      candidates.forEach(c => candByProv[c.provider] = (candByProv[c.provider] || 0) + 1);
+      console.log(`[DEBUG] mode=${parsed.mode} candidates=${candidates.length} providers=${JSON.stringify(candByProv)}`);
+    }
 
-    // ถ้าไม่มี candidate → ลองไม่ filter context → ลองรวม cooldown (สุ่มเลือก ดีกว่า 503)
+    if (!caps.hasTools) {
+      const benchmarkBest = await getBestModelsByBenchmarkCategory(benchmarkCategory);
+      if (benchmarkBest.length > 0) {
+        const bestSet = new Set(benchmarkBest);
+        const boosted = candidates.filter(c => bestSet.has(c.id));
+        const rest = candidates.filter(c => !bestSet.has(c.id));
+        candidates.splice(0, candidates.length, ...boosted, ...rest);
+      }
+      const learnedBest = await getBestModelsForCategory(promptCategory);
+      if (learnedBest.length > 0) {
+        const bestSet = new Set(learnedBest);
+        const boosted = candidates.filter(c => bestSet.has(c.id));
+        const rest = candidates.filter(c => !bestSet.has(c.id));
+        candidates.splice(0, candidates.length, ...boosted, ...rest);
+      }
+    }
+
+    if (process.env.LOG_LEVEL === "debug") {
+      console.log(`[DEBUG] after boost: candidates=${candidates.length} top3=[${candidates.slice(0,3).map(c=>c.provider+'/'+c.model_id).join(', ')}]`);
+    }
+
     let finalCandidates = candidates;
     if (finalCandidates.length === 0) {
-      finalCandidates = selectModelsByMode(parsed.mode, caps);
+      finalCandidates = await selectModelsByMode(parsed.mode, caps, benchmarkCategory, estInputTokens);
     }
     if (finalCandidates.length === 0) {
-      // Last resort: สุ่มจาก ALL models (รวม cooldown) — ดีกว่าไม่ตอบ
-      finalCandidates = getAllModelsIncludingCooldown(caps);
-    }
-    if (finalCandidates.length === 0) {
-      return NextResponse.json(
-        {
-          error: {
-            message: "ไม่มีโมเดลในระบบเลย — รอ Worker สแกนก่อน กดปุ่ม 'รันตอนนี้' บน Dashboard",
-            type: "server_error",
-            code: 503,
-          },
-        },
-        { status: 503 }
-      );
+      const reason = "ไม่มี model ที่ผ่านสอบ — รอ worker exam cycle";
+      await logGateway(modelField, null, null, 503, Date.now() - _reqTime, 0, 0, reason, extractUserMessage(body), null);
+      console.log(`[RES:${_reqId}] 503 | no passed models | ${reason}`);
+      return openAIError(503, { message: reason });
     }
 
-    const MAX_RETRIES = 10; // try up to 10 models across different providers
+    const MAX_RETRIES = 25;
     let lastError = "";
+    let lastProvider: string | null = null;
+    let lastModelId: string | null = null;
     const startTime = Date.now();
     const userMsg = extractUserMessage(body);
     const triedProviders = new Set<string>();
+    const blockedProviders = new Set<string>();
 
-    // Weighted Load Balancing — all providers equal (including Ollama)
-    const spreadCandidates: typeof finalCandidates = [];
+    // กรอง provider ที่ไม่มี API key ออก (ใช้งานไม่ได้แน่นอน)
+    finalCandidates = finalCandidates.filter(c => hasProviderKey(c.provider));
+    // กรอง provider ที่ผู้ใช้ปิดเองผ่าน UI
+    finalCandidates = finalCandidates.filter(c => isProviderEnabledSync(c.provider));
+
+    // ── Category boost: ดัน model ที่เก่ง category นี้ขึ้นบน ──
+    const learningCategory = detectCategory(
+      extractUserMessage(body) ?? "",
+      caps.hasTools,
+      caps.hasImages,
+      estInputTokens
+    );
+    const categoryWinnerIds = await getCategoryWinners(learningCategory, 5);
+    if (categoryWinnerIds.length > 0) {
+      const winnerSet = new Set(categoryWinnerIds);
+      const winners = finalCandidates.filter(c => winnerSet.has(c.id));
+      const others = finalCandidates.filter(c => !winnerSet.has(c.id));
+      finalCandidates = [...winners, ...others];
+      if (winners.length > 0) {
+        console.log(`[CATEGORY-BOOST:${_reqId}] "${learningCategory}" → ${winners.length} winners: ${winners.slice(0,3).map(w => w.provider+'/'+w.model_id).join(', ')}`);
+      }
+    }
+
+    // ── Category-specific filtering: เลือก model ที่เก่งด้านนี้ ──
+    const examCat = ROUTING_TO_EXAM_CAT[learningCategory] ?? "general";
+    if (examCat !== "general" && finalCandidates.length > 3) {
+      try {
+        const sql = getSqlClient();
+        const catScores = await sql<{ model_id: string; score_pct: number }[]>`
+          SELECT model_id::text, score_pct FROM model_category_scores
+          WHERE category = ${examCat} AND score_pct >= 60
+        `;
+        const catScoreMap = new Map(catScores.map(r => [r.model_id, r.score_pct]));
+        const catFiltered = finalCandidates.filter(c => catScoreMap.has(String(c.id)));
+        if (catFiltered.length >= 2) {
+          const dropped = finalCandidates.length - catFiltered.length;
+          if (dropped > 0) console.log(`[CAT-FILTER:${_reqId}] ${learningCategory}→${examCat}: kept ${catFiltered.length}, dropped ${dropped} models with <60% in ${examCat}`);
+          finalCandidates = catFiltered;
+        }
+      } catch (e) {
+        console.log(`[CAT-FILTER:${_reqId}] error: ${e}`);
+      }
+    }
+
+    // Filter out provider cooldowns BEFORE retry loop (async Redis check)
+    const cooldownChecks = await Promise.all(finalCandidates.map(c => isProviderCooledDownMem(c.provider)));
+    const activeCandidates = finalCandidates.filter((_, i) => !cooldownChecks[i]);
+    if (activeCandidates.length > 0) {
+      finalCandidates = activeCandidates;
+      if (process.env.LOG_LEVEL === "debug") console.log(`[DEBUG] after provider-cooldown filter: ${finalCandidates.length} candidates`);
+    }
+
+    // P1: Pre-flight size check — skip models whose context_length is too small for this request
+    const estTokens = estimateTokens(body);
+    const requiredContext = Math.ceil(estTokens * 1.4); // 30% headroom for response + safety margin
+    const sizeFiltered = finalCandidates.filter(c => {
+      // context_length = 0 หรือ null → ไม่รู้ขนาด ถือว่าไม่ปลอดภัย ข้าม
+      if (!c.context_length || c.context_length === 0) {
+        console.log(`[SIZE-SKIP] ${c.provider}/${c.model_id} unknown context (0) — required ${requiredContext}`);
+        return false;
+      }
+      if (c.context_length >= requiredContext) return true;
+      console.log(`[SIZE-SKIP] ${c.provider}/${c.model_id} context ${c.context_length} < required ${requiredContext}`);
+      return false;
+    });
+    // Fall back to full list if everything was filtered (better to try than immediately 503)
+    if (sizeFiltered.length > 0) {
+      finalCandidates = sizeFiltered;
+      if (process.env.LOG_LEVEL === "debug") console.log(`[DEBUG] after size filter: ${finalCandidates.length} candidates (required ctx ${requiredContext})`);
+    } else {
+      console.log(`[SIZE-SKIP] All candidates too small for ${requiredContext} tokens — using full list as fallback`);
+    }
+
+    // U2: Context-aware provider filter for large requests
+    if (estTokens > 20_000) {
+      const ctxMin = Math.ceil(estTokens * 1.5);
+      const ctxFiltered = finalCandidates.filter(c => c.context_length > ctxMin);
+      if (ctxFiltered.length > 0) {
+        finalCandidates = ctxFiltered;
+      }
+      console.log(`[CTX-FILTER:${_reqId}] kept=${finalCandidates.length} for ${estTokens}tok`);
+    }
+
+    // Minimum context filter — model ที่ ctx < 16K ไม่เหมาะกับ conversation ที่มี history
+    const MIN_CTX = 16_000;
+    const ctxMinFiltered = finalCandidates.filter(c => (c.context_length ?? 0) >= MIN_CTX);
+    if (ctxMinFiltered.length > 0) {
+      const dropped = finalCandidates.length - ctxMinFiltered.length;
+      if (dropped > 0) console.log(`[MIN-CTX:${_reqId}] dropped ${dropped} models with ctx<${MIN_CTX}`);
+      finalCandidates = ctxMinFiltered;
+    }
+
+    // Latency cap — model ที่ exam latency > 30s ช้าเกินใช้งานจริง
+    const MAX_EXAM_LATENCY = 30_000;
+    const latFiltered = finalCandidates.filter(c => (c.avg_latency ?? 0) <= MAX_EXAM_LATENCY || (c.avg_latency ?? 0) === 0);
+    if (latFiltered.length > 0) {
+      const dropped = finalCandidates.length - latFiltered.length;
+      if (dropped > 0) console.log(`[LAT-CAP:${_reqId}] dropped ${dropped} models with exam latency>${MAX_EXAM_LATENCY}ms`);
+      finalCandidates = latFiltered;
+    }
+
+    // ─── Provider-first selection ─────────────────────────────────────────
+    // ขั้นตอน:
+    //   1. ตัดทิ้ง model ที่เพิ่ง fail ติดกัน (isRecentlyDead)
+    //   2. Group ตาม provider
+    //   3. จัดอันดับ provider ด้วย live success rate + benchmark score - latency
+    //   4. ใน provider แต่ละตัว จัดอันดับ model ด้วย live score + benchmark
+    //   5. Flatten: [best provider's models..., next provider's models..., ...]
+    //      (ไม่ round-robin — ถ้า provider ไหนดี ลอง model ดีๆ ของมันให้หมดก่อน)
+    const preFilteredCandidates = finalCandidates.filter(
+      c => !isRecentlyDead(c.provider, c.model_id)
+    );
+    const poolCandidates = preFilteredCandidates.length > 0 ? preFilteredCandidates : finalCandidates;
+
     const byProvider: Record<string, typeof finalCandidates> = {};
-    for (const c of finalCandidates) {
+    for (const c of poolCandidates) {
       (byProvider[c.provider] ??= []).push(c);
     }
-    const providerOrder = Object.entries(byProvider)
-      .map(([, models]) => {
-        const avgLat = models.reduce((s, m) => s + (m.avg_latency ?? 9999999), 0) / models.length;
-        const avgScore = models.reduce((s, m) => s + (m.avg_score ?? 0), 0) / models.length;
-        return { models, weight: avgScore * 1000 - avgLat };
-      })
-      .sort((a, b) => b.weight - a.weight);
-    // Round-robin across weighted providers
-    let hasMore = true;
-    let round = 0;
-    const totalExpected = finalCandidates.length;
-    while (hasMore && spreadCandidates.length < totalExpected) {
-      hasMore = false;
-      for (const { models: provModels } of providerOrder) {
-        if (round < provModels.length) {
-          spreadCandidates.push(provModels[round]);
-          hasMore = true;
+
+    const providerRanking = await Promise.all(
+      Object.entries(byProvider).map(async ([prov, models]) => {
+        const liveP = getProviderScore(prov);
+        const avgBenchLat = models.reduce((s, m) => s + (m.avg_latency ?? 9999999), 0) / models.length;
+        const avgBenchScore = models.reduce((s, m) => s + (m.avg_score ?? 0), 0) / models.length;
+        const repScores = await Promise.all(models.map(m => getReputationScore(m.id)));
+        const avgRep = repScores.reduce((s, r) => s + r, 0) / repScores.length;
+
+        // Weight: live success rate + exam score (ถ่วงเท่ากัน) + inverse latency
+        // exam_score สำคัญมาก — model 93% ต้องชนะ model 86% แม้จะช้ากว่านิดหน่อย
+        // Ollama ดันไปท้ายเสมอ (local ช้า reserve เป็น fallback)
+        let weight: number;
+        if (prov === "ollama") {
+          weight = -Infinity;
+        } else {
+          weight =
+            liveP.successRate * 50_000 +          // live success rate (ลดจาก 100K → 50K)
+            avgBenchScore * 3_000 * (avgRep / 100) +  // exam score (เพิ่ม 3x จาก 1K → 3K)
+            Math.min(liveP.avgLatency, avgBenchLat) / -10; // latency penalty
         }
-      }
-      round++;
+        return { prov, models, weight, liveScore: liveP };
+      })
+    );
+    providerRanking.sort((a, b) => b.weight - a.weight);
+
+    {
+      const rankLog = providerRanking.slice(0, 5).map(r =>
+        `${r.prov}(${(r.liveScore.successRate * 100).toFixed(0)}%/${Math.round(r.liveScore.avgLatency)}ms/n=${r.liveScore.samples})`
+      ).join(" > ");
+      console.log(`[PROVIDER-RANK:${_reqId}] ${rankLog}`);
+      console.log(`[CANDIDATES:${_reqId}] ${finalCandidates.length} candidates | top5: ${finalCandidates.slice(0,5).map(c => `${c.provider}/${c.model_id}(ctx=${c.context_length})`).join(", ")}`);
     }
 
+    // ภายในแต่ละ provider เรียง model ตาม live-score + benchmark
+    const spreadCandidates: typeof finalCandidates = [];
+    const seenIds = new Set<string>();
+    for (const { models } of providerRanking) {
+      const sortedModels = [...models].sort((a, b) => {
+        const la = getModelScore(a.id);
+        const lb = getModelScore(b.id);
+        const scoreA = la.successRate * 5_000 + (a.avg_score ?? 0) * 300 - Math.min(la.avgLatency, a.avg_latency ?? 9999) / 100;
+        const scoreB = lb.successRate * 5_000 + (b.avg_score ?? 0) * 300 - Math.min(lb.avgLatency, b.avg_latency ?? 9999) / 100;
+        return scoreB - scoreA;
+      });
+      for (const m of sortedModels) {
+        if (!seenIds.has(m.id)) { seenIds.add(m.id); spreadCandidates.push(m); }
+      }
+    }
 
-    for (let i = 0; i < Math.min(MAX_RETRIES, spreadCandidates.length); i++) {
+    if (process.env.LOG_LEVEL === "debug") console.log(`[DEBUG] spread=${spreadCandidates.length} top5=[${spreadCandidates.slice(0,5).map(c=>c.provider+'/'+c.model_id).join(', ')}]`);
+
+    // ถ้าไม่มี candidate เหลือเลยหลังผ่าน filter — ตอบ 503 พร้อม log ที่อ่านออก
+    if (spreadCandidates.length === 0) {
+      const reason = caps.hasImages
+        ? "ไม่มี vision model พร้อมใช้งาน"
+        : caps.hasTools
+          ? "ไม่มี tool-calling model พร้อมใช้งาน"
+          : "ทุก model ติด cooldown หรือขาด API key";
+      const latency = Date.now() - startTime;
+      await logGateway(modelField, null, null, 503, latency, 0, 0, reason, userMsg, null);
+      console.log(`[RES:${_reqId}] 503 | no candidates | ${reason}`);
+      return openAIError(503, { message: reason });
+    }
+
+    // Total retry budget — ขยายตาม estTokens (U2: aggressive overhaul)
+    const TOTAL_TIMEOUT_MS =
+      estTokens > 40_000 ? 120_000 :
+      estTokens > 20_000 ? 90_000  :
+      estTokens > 10_000 ? 60_000  :
+      30_000;
+
+    // Improvement A (U2): parallel hedge top-3 cloud candidates (skip for stream / tools)
+    // Each contender must come from a DIFFERENT provider — sending concurrent requests
+    // to the same provider triggers rate-limiting (verified: 3x groq → all timeout).
+    // Only scan the first 10 candidates to keep hedgeStartIdx predictable.
+    let hedgeStartIdx = 0;
+    const seenProviders = new Set<string>();
+    const hedgeContenders: typeof spreadCandidates = [];
+    let lastHedgeIdx = -1;
+    for (let hi = 0; hi < Math.min(10, spreadCandidates.length); hi++) {
+      const c = spreadCandidates[hi];
+      if (c.provider === "ollama") break;
+      if (!seenProviders.has(c.provider)) {
+        seenProviders.add(c.provider);
+        hedgeContenders.push(c);
+        lastHedgeIdx = hi;
+        if (hedgeContenders.length === 3) break;
+      }
+    }
+    // Sequential starts AFTER the last hedged position so we don't re-run the hedge slot
+    hedgeStartIdx = lastHedgeIdx + 1;
+    const hedgeCount = hedgeContenders.length;
+    const canHedge =
+      !isStream &&
+      !caps.hasTools &&
+      estTokens <= 20_000 &&
+      hedgeCount >= 2;
+    // Only skip hedged candidates when hedge actually runs — otherwise start from 0
+    if (!canHedge) hedgeStartIdx = 0;
+    if (canHedge) {
+      try {
+        const hedgeResult = await hedgeRace(hedgeContenders, body, isStream);
+        const { response: hedgeResp, winner, winnerIdx } = hedgeResult;
+        const losers = hedgeContenders.filter((_, i) => i !== winnerIdx);
+        const latency = Date.now() - startTime;
+        console.log(`[HEDGE-WIN:${_reqId}] ${winner.provider}/${winner.model_id} vs [${losers.map(l => `${l.provider}/${l.model_id}`).join(", ")}] | ${latency}ms`);
+        // Record winner as success, loser as neutral (cancelled)
+        await recordProviderSuccessMem(winner.provider);
+        // Parse and return the hedge winner response
+        try {
+          const cloned = hedgeResp.clone();
+          const json = await cloned.json() as { choices?: Array<{ message?: { content?: string; reasoning?: string; reasoning_content?: string; tool_calls?: unknown[] } }>; usage?: { prompt_tokens?: number; completion_tokens?: number } };
+          const firstMsg = json.choices?.[0]?.message;
+          let content = firstMsg?.content ?? "";
+          // Same reasoning→content fallback as the sequential path
+          if (!content && firstMsg) {
+            const fallback = firstMsg.reasoning || firstMsg.reasoning_content;
+            if (fallback) {
+              content = fallback;
+              firstMsg.content = fallback;
+              console.log(`[HEDGE-REASONING-FALLBACK] ${winner.provider}/${winner.model_id} — moved ${fallback.length} chars`);
+            }
+          }
+          const hasToolCalls = Array.isArray(firstMsg?.tool_calls) && (firstMsg!.tool_calls!.length > 0);
+          const badReason = isResponseBad(content, caps.hasTools, hasToolCalls);
+          if (badReason) {
+            console.log(`[HEDGE-BAD] ${winner.provider}/${winner.model_id} — ${badReason}`);
+            // Reset to 0 so sequential retry doesn't skip intermediate same-provider candidates
+            // (hedge picks 1-per-provider across spread indices, leaving gaps)
+            hedgeStartIdx = 0;
+          } else {
+            if (content && THINK_TAG_RE.test(content)) {
+              content = cleanResponseContent(content);
+              if (json.choices?.[0]?.message) json.choices[0].message.content = content;
+            }
+            const usage = json.usage;
+            await logGateway(modelField, winner.model_id, winner.provider, 200, latency,
+              usage?.prompt_tokens ?? 0, usage?.completion_tokens ?? 0, null, userMsg, content?.slice(0, 500) ?? null);
+            await recordRoutingResult(winner.id, winner.provider, promptCategory, true, latency);
+            recordOutcome(winner.provider, winner.model_id, true, latency);
+            recordOutcomeLearning({
+              modelId: winner.id, provider: winner.provider,
+              tokens: estInputTokens, latencyMs: latency, success: true,
+              hasTools: caps.hasTools, hasImages: caps.hasImages,
+              userMessage: extractUserMessage(body) ?? "",
+            }).catch(() => {});
+            const slowThr = slowThresholdMs(estTokens);
+            if (latency > slowThr) {
+              await logCooldown(winner.id, `slow hedge winner: ${latency}ms > ${slowThr}ms threshold`, 0, 2);
+              recordOutcome(winner.provider, winner.model_id, false, latency);
+              console.log(`[SLOW-COOLDOWN] ${winner.provider}/${winner.model_id} ${latency}ms > ${slowThr}ms → 2min cooldown`);
+            }
+            await trackTokenUsage(winner.provider, winner.model_id, usage?.prompt_tokens ?? 0, usage?.completion_tokens ?? 0);
+            // P4: record token consumption for TPM tracking
+            const hedgeTotalTokens = (usage?.prompt_tokens ?? 0) + (usage?.completion_tokens ?? 0);
+            recordTokenConsumption(winner.provider, winner.model_id, hedgeTotalTokens).catch(() => {});
+            recordBattleEvent(outcomeFromLatency(latency, true)).catch(() => { /* cosmetic */ });
+            if (content) {
+              setCachedResponse(body, { content, provider: winner.provider, model: winner.model_id }).catch(() => { /* non-critical */ });
+            }
+            const hedgeHeaders = new Headers();
+            hedgeHeaders.set("Content-Type", "application/json");
+            hedgeHeaders.set("X-SMLGateway-Provider", winner.provider);
+            hedgeHeaders.set("X-SMLGateway-Model", winner.model_id);
+            hedgeHeaders.set("X-SMLGateway-Hedge", "true");
+            hedgeHeaders.set("Access-Control-Allow-Origin", "*");
+            const _hpt = usage?.prompt_tokens ?? 0; const _hct = usage?.completion_tokens ?? 0;
+            const _htc = Array.isArray(json.choices?.[0]?.message?.tool_calls) ? json.choices[0].message.tool_calls.length : 0;
+            const _hans = content?.slice(0, 80) ?? (_htc > 0 ? `[tool_call×${_htc}]` : "-");
+            console.log(`[RES:${_reqId}] 200 | ${winner.provider}/${winner.model_id} | ${latency}ms | hedge | pt=${_hpt} ct=${_hct} tc=${_htc} | Q:"${_reqMsg}" A:"${_hans}"`);
+            return new Response(JSON.stringify(json), { status: 200, headers: hedgeHeaders });
+          }
+        } catch {
+          // JSON parse failed — fall through to sequential
+          hedgeStartIdx = 0;
+        }
+      } catch {
+        const latency = Date.now() - startTime;
+        console.log(`[HEDGE-LOSS:${_reqId}] all top-${hedgeCount} failed | ${latency}ms — continuing sequential`);
+        hedgeStartIdx = 0;
+        await Promise.all(
+          hedgeContenders.flatMap(c => [recordProviderFailureMem(c.provider), recordCircuitFailure(c.provider)])
+        );
+      }
+    }
+
+    // Track skipped candidates for possible second-pass retry
+    const skippedCandidates: typeof spreadCandidates = [];
+    const skipReasons: string[] = [];
+
+    for (let i = hedgeStartIdx, tried = 0; i < spreadCandidates.length && tried < MAX_RETRIES; i++) {
+      if (Date.now() - startTime > TOTAL_TIMEOUT_MS) {
+        console.log(`[TIMEOUT] Total retry time exceeded ${TOTAL_TIMEOUT_MS}ms — stopping`);
+        break;
+      }
       const candidate = spreadCandidates[i];
       const { provider, model_id: actualModelId, id: dbModelId } = candidate;
+      if (blockedProviders.has(provider)) { skippedCandidates.push(candidate); skipReasons.push(`${provider}/${actualModelId}:blocked`); continue; }
+      if (await isProviderCooledDownMem(provider)) { skippedCandidates.push(candidate); skipReasons.push(`${provider}/${actualModelId}:provider-cooldown`); continue; }
+      if (await isCircuitOpen(provider)) { skippedCandidates.push(candidate); skipReasons.push(`${provider}/${actualModelId}:circuit-open`); console.log(`[CIRCUIT-SKIP] ${provider} circuit open`); continue; }
+
+      // Improvement F: skip cold Ollama when cloud alternatives exist
+      if (provider === "ollama") {
+        const hasCloudAlternative = spreadCandidates.slice(i + 1).some(c => c.provider !== "ollama");
+        if (hasCloudAlternative) {
+          const loaded = await isOllamaModelLoaded(actualModelId);
+          if (!loaded) {
+            skippedCandidates.push(candidate);
+            skipReasons.push(`${provider}/${actualModelId}:cold-ollama`);
+            console.log(`[OLLAMA-SKIP] ${actualModelId} not loaded in memory — skipping (cloud alternatives available)`);
+            continue;
+          }
+        }
+      }
+
+      // P3: Skip Ollama for tool requests when cloud alternatives exist
+      if (provider === "ollama" && caps.hasTools) {
+        const hasCloudLeft = spreadCandidates.slice(i).some(c => c.provider !== "ollama" && !blockedProviders.has(c.provider));
+        if (hasCloudLeft) {
+          skippedCandidates.push(candidate);
+          skipReasons.push(`${provider}/${actualModelId}:ollama-no-tools`);
+          console.log(`[OLLAMA-SKIP-TOOLS] ${actualModelId} — tools requested, cloud alternatives exist`);
+          continue;
+        }
+      }
+
+      // P2: Skip model if it has a learned loss_streak in this request's category
+      // (self-learned from production signals — no hardcoded list)
+      if (caps.hasTools || caps.hasImages) {
+        const unhealthyCheck = await isModelUnhealthyForCategory(dbModelId, learningCategory);
+        if (unhealthyCheck.unhealthy) {
+          skippedCandidates.push(candidate);
+          skipReasons.push(`${provider}/${actualModelId}:unhealthy-${learningCategory}`);
+          console.log(`[UNHEALTHY-SKIP:${_reqId}] ${provider}/${actualModelId} ${learningCategory} — ${unhealthyCheck.reason}`);
+          continue;
+        }
+      }
+
+      // P4: Skip if provider TPM budget is exhausted
+      const estProjected = estTokens + 2000; // estimated response budget
+      if (!(await hasTpmHeadroom(provider, actualModelId, estProjected))) {
+        skippedCandidates.push(candidate);
+        skipReasons.push(`${provider}/${actualModelId}:tpm-exhausted`);
+        console.log(`[TPM-EXHAUST-SKIP:${_reqId}] ${provider}/${actualModelId} — est ${estProjected} tok`);
+        continue;
+      }
+
+      // P4b: Pre-check จาก provider_limits (learned from 429 + headers)
+      const fitCheck = await canFitRequest(provider, actualModelId, estProjected);
+      if (!fitCheck.ok) {
+        skippedCandidates.push(candidate);
+        const tag = fitCheck.reason?.startsWith("TPM hard") || fitCheck.reason?.startsWith("TPD hard") ? "limit-hard" : "limit-exhausted";
+        skipReasons.push(`${provider}/${actualModelId}:${tag}`);
+        console.log(`[LIMIT-SKIP:${_reqId}] ${provider}/${actualModelId} — ${fitCheck.reason}`);
+        continue;
+      }
+
+      // P4c: Pre-check จาก learned capacity (p90/max/min_failed per model)
+      const capCheck = await canHandleTokens(dbModelId, estTokens);
+      if (!capCheck.ok) {
+        skippedCandidates.push(candidate);
+        skipReasons.push(`${provider}/${actualModelId}:capacity`);
+        console.log(`[CAPACITY-SKIP:${_reqId}] ${provider}/${actualModelId} — ${capCheck.reason}`);
+        continue;
+      }
+
+      // ── ผ่าน skip checks ทั้งหมดแล้ว → นับเป็น actual attempt ──
+      tried++;
       triedProviders.add(provider);
+      recordProviderAttempt(provider).catch(() => { /* non-critical */ });
+
+      // Check if this attempt is a half-open probe
+      let wasProbing = false;
+      try {
+        const redis = getRedis();
+        const cbState = await redis.get(`cb:open:${provider}`);
+        wasProbing = cbState === "half-open";
+      } catch { /* ignore */ }
 
       try {
         const response = await forwardToProvider(provider, actualModelId, body, isStream);
 
         if (response.ok) {
           const latency = Date.now() - startTime;
-          // Model ทำงานได้ → clear cooldown
-          try {
-            const db = getDb();
-            db.prepare("DELETE FROM health_logs WHERE model_id = ? AND cooldown_until > datetime('now')").run(dbModelId);
-          } catch { /* silent */ }
-          
-          // Pattern B+: For non-streaming tool requests, check for structurally broken tool_calls
-          if (!isStream && caps.hasTools) {
-            const text = await response.text();
-            try {
-              const json = JSON.parse(text);
-              const brokenCheck = hasStructurallyBrokenToolCalls(json);
-              if (brokenCheck.broken) {
-                console.log(`[ToolRepair] Structurally broken from ${provider}/${actualModelId}: ${brokenCheck.reason}`);
-                const retry = await retryWithToolsModel(body, caps, actualModelId, isStream);
-                if (retry?.response.ok) {
-                  const proxied = await buildProxiedResponse(retry.response, retry.provider, retry.modelId, isStream, estInputTokens);
-                  logGateway(modelField, retry.modelId, retry.provider, 200, Date.now() - startTime, 0, 0, null, userMsg, "[tool_retry]");
-                  return proxied;
-                }
-                // Retry failed → continue with original (buildProxiedResponse will try jsonrepair)
-                console.log("[ToolRepair] Retry failed, using original response");
-              }
-            } catch { /* not JSON — let buildProxiedResponse handle */ }
-            
-            // Wrap text back into Response for buildProxiedResponse
-            const wrappedResponse = new Response(text, { status: 200, headers: response.headers });
-            const proxied = await buildProxiedResponse(wrappedResponse, provider, actualModelId, isStream, estInputTokens);
-            try {
-              const cloned = proxied.clone();
-              const pjson = await cloned.json();
-              const assistantContent = pjson.choices?.[0]?.message?.content?.slice(0, 500) ?? null;
-              const usage = pjson.usage;
-              logGateway(modelField, actualModelId, provider, 200, latency,
-                usage?.prompt_tokens ?? 0, usage?.completion_tokens ?? 0,
-                null, userMsg, assistantContent);
-            } catch {
-              logGateway(modelField, actualModelId, provider, 200, latency, 0, 0, null, userMsg, null);
-            }
-            return proxied;
+          await recordProviderSuccessMem(provider);
+          if (wasProbing) await recordCircuitProbeResult(provider, true);
+          // Parse rate limit headers (Groq/OpenAI-style) → learn limit
+          const headerLimit = parseLimitHeaders(response.headers);
+          if (headerLimit) {
+            recordLimit(provider, actualModelId, headerLimit).catch(() => {});
           }
-          
-          const proxied = await buildProxiedResponse(response, provider, actualModelId, isStream, estInputTokens);
-          // Log with assistant response (extract from non-stream)
+          const SLOW_THRESHOLD_MS = 10_000;
+          const SLOW_COOLDOWN_MINUTES = 10;
+          if (latency > SLOW_THRESHOLD_MS && provider !== "ollama") {
+            await logCooldown(dbModelId, `Slow response: ${(latency / 1000).toFixed(1)}s > ${SLOW_THRESHOLD_MS / 1000}s threshold`, 0, SLOW_COOLDOWN_MINUTES);
+            await emitEvent("provider_error", `${provider}/${actualModelId} ช้ามาก (${(latency / 1000).toFixed(1)}s)`, `ตอบช้าเกิน ${SLOW_THRESHOLD_MS / 1000}s → cooldown ${SLOW_COOLDOWN_MINUTES} นาที`, provider, actualModelId, "warn");
+          } else {
+            try {
+              const sql = getSqlClient();
+              await sql`DELETE FROM health_logs WHERE model_id = ${dbModelId} AND cooldown_until > now()`;
+            } catch { /* silent */ }
+          }
+
           if (!isStream) {
             try {
-              const cloned = proxied.clone();
-              const json = await cloned.json();
-              const assistantContent = json.choices?.[0]?.message?.content?.slice(0, 500) ?? null;
+              const cloned = response.clone();
+              const json = await cloned.json() as { choices?: Array<{ message?: { content?: string; reasoning?: string; reasoning_content?: string; tool_calls?: unknown[] } }>; usage?: { prompt_tokens?: number; completion_tokens?: number } };
+              const firstMsg = json.choices?.[0]?.message;
+              let content = firstMsg?.content ?? "";
+
+              // Some providers (Mistral Large, Ollama qwen, DeepSeek) put the
+              // actual answer in `reasoning` or `reasoning_content` instead of
+              // `content`. Fall back so downstream clients (n้องกุ้ง/OpenClaw)
+              // see a non-empty response.
+              if (!content && firstMsg) {
+                const fallback = firstMsg.reasoning || firstMsg.reasoning_content;
+                if (fallback) {
+                  content = fallback;
+                  firstMsg.content = fallback;
+                  console.log(`[REASONING-FALLBACK] ${provider}/${actualModelId} — moved ${fallback.length} chars from reasoning→content`);
+                }
+              }
+
+              const hasToolCalls = Array.isArray(firstMsg?.tool_calls) && (firstMsg!.tool_calls!.length > 0);
+
+              // ── Pattern B+: repair malformed tool_call arguments ──
+              if (hasToolCalls) {
+                const wasRepaired = repairToolCallArguments(json);
+                if (wasRepaired) {
+                  console.log(`[PatternB+] Repaired tool_call arguments for ${provider}/${actualModelId}`);
+                }
+              }
+
+              // ── Pattern B+: detect structurally broken tool_calls → retry with another model ──
+              if (hasToolCalls) {
+                const structCheck = hasStructurallyBrokenToolCalls(json);
+                if (structCheck.broken) {
+                  console.log(`[PatternB+] Structurally broken: ${structCheck.reason} — retrying`);
+                  const retryResult = await retryWithToolsModel(body, caps, actualModelId, false);
+                  if (retryResult && retryResult.response.ok) {
+                    try {
+                      const retryJson = await retryResult.response.json() as Record<string, unknown>;
+                      repairToolCallArguments(retryJson);
+                      const retryCheck = hasStructurallyBrokenToolCalls(retryJson);
+                      if (!retryCheck.broken) {
+                        console.log(`[PatternB+] Retry succeeded with ${retryResult.provider}/${retryResult.modelId}`);
+                        ensureChatCompletionFields(retryJson, retryResult.provider, retryResult.modelId);
+                        const retryHeaders = new Headers();
+                        retryHeaders.set("Content-Type", "application/json");
+                        retryHeaders.set("X-SMLGateway-Provider", retryResult.provider);
+                        retryHeaders.set("X-SMLGateway-Model", retryResult.modelId);
+                        retryHeaders.set("X-SMLGateway-ToolRepair", "retried");
+                        retryHeaders.set("Access-Control-Allow-Origin", "*");
+                        await logGateway(modelField, retryResult.modelId, retryResult.provider, 200, Date.now() - startTime,
+                          0, 0, null, userMsg, `[tool-repair-retry from ${provider}/${actualModelId}]`);
+                        return new Response(JSON.stringify(retryJson), { status: 200, headers: retryHeaders });
+                      }
+                    } catch { /* retry parse failed, continue with original */ }
+                  }
+                  console.log(`[PatternB+] Retry did not fix structural issue — returning original`);
+                }
+              }
+
+
+              const badReason = isResponseBad(content, caps.hasTools, hasToolCalls);
+              if (badReason) {
+                console.log(`[BAD-RESPONSE] ${provider}/${actualModelId} — ${badReason}: "${content.slice(0, 100)}"`);
+                await logCooldown(dbModelId, badReason, 0, 5);
+                await recordRoutingResult(dbModelId, provider, promptCategory, false, latency);
+                recordOutcome(provider, actualModelId, false, latency);
+                lastError = `${provider}/${actualModelId}: ${badReason}`;
+                lastProvider = provider;
+                lastModelId = actualModelId;
+                continue;
+              }
+
+              if (content && THINK_TAG_RE.test(content)) {
+                content = cleanResponseContent(content);
+                if (json.choices?.[0]?.message) json.choices[0].message.content = content;
+              }
+
               const usage = json.usage;
-              logGateway(modelField, actualModelId, provider, 200, latency,
-                usage?.prompt_tokens ?? 0, usage?.completion_tokens ?? 0,
-                null, userMsg, assistantContent);
+              await logGateway(modelField, actualModelId, provider, 200, latency,
+                usage?.prompt_tokens ?? 0, usage?.completion_tokens ?? 0, null, userMsg, content?.slice(0, 500) ?? null);
+              await recordRoutingResult(dbModelId, provider, promptCategory, true, latency);
+              recordOutcome(provider, actualModelId, true, latency);
+              recordOutcomeLearning({
+                modelId: dbModelId, provider,
+                tokens: estInputTokens, latencyMs: latency, success: true,
+                hasTools: caps.hasTools, hasImages: caps.hasImages,
+                userMessage: extractUserMessage(body) ?? "",
+              }).catch(() => {});
+              // ช้าเกิน threshold → cooldown ถึงแม้จะตอบสำเร็จ (threshold แปรตาม context size)
+              const slowThrNon = slowThresholdMs(estTokens);
+              if (latency > slowThrNon) {
+                await logCooldown(dbModelId, `slow response: ${latency}ms > ${slowThrNon}ms threshold`, 0, 2);
+                recordOutcome(provider, actualModelId, false, latency);
+                console.log(`[SLOW-COOLDOWN] ${provider}/${actualModelId} ${latency}ms > ${slowThrNon}ms → 2min cooldown`);
+              }
+
+              const headers = new Headers();
+              headers.set("Content-Type", "application/json");
+              headers.set("X-SMLGateway-Provider", provider);
+              headers.set("X-SMLGateway-Model", actualModelId);
+              headers.set("Access-Control-Allow-Origin", "*");
+
+              if (json.choices) {
+                for (const choice of json.choices) {
+                  const msg = choice.message;
+                  if (msg && Array.isArray(msg.content)) {
+                    msg.content = (msg.content as Array<{ type: string; text?: string }>)
+                      .filter((p) => p.type === "text").map((p) => p.text).join("");
+                  }
+                }
+              }
+
+              await trackTokenUsage(provider, actualModelId, usage?.prompt_tokens ?? 0, usage?.completion_tokens ?? 0);
+              // P4: record token consumption for TPM tracking
+              const totalTokens = (usage?.prompt_tokens ?? 0) + (usage?.completion_tokens ?? 0);
+              recordTokenConsumption(provider, actualModelId, totalTokens).catch(() => {});
+              // Improvement C: store in response cache (non-stream, low-temp, no tools)
+              if (content) {
+                setCachedResponse(body, { content, provider, model: actualModelId }).catch(() => { /* non-critical */ });
+              }
+              recordBattleEvent(outcomeFromLatency(latency, true)).catch(() => { /* cosmetic */ });
+              const _pt = usage?.prompt_tokens ?? 0; const _ct = usage?.completion_tokens ?? 0;
+              const _tc = hasToolCalls ? (firstMsg!.tool_calls!.length) : 0;
+              const _ans = content?.slice(0, 80) ?? (hasToolCalls ? `[tool_call×${_tc}]` : "-");
+              console.log(`[RES:${_reqId}] 200 | ${provider}/${actualModelId} | ${latency}ms | pt=${_pt} ct=${_ct} tc=${_tc} | Q:"${_reqMsg}" A:"${_ans}"`);
+              return new Response(JSON.stringify(json), { status: 200, headers });
             } catch {
-              logGateway(modelField, actualModelId, provider, 200, latency, 0, 0, null, userMsg, null);
+              // JSON parse failed — fall through
             }
-          } else {
-            logGateway(modelField, actualModelId, provider, 200, latency, 0, 0, null, userMsg, "[stream]");
           }
+
+          const proxied = await buildProxiedResponse(response, provider, actualModelId, isStream, estInputTokens);
+          const streamLatency = Date.now() - startTime;
+          await recordRoutingResult(dbModelId, provider, promptCategory, true, streamLatency);
+          recordOutcome(provider, actualModelId, true, streamLatency);
+          const slowThrStream = slowThresholdMs(estTokens);
+          if (streamLatency > slowThrStream) {
+            await logCooldown(dbModelId, `slow stream: ${streamLatency}ms > ${slowThrStream}ms threshold`, 0, 2);
+            recordOutcome(provider, actualModelId, false, streamLatency);
+            console.log(`[SLOW-COOLDOWN] ${provider}/${actualModelId} ${streamLatency}ms > ${slowThrStream}ms → 2min cooldown`);
+          }
+          await logGateway(modelField, actualModelId, provider, 200, streamLatency, 0, 0, null, userMsg, "[stream]");
+          recordBattleEvent(outcomeFromLatency(streamLatency, true)).catch(() => { /* cosmetic */ });
+          console.log(`[RES:${_reqId}] 200 | ${provider}/${actualModelId} | ${streamLatency}ms | stream | Q:"${_reqMsg}"`);
           return proxied;
         }
 
-        // Non-200: cooldown for cloud providers only (Ollama = local, never cooldown)
         const errText = await response.text().catch(() => "");
         console.error(`[Gateway] ${provider}/${actualModelId} HTTP ${response.status}: ${errText.slice(0, 500)}`);
         lastError = `${provider}/${actualModelId}: HTTP ${response.status}`;
+        lastProvider = provider;
+        lastModelId = actualModelId;
+        const failLatency = Date.now() - startTime;
+        await recordRoutingResult(dbModelId, provider, promptCategory, false, failLatency);
+        recordOutcome(provider, actualModelId, false, failLatency);
+        recordOutcomeLearning({
+          modelId: dbModelId, provider,
+          tokens: estInputTokens, latencyMs: failLatency, success: false,
+          hasTools: caps.hasTools, hasImages: caps.hasImages,
+          userMessage: extractUserMessage(body) ?? "",
+          failReason: errText.slice(0, 200),
+        }).catch(() => {});
+        await recordProviderFailureMem(provider);
+        await recordCircuitFailure(provider);
+        if (wasProbing) await recordCircuitProbeResult(provider, false);
         const st = response.status;
-        if (provider !== "ollama" && (st === 429 || st === 413 || st === 422 || st >= 500 || st === 401 || st === 403)) {
-          logCooldown(dbModelId, `HTTP ${st}: ${errText}`, st);
+        console.log(`[RETRY:${_reqId}] ${tried}/${MAX_RETRIES} | ${provider}/${actualModelId} → HTTP ${st} | ${errText.slice(0, 200)}`);
+
+        // Learn limit จาก 429 error message
+        if (st === 429) {
+          const parsed = parseLimitError(errText);
+          if (parsed) {
+            recordLimit(provider, actualModelId, parsed).catch(() => {});
+          }
         }
-        // Always retry next model regardless
+        // Learn limit จาก response header ด้วย (บาง provider ส่งมาใน fail response)
+        const failHeaderLimit = parseLimitHeaders(response.headers);
+        if (failHeaderLimit) {
+          recordLimit(provider, actualModelId, failHeaderLimit).catch(() => {});
+        }
+
+        // ทุก non-2xx → exponential cooldown → request ถัดไปจะไม่เลือกซ้ำ
+        if (st === 400 || st === 402 || st === 429 || st === 413 || st === 422 || st === 410 || st === 404 || st >= 500 || st === 401 || st === 403) {
+          // TPD (per-day) limit — groq/gemini ฯลฯ คืน 429 + "daily" หรือ TPD → cooldown 24 ชม.
+          const isDailyLimit = st === 429 && /tokens per day|TPD|daily limit|quota exceeded for today/i.test(errText);
+          if (isDailyLimit) {
+            await logCooldown(dbModelId, `TPD exhausted: ${errText.slice(0, 150)}`, 429, 24 * 60);
+            console.log(`[TPD-EXHAUST] ${provider}/${actualModelId} → 24h cooldown`);
+          } else if (st === 413 || st === 422 || /context_length|too large/i.test(errText)) {
+            // Hard error — cooldown model นาน (ไม่ retry)
+            await logCooldown(dbModelId, `HTTP ${st}: ${errText}`, st, 30);
+          } else {
+            // Exponential cooldown: 1m → 2 → 4 → 8 → 16 → 60 min
+            const streakCooldownMs = await recordFailStreak(dbModelId);
+            const streakMin = Math.round(streakCooldownMs / 60_000);
+            await logCooldown(dbModelId, `HTTP ${st}: ${errText}`, st, streakMin);
+            console.log(`[EXPO-COOLDOWN:${_reqId}] ${provider}/${actualModelId} → ${streakMin}min (exponential)`);
+          }
+          // ระบบใช้ free model หลายตัวต่อ provider — cooldown ที่ model เท่านั้น
+          // ยกเว้น 401/403 (auth key พัง → กระทบทุก model ใน provider เดียวกัน)
+          if (st === 401 || st === 403) blockedProviders.add(provider);
+          if (st === 402) {
+            await emitEvent("provider_error", `${provider}/${actualModelId} quota หมด (HTTP 402)`, errText.slice(0, 200), provider, actualModelId, "error");
+          }
+          if (st === 404) {
+            // Auto-deactivate after 3 consecutive 404s (stale model)
+            try {
+              const redis = getRedis();
+              const notFoundKey = `404count:${dbModelId}`;
+              const count = await redis.incr(notFoundKey);
+              await redis.expire(notFoundKey, 86400); // 24h window
+              if (count >= 3) {
+                await getSqlClient()`
+                  INSERT INTO health_logs (model_id, status, error, cooldown_until, checked_at)
+                  VALUES (${dbModelId}, 'available', 'auto-deactivated: 3x consecutive 404', now() + interval '30 days', now())
+                  ON CONFLICT DO NOTHING
+                `;
+                console.log(`[AUTO-DEACTIVATE] ${provider}/${actualModelId} — 3x 404, cooldown 30 days`);
+              }
+            } catch { /* silent */ }
+          }
+          if (st === 410) {
+            await emitEvent("provider_error", `${provider}/${actualModelId} ถูกถอดแล้ว (HTTP 410 Gone)`, errText.slice(0, 200), provider, actualModelId, "error");
+          } else if (st >= 500) {
+            await emitEvent("provider_error", `${provider} ล่ม (HTTP ${st})`, errText.slice(0, 200), provider, actualModelId, "error");
+          }
+        }
         continue;
       } catch (err) {
-        lastError = `${provider}/${actualModelId}: ${String(err)}`;
-        logCooldown(dbModelId, lastError);
+        const errStr = String(err);
+        const isTimeout = errStr.includes("TimeoutError") || errStr.includes("timeout") || errStr.includes("AbortError");
+        lastError = `${provider}/${actualModelId}: ${errStr}`;
+        lastProvider = provider;
+        lastModelId = actualModelId;
+        const streakCd = await recordFailStreak(dbModelId);
+        const streakMin = Math.max(1, Math.round(streakCd / 60_000));
+        if (isTimeout) {
+          console.log(`[TIMEOUT-ATTEMPT:${_reqId}] ${provider}/${actualModelId} timeout → ${streakMin}min`);
+          await logCooldown(dbModelId, `timeout: ${errStr.slice(0, 100)}`, 0, streakMin);
+        } else {
+          await logCooldown(dbModelId, lastError, 0, streakMin);
+        }
+        const catchLatency = Date.now() - startTime;
+        await recordRoutingResult(dbModelId, provider, promptCategory, false, catchLatency);
+        recordOutcome(provider, actualModelId, false, catchLatency);
+        recordOutcomeLearning({
+          modelId: dbModelId, provider,
+          tokens: estInputTokens, latencyMs: catchLatency, success: false,
+          hasTools: caps.hasTools, hasImages: caps.hasImages,
+          userMessage: extractUserMessage(body) ?? "",
+          failReason: errStr.slice(0, 200),
+        }).catch(() => {});
+        await recordProviderFailureMem(provider);
+        await recordCircuitFailure(provider);
+        if (wasProbing) await recordCircuitProbeResult(provider, false);
+        await emitEvent("provider_error", `${provider} เชื่อมต่อไม่ได้`, errStr.slice(0, 200), provider, actualModelId, "warn");
         continue;
       }
     }
 
-    // All retries exhausted
+    // Log skip reasons breakdown
+    if (skipReasons.length > 0) {
+      const breakdown: Record<string, number> = {};
+      for (const r of skipReasons) {
+        const reason = r.split(":").pop() ?? "unknown";
+        breakdown[reason] = (breakdown[reason] ?? 0) + 1;
+      }
+      console.log(`[SKIPS:${_reqId}] tried=${triedProviders.size}, skipped=${skipReasons.length} — ${JSON.stringify(breakdown)}`);
+    }
+
+    // ── Second pass: ถ้าไม่มี candidate ไหนได้ลองจริงๆ (ทุกตัวโดน skip) → ลอง skipped candidates แบบ relaxed
+    if (triedProviders.size === 0 && skippedCandidates.length > 0 && Date.now() - startTime < TOTAL_TIMEOUT_MS) {
+      console.log(`[RELAXED-RETRY:${_reqId}] First pass skipped ${skippedCandidates.length} candidates → retrying ignoring soft filters`);
+      for (const candidate of skippedCandidates.slice(0, 5)) {
+        if (Date.now() - startTime > TOTAL_TIMEOUT_MS) break;
+        const { provider, model_id: actualModelId, id: dbModelId } = candidate;
+        // Hard filter เท่านั้น: blocked provider (auth พัง)
+        if (blockedProviders.has(provider)) continue;
+        triedProviders.add(provider);
+        try {
+          // Pass remaining budget as AbortSignal so RELAXED-RETRY can't outlive TOTAL_TIMEOUT
+          const relaxedRemaining = Math.max(3_000, TOTAL_TIMEOUT_MS - (Date.now() - startTime));
+          const response = await forwardToProvider(provider, actualModelId, body, isStream, AbortSignal.timeout(relaxedRemaining));
+          if (response.ok) {
+            const streamLatency = Date.now() - startTime;
+            recordOutcome(provider, actualModelId, true, streamLatency);
+            await logGateway(modelField, actualModelId, provider, 200, streamLatency, 0, 0, null, userMsg, "[relaxed-retry]");
+            console.log(`[RES:${_reqId}] 200 | ${provider}/${actualModelId} | ${streamLatency}ms | relaxed-retry stream | Q:"${_reqMsg}"`);
+            return buildProxiedResponse(response, provider, actualModelId, isStream, estInputTokens);
+          }
+          const errText = await response.text().catch(() => "");
+          lastError = `${provider}/${actualModelId}: HTTP ${response.status}`;
+          lastProvider = provider;
+          lastModelId = actualModelId;
+          const relCd = await recordFailStreak(dbModelId);
+          await logCooldown(dbModelId, `HTTP ${response.status}: ${errText}`, response.status, Math.max(1, Math.round(relCd / 60_000)));
+          recordOutcome(provider, actualModelId, false, Date.now() - startTime);
+        } catch (err) {
+          lastError = `${provider}/${actualModelId}: ${String(err).slice(0, 150)}`;
+          lastProvider = provider;
+          lastModelId = actualModelId;
+          const relCd2 = await recordFailStreak(dbModelId);
+          await logCooldown(dbModelId, lastError, 0, Math.max(1, Math.round(relCd2 / 60_000)));
+          recordOutcome(provider, actualModelId, false, Date.now() - startTime);
+        }
+      }
+    }
+
     const latency = Date.now() - startTime;
-    logGateway(modelField, null, null, 503, latency, 0, 0, lastError.slice(0, 300), userMsg, null);
-    return NextResponse.json(
-      {
-        error: {
-          message: `ลองแล้ว ${Math.min(MAX_RETRIES, spreadCandidates.length)} โมเดล (${triedProviders.size} providers) ไม่สำเร็จ: ${lastError}`,
-          type: "server_error",
-          code: 503,
-        },
-      },
-      { status: 503 }
-    );
+    // ถ้าไม่มี model ไหนได้ลองเลย → ใช้ candidate แรกเป็น placeholder เฉพาะเพื่อ log
+    // *ห้าม* cooldown ใคร — candidate ไม่ได้ผิดอะไร
+    if (!lastProvider && spreadCandidates.length > 0) {
+      lastProvider = spreadCandidates[0].provider;
+      lastModelId = spreadCandidates[0].model_id;
+    }
+    if (!lastError) {
+      const reasonSummary = skipReasons.slice(0, 3).join(", ");
+      lastError = `ไม่มี candidate ผ่าน filter — skipped=${skipReasons.length} (${reasonSummary}${skipReasons.length > 3 ? "..." : ""})`;
+    }
+    await logGateway(modelField, lastModelId, lastProvider, 503, latency, 0, 0, lastError.slice(0, 300), userMsg, null);
+    recordBattleEvent("fail").catch(() => { /* cosmetic */ });
+    console.log(`[RES:${_reqId}] 503 | ${triedProviders.size} tried ${blockedProviders.size} blocked ${skippedCandidates.length} skipped | ${latency}ms | Q:"${_reqMsg}" | ${lastError.slice(0, 150)}`);
+    return openAIError(503, {
+      message: `All ${Math.min(MAX_RETRIES, spreadCandidates.length)} models from ${triedProviders.size} providers failed: ${lastError}`,
+    });
   } catch (err) {
     console.error("[Gateway] Unexpected error:", err);
-    return NextResponse.json(
-      {
-        error: {
-          message: String(err),
-          type: "server_error",
-          code: 500,
-        },
-      },
-      { status: 500 }
-    );
+    return openAIError(500, { message: String(err) });
   }
 }
 
@@ -883,21 +1933,17 @@ async function buildProxiedResponse(
 ): Promise<Response> {
   const headers = new Headers();
   headers.set("Content-Type", upstream.headers.get("Content-Type") || "application/json");
-  headers.set("X-BCProxy-Provider", provider);
-  headers.set("X-BCProxy-Model", modelId);
-
-  // Pass through CORS headers if needed
+  headers.set("X-SMLGateway-Provider", provider);
+  headers.set("X-SMLGateway-Model", modelId);
   headers.set("Access-Control-Allow-Origin", "*");
 
   if (stream && upstream.body) {
-    // Stream SSE — track estimated tokens from content length
     const reader = upstream.body.getReader();
     let totalBytes = 0;
     const passthrough = new ReadableStream({
       async pull(controller) {
         const { done, value } = await reader.read();
         if (done) {
-          // Estimate output tokens from streamed bytes (~3 chars/token)
           const estOutputTokens = Math.ceil(totalBytes / 3);
           trackTokenUsage(provider, modelId, estimatedInputTokens, estOutputTokens);
           controller.close();
@@ -907,29 +1953,25 @@ async function buildProxiedResponse(
         controller.enqueue(value);
       },
     });
-    return new Response(passthrough, {
-      status: upstream.status,
-      headers,
-    });
+    return new Response(passthrough, { status: upstream.status, headers });
   }
 
-  // Non-streaming: read body, fix reasoning→content, track tokens, return
   try {
     const text = await upstream.text();
     const json = JSON.parse(text);
 
-    // Fix: some models (Ollama/gemma4) put answer in reasoning field instead of content
     if (json.choices) {
       for (const choice of json.choices) {
         const msg = choice.message;
         if (msg && (!msg.content || msg.content === "") && msg.reasoning) {
-          // Extract actual answer from reasoning (last meaningful line)
           msg.content = msg.reasoning;
         }
       }
     }
 
-    // Fix tool call parameters: validate, repair with jsonrepair, coerce numbers
+    // Pattern B+: repair tool_call arguments before numeric coercion
+    repairToolCallArguments(json);
+
     if (json.choices) {
       for (const choice of json.choices) {
         const toolCalls = choice.message?.tool_calls;
@@ -949,12 +1991,9 @@ async function buildProxiedResponse(
               argsStr = argsStr.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?\s*```\s*$/i, "");
               
               try {
-                const args = JSON.parse(argsStr);
-                // Auto-fix: convert string numbers to actual numbers
+                const args = JSON.parse(tc.function.arguments);
                 for (const [key, val] of Object.entries(args)) {
-                  if (typeof val === "string" && /^\d+$/.test(val)) {
-                    args[key] = Number(val);
-                  }
+                  if (typeof val === "string" && /^\d+$/.test(val)) args[key] = Number(val);
                 }
                 tc.function.arguments = JSON.stringify(args);
               } catch {
@@ -975,29 +2014,34 @@ async function buildProxiedResponse(
       }
     }
 
-    // Track token usage
-    const usage = json.usage;
-    if (usage) {
-      trackTokenUsage(provider, modelId, usage.prompt_tokens ?? 0, usage.completion_tokens ?? 0);
-    } else {
-      const estOutput = Math.ceil(text.length / 3);
-      trackTokenUsage(provider, modelId, estimatedInputTokens, estOutput);
+    if (json.choices) {
+      for (const choice of json.choices) {
+        const msg = choice.message;
+        if (msg && Array.isArray(msg.content)) {
+          msg.content = msg.content.filter((p: { type: string }) => p.type === "text").map((p: { text: string }) => p.text).join("");
+        }
+      }
     }
 
-    return new Response(JSON.stringify(json), {
-      status: upstream.status,
-      headers,
-    });
+    ensureChatCompletionFields(json, provider, modelId);
+
+    const content = json.choices?.[0]?.message?.content ?? "";
+    autoDetectComplaint(provider, modelId, content);
+
+    const usage = json.usage as { prompt_tokens?: number; completion_tokens?: number } | undefined;
+    if (usage) {
+      await trackTokenUsage(provider, modelId, usage.prompt_tokens ?? 0, usage.completion_tokens ?? 0);
+    } else {
+      const estOutput = Math.ceil(text.length / 3);
+      await trackTokenUsage(provider, modelId, estimatedInputTokens, estOutput);
+    }
+
+    return new Response(JSON.stringify(json), { status: upstream.status, headers });
   } catch {
-    // Fallback: pass through raw body
-    return new Response(upstream.body, {
-      status: upstream.status,
-      headers,
-    });
+    return new Response(upstream.body, { status: upstream.status, headers });
   }
 }
 
-// Handle OPTIONS for CORS preflight
 export async function OPTIONS() {
   return new Response(null, {
     status: 204,

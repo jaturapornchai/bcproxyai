@@ -1,31 +1,14 @@
-import { getDb } from "@/lib/db/schema";
+import { getSqlClient } from "@/lib/db/schema";
 import { getNextApiKey } from "@/lib/api-keys";
 import { PROVIDER_URLS } from "@/lib/providers";
 
-const NON_CHAT_KEYWORDS = [
-  "whisper",
-  "lyria",
-  "orpheus",
-  "prompt-guard",
-  "safeguard",
-  "compound",
-  "allam",
-];
-
-function logWorker(step: string, message: string, level = "info") {
+async function logWorker(step: string, message: string, level = "info") {
   try {
-    const db = getDb();
-    db.prepare(
-      "INSERT INTO worker_logs (step, message, level) VALUES (?, ?, ?)"
-    ).run(step, message, level);
+    const sql = getSqlClient();
+    await sql`INSERT INTO worker_logs (step, message, level) VALUES (${step}, ${message}, ${level})`;
   } catch {
     // silent
   }
-}
-
-export function isNonChatModel(modelId: string): boolean {
-  const lower = modelId.toLowerCase();
-  return NON_CHAT_KEYWORDS.some((kw) => lower.includes(kw));
 }
 
 interface DbModel {
@@ -39,7 +22,7 @@ interface DbModel {
 
 export async function pingModel(
   model: DbModel
-): Promise<{ status: string; latency: number; error?: string }> {
+): Promise<{ status: string; latency: number; error?: string; isNonChat?: boolean }> {
   const url = PROVIDER_URLS[model.provider];
   if (!url) return { status: "error", latency: 0, error: "unknown provider" };
 
@@ -49,8 +32,8 @@ export async function pingModel(
     Authorization: `Bearer ${key}`,
   };
   if (model.provider === "openrouter") {
-    headers["HTTP-Referer"] = "https://bcproxyai.app";
-    headers["X-Title"] = "BCProxyAI";
+    headers["HTTP-Referer"] = "https://sml-gateway.app";
+    headers["X-Title"] = "SMLGateway";
   }
 
   const body = JSON.stringify({
@@ -63,6 +46,12 @@ export async function pingModel(
   const timeoutMs = model.provider === "ollama" ? 120000 : 15000;
   const start = Date.now();
   try {
+    // Worker pings are sparse (~100 total per hour). Skip the shared
+    // upstreamAgent here — its 30s keep-alive window makes dead-socket
+    // reuse likely when providers close idle connections, which surfaced
+    // as spurious "fetch failed" TypeErrors and knocked good models into
+    // cooldown. Node's default fetch creates a fresh connection, which
+    // is fine for this cold path.
     const res = await fetch(url, {
       method: "POST",
       headers,
@@ -72,6 +61,24 @@ export async function pingModel(
     const latency = Date.now() - start;
 
     if (res.ok) {
+      // Detect non-chat models by inspecting response structure.
+      // A real chat model returns choices[0].message.content as a non-empty string.
+      // Audio/TTS/safety models either return different structure or empty content.
+      try {
+        const json = await res.clone().json() as {
+          choices?: Array<{ message?: { content?: string | null } }>;
+          audio?: unknown;
+          object?: string;
+        };
+        const content = json.choices?.[0]?.message?.content;
+        const isChat = typeof content === "string" && content.trim().length > 0;
+        const isAudio = json.audio != null || json.object === "audio";
+        if (!isChat || isAudio) {
+          return { status: "available", latency, isNonChat: true };
+        }
+      } catch {
+        // Can't parse — assume chat model, health check proceeds normally
+      }
       return { status: "available", latency };
     }
 
@@ -84,6 +91,11 @@ export async function pingModel(
 
     if (isRateLimit) {
       return { status: "rate_limited", latency, error: `429 rate limited` };
+    }
+
+    // 402 = payment required / quota exhausted → long cooldown, ต่างจาก transient error
+    if (res.status === 402) {
+      return { status: "quota_exhausted", latency, error: `402 quota exhausted: ${text.slice(0, 200)}` };
     }
 
     return {
@@ -119,8 +131,8 @@ export async function testVisionSupport(
     Authorization: `Bearer ${key}`,
   };
   if (model.provider === "openrouter") {
-    headers["HTTP-Referer"] = "https://bcproxyai.app";
-    headers["X-Title"] = "BCProxyAI";
+    headers["HTTP-Referer"] = "https://sml-gateway.app";
+    headers["X-Title"] = "SMLGateway";
   }
 
   const body = JSON.stringify({
@@ -148,6 +160,8 @@ export async function testVisionSupport(
       headers,
       body,
       signal: AbortSignal.timeout(15000),
+      // @ts-expect-error undici dispatcher not in standard fetch types
+      dispatcher: upstreamAgent,
     });
 
     if (res.ok) return 1;
@@ -183,8 +197,8 @@ export async function testToolSupport(
     Authorization: `Bearer ${key}`,
   };
   if (model.provider === "openrouter") {
-    headers["HTTP-Referer"] = "https://bcproxyai.app";
-    headers["X-Title"] = "BCProxyAI";
+    headers["HTTP-Referer"] = "https://sml-gateway.app";
+    headers["X-Title"] = "SMLGateway";
   }
 
   const body = JSON.stringify({
@@ -209,6 +223,8 @@ export async function testToolSupport(
       headers,
       body,
       signal: AbortSignal.timeout(15000),
+      // @ts-expect-error undici dispatcher not in standard fetch types
+      dispatcher: upstreamAgent,
     });
 
     if (res.ok) return 1;
@@ -251,49 +267,32 @@ export async function checkHealth(): Promise<{
   available: number;
   cooldown: number;
 }> {
-  logWorker("health", "Starting health check");
-  const db = getDb();
+  await logWorker("health", "Starting health check");
+  const sql = getSqlClient();
 
   // Get models eligible for health check
-  const models = db
-    .prepare(
-      `
-    SELECT m.id, m.provider, m.model_id, m.context_length, COALESCE(m.supports_tools, -1) AS supports_tools, COALESCE(m.supports_vision, -1) AS supports_vision
+  const models = await sql<DbModel[]>`
+    SELECT m.id, m.provider, m.model_id, m.context_length,
+      COALESCE(m.supports_tools, -1) AS supports_tools,
+      COALESCE(m.supports_vision, -1) AS supports_vision
     FROM models m
     WHERE m.context_length >= 32000
       AND NOT EXISTS (
         SELECT 1 FROM health_logs h
         WHERE h.model_id = m.id
           AND h.cooldown_until IS NOT NULL
-          AND h.cooldown_until > datetime('now')
-        ORDER BY h.checked_at DESC
+          AND h.cooldown_until > now()
         LIMIT 1
       )
-  `
-    )
-    .all() as DbModel[];
+  `;
 
-  // Filter out non-chat models
-  const eligible = models.filter((m) => !isNonChatModel(m.model_id));
+  const eligible = models;
 
-  logWorker("health", `Checking ${eligible.length} eligible models`);
+  await logWorker("health", `Checking ${eligible.length} eligible models`);
 
   let available = 0;
   let cooldownCount = 0;
   let checked = 0;
-
-  const insertLog = db.prepare(`
-    INSERT INTO health_logs (model_id, status, latency_ms, error, cooldown_until)
-    VALUES (?, ?, ?, ?, ?)
-  `);
-
-  const updateToolSupport = db.prepare(
-    "UPDATE models SET supports_tools = ? WHERE id = ?"
-  );
-
-  const updateVisionSupport = db.prepare(
-    "UPDATE models SET supports_vision = ? WHERE id = ?"
-  );
 
   // Collect available models that need tool/vision testing
   const availableForToolTest: DbModel[] = [];
@@ -304,10 +303,24 @@ export async function checkHealth(): Promise<{
     checked++;
 
     let cooldownUntil: string | null = null;
-    if (result.status === "rate_limited" || result.status === "error") {
-      // cooldown_until = now + 2 hours
-      const t = new Date(Date.now() + 2 * 60 * 60 * 1000);
-      cooldownUntil = t.toISOString().replace("T", " ").slice(0, 19);
+
+    // Auto-detect non-chat models (audio, TTS, safety classifiers, etc.)
+    // by checking that the response has a real text content in choices[0].message.content
+    if (result.status === "available" && result.isNonChat) {
+      await sql`UPDATE models SET supports_audio_output = 1 WHERE id = ${model.id}`;
+      await logWorker("health", `🔇 ${model.model_id} — ตรวจพบว่าไม่ใช่ chat model → ตั้ง supports_audio_output=1`, "warn");
+      cooldownCount++;
+      return; // skip health_log insert — gateway filters by supports_audio_output
+    }
+
+    if (result.status === "quota_exhausted") {
+      // Quota หมด → cooldown 24 ชม.
+      cooldownUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+      cooldownCount++;
+    } else if (result.status === "rate_limited" || result.status === "error") {
+      // ping fail → cooldown แค่ 5 นาที (worker จะ re-check รอบถัดไป)
+      // เดิม 2 ชม. ทำให้ pool หาย → 503 cascade
+      cooldownUntil = new Date(Date.now() + 5 * 60 * 1000).toISOString();
       cooldownCount++;
     } else {
       available++;
@@ -320,15 +333,12 @@ export async function checkHealth(): Promise<{
     }
 
     try {
-      insertLog.run(
-        model.id,
-        result.status,
-        result.latency,
-        result.error ?? null,
-        cooldownUntil
-      );
+      await sql`
+        INSERT INTO health_logs (model_id, status, latency_ms, error, cooldown_until)
+        VALUES (${model.id}, ${result.status}, ${result.latency}, ${result.error ?? null}, ${cooldownUntil})
+      `;
     } catch (err) {
-      logWorker("health", `DB insert error for ${model.id}: ${err}`, "error");
+      await logWorker("health", `DB insert error for ${model.id}: ${err}`, "error");
     }
   });
 
@@ -338,14 +348,14 @@ export async function checkHealth(): Promise<{
     const supportsTools = await testToolSupport(model);
     if (supportsTools !== -1) {
       try {
-        updateToolSupport.run(supportsTools, model.id);
+        await sql`UPDATE models SET supports_tools = ${supportsTools} WHERE id = ${model.id}`;
         const icon = supportsTools === 1 ? "✅" : "❌";
-        logWorker(
+        await logWorker(
           "health",
           `🔧 ${model.model_id}: tools ${icon}`
         );
       } catch (err) {
-        logWorker("health", `Tool update error for ${model.id}: ${err}`, "error");
+        await logWorker("health", `Tool update error for ${model.id}: ${err}`, "error");
       }
     }
   }
@@ -356,20 +366,20 @@ export async function checkHealth(): Promise<{
     const supportsVision = await testVisionSupport(model);
     if (supportsVision !== -1) {
       try {
-        updateVisionSupport.run(supportsVision, model.id);
+        await sql`UPDATE models SET supports_vision = ${supportsVision} WHERE id = ${model.id}`;
         const icon = supportsVision === 1 ? "✅" : "❌";
-        logWorker(
+        await logWorker(
           "health",
           `👁️ ${model.model_id}: vision ${icon}`
         );
       } catch (err) {
-        logWorker("health", `Vision update error for ${model.id}: ${err}`, "error");
+        await logWorker("health", `Vision update error for ${model.id}: ${err}`, "error");
       }
     }
   }
 
   const msg = `Health check done: checked=${checked}, available=${available}, cooldown=${cooldownCount}`;
-  logWorker("health", msg);
+  await logWorker("health", msg);
 
   return { checked, available, cooldown: cooldownCount };
 }

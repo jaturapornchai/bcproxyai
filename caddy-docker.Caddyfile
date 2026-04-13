@@ -1,0 +1,47 @@
+{
+	admin off
+	# Caddy is the edge — no other proxy in front, so trust NOTHING from
+	# the client. Trusting private_ranges would cover the Docker bridge
+	# (172.18.0.1), letting LAN attackers spoof X-Forwarded-For.
+	# With no trusted proxies, Caddy ignores any inbound X-Forwarded-* and
+	# derives client_ip purely from the TCP remote.
+	servers {
+		trusted_proxies static 127.0.0.1/32
+		client_ip_headers X-Forwarded-For X-Real-IP
+	}
+}
+
+:80 {
+	# Strip any attacker-supplied X-Forwarded-* headers before reverse_proxy
+	# sees them, so they can't leak into the upstream even by mistake.
+	request_header -X-Forwarded-For
+	request_header -X-Real-IP
+	request_header -Forwarded
+
+	reverse_proxy sml-gateway:3000 {
+		lb_policy round_robin
+		health_uri /api/health
+		health_interval 10s
+		health_timeout 5s
+		health_status 200
+		# Force headers to the TCP remote host, not the client-supplied chain.
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Real-IP {remote_host}
+		transport http {
+			dial_timeout 5s
+			response_header_timeout 300s
+		}
+	}
+
+	encode gzip
+
+	header {
+		Access-Control-Allow-Origin *
+		Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
+		Access-Control-Allow-Headers "Content-Type, Authorization"
+		-Server
+	}
+
+	@options method OPTIONS
+	respond @options 204
+}

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getDb } from "@/lib/db/schema";
+import { getSqlClient } from "@/lib/db/schema";
 import { getCached, setCache } from "@/lib/cache";
 
 export const dynamic = "force-dynamic";
@@ -37,11 +37,10 @@ export async function GET() {
     // --- Database check ---
     let dbOk = false;
     let dbLatencyMs = 0;
-    let db: ReturnType<typeof getDb>;
     try {
+      const sql = getSqlClient();
       const dbStart = Date.now();
-      db = getDb();
-      db.prepare("SELECT 1").get();
+      await sql`SELECT 1`;
       dbLatencyMs = Date.now() - dbStart;
       dbOk = true;
       if (dbLatencyMs > 100) {
@@ -62,36 +61,36 @@ export async function GET() {
       return NextResponse.json(result, { status: 503 });
     }
 
-    // --- Provider availability ---
-    const totalRow = db.prepare("SELECT COUNT(*) as count FROM models").get() as { count: number };
-    const total = totalRow.count;
+    const sql = getSqlClient();
 
-    const availableRow = db.prepare(`
+    // --- Provider availability ---
+    const totalRows = await sql<{ count: number }[]>`SELECT COUNT(*) as count FROM models`;
+    const total = Number(totalRows[0]?.count ?? 0);
+
+    const availableRows = await sql<{ count: number }[]>`
       SELECT COUNT(DISTINCT m.id) as count
       FROM models m
       LEFT JOIN (
         SELECT hl.model_id, hl.status, hl.cooldown_until
         FROM health_logs hl
         INNER JOIN (
-          SELECT model_id, MAX(checked_at) as max_checked
-          FROM health_logs GROUP BY model_id
-        ) latest ON hl.model_id = latest.model_id AND hl.checked_at = latest.max_checked
+          SELECT model_id, MAX(id) as max_id FROM health_logs GROUP BY model_id
+        ) latest ON hl.model_id = latest.model_id AND hl.id = latest.max_id
       ) h ON m.id = h.model_id
       WHERE (h.status IS NULL OR h.status = 'available' OR h.status = 'error')
-        AND (h.cooldown_until IS NULL OR h.cooldown_until <= datetime('now'))
-    `).get() as { count: number };
-    const available = availableRow.count;
+        AND (h.cooldown_until IS NULL OR h.cooldown_until <= now())
+    `;
+    const available = Number(availableRows[0]?.count ?? 0);
 
-    const cooldownRow = db.prepare(`
+    const cooldownRows = await sql<{ count: number }[]>`
       SELECT COUNT(DISTINCT h.model_id) as count
       FROM health_logs h
       INNER JOIN (
-        SELECT model_id, MAX(checked_at) as max_checked
-        FROM health_logs GROUP BY model_id
-      ) latest ON h.model_id = latest.model_id AND h.checked_at = latest.max_checked
-      WHERE h.cooldown_until > datetime('now')
-    `).get() as { count: number };
-    const cooldown = cooldownRow.count;
+        SELECT model_id, MAX(id) as max_id FROM health_logs GROUP BY model_id
+      ) latest ON h.model_id = latest.model_id AND h.id = latest.max_id
+      WHERE h.cooldown_until > now()
+    `;
+    const cooldown = Number(cooldownRows[0]?.count ?? 0);
 
     const percentAvailable = total > 0 ? Math.round((available / total) * 100) : 0;
 
@@ -100,11 +99,12 @@ export async function GET() {
     }
 
     // --- Worker status ---
-    const statusRow = db.prepare("SELECT value FROM worker_state WHERE key = 'status'").get() as { value: string } | undefined;
-    const lastRunRow = db.prepare("SELECT value FROM worker_state WHERE key = 'last_run'").get() as { value: string } | undefined;
-
-    const workerStatus = statusRow?.value ?? "unknown";
-    const lastRun = lastRunRow?.value ?? null;
+    const workerRows = await sql<{ key: string; value: string }[]>`
+      SELECT key, value FROM worker_state WHERE key IN ('status', 'last_run')
+    `;
+    const workerMap = new Map(workerRows.map(r => [r.key, r.value]));
+    const workerStatus = workerMap.get("status") ?? "unknown";
+    const lastRun = workerMap.get("last_run") ?? null;
 
     let minutesSinceLastRun = -1;
     if (lastRun) {
@@ -118,10 +118,10 @@ export async function GET() {
       alerts.push("Worker ยังไม่เคยทำงาน");
     }
 
-    // --- Gateway success rate (last 100 requests) ---
-    const gatewayRows = db.prepare(`
+    // --- Gateway success rate ---
+    const gatewayRows = await sql<{ status: number }[]>`
       SELECT status FROM gateway_logs ORDER BY created_at DESC LIMIT 100
-    `).all() as Array<{ status: number }>;
+    `;
 
     let recentSuccessRate = 100;
     let avgLatencyMs = 0;
@@ -129,21 +129,19 @@ export async function GET() {
       const successCount = gatewayRows.filter(r => r.status >= 200 && r.status < 300).length;
       recentSuccessRate = Math.round((successCount / gatewayRows.length) * 100);
 
-      const latencyRow = db.prepare(`
+      const latencyRows = await sql<{ avg: number | null }[]>`
         SELECT AVG(latency_ms) as avg FROM (
           SELECT latency_ms FROM gateway_logs ORDER BY created_at DESC LIMIT 100
-        )
-      `).get() as { avg: number | null };
-      avgLatencyMs = Math.round(latencyRow.avg ?? 0);
+        ) sub
+      `;
+      avgLatencyMs = Math.round(latencyRows[0]?.avg ?? 0);
     }
 
     if (recentSuccessRate < 50) {
       alerts.push(`Success rate ต่ำกว่า 50% (${recentSuccessRate}%)`);
     }
 
-    // --- Determine overall status ---
     let status: "healthy" | "degraded" | "down" = "healthy";
-
     if (percentAvailable === 0 || !dbOk) {
       status = "down";
     } else if (
@@ -166,7 +164,7 @@ export async function GET() {
       alerts,
     };
 
-    setCache("api:health", result, 5000); // cache 5 seconds
+    setCache("api:health", result, 5000);
     return NextResponse.json(result);
   } catch (err) {
     console.error("[health] error:", err);

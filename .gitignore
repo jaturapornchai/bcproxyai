@@ -37,6 +37,14 @@ yarn-error.log*
 # database
 /data/
 
+# exam images (user-provided, not tracked)
+/exam-images/*
+!/exam-images/.gitkeep
+
+# caddy runtime logs
+caddy.log
+caddy.err.log
+
 # compiled mcp
 /dist/
 
@@ -46,3 +54,21 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# k6 load test results
+loadtest/results/
+loadtest/*.json
+loadtest/summary.html
+
+# performance reports
+perf-report.md
+.claude/
+
+# Generated code sandbox — AI-authored runtime artifacts
+generated/scripts/*.ts
+generated/scripts/*.js
+generated/scripts/*.py
+generated/queries/*.sql
+generated/reports/*
+generated/patches/*
+!generated/README.md

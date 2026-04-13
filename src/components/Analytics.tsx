@@ -113,7 +113,7 @@ export function Analytics({ data }: { data: AnalyticsData | null }) {
         <span className="text-xs text-gray-500">24 ชม. ล่าสุด</span>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(360px,1fr))] gap-6">
 
         {/* ── 1. Provider Success Rate ─────────────────────────────────── */}
         <div className="glass rounded-2xl p-5 card-3d">

@@ -8,6 +8,38 @@ export const PROVIDER_URLS: Record<string, string> = {
   sambanova: "https://api.sambanova.ai/v1/chat/completions",
   mistral: "https://api.mistral.ai/v1/chat/completions",
   ollama: `${process.env.OLLAMA_BASE_URL || "http://localhost:11434"}/v1/chat/completions`,
+  github: "https://models.github.ai/inference/chat/completions",
+  fireworks: "https://api.fireworks.ai/inference/v1/chat/completions",
+  cohere: "https://api.cohere.com/v2/chat/completions",
+  cloudflare: `https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID || ""}/ai/v1/chat/completions`,
+  huggingface: "https://router.huggingface.co/v1/chat/completions",
+  nvidia: "https://integrate.api.nvidia.com/v1/chat/completions",
+  chutes: "https://llm.chutes.ai/v1/chat/completions",
+  llm7: "https://api.llm7.io/v1/chat/completions",
+  scaleway: "https://api.scaleway.ai/v1/chat/completions",
+  pollinations: "https://text.pollinations.ai/openai/chat/completions",
+  ollamacloud: "https://ollama.com/v1/chat/completions",
+  siliconflow: "https://api.siliconflow.cn/v1/chat/completions",
+  glhf: "https://glhf.chat/api/openai/v1/chat/completions",
+  together: "https://api.together.xyz/v1/chat/completions",
+  hyperbolic: "https://api.hyperbolic.xyz/v1/chat/completions",
+  zai: "https://api.z.ai/api/paas/v4/chat/completions",
+  dashscope: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions",
+  reka: "https://api.reka.ai/v1/chat/completions",
+};
+
+// Embedding endpoints (providers that support embeddings)
+export const PROVIDER_EMBEDDING_URLS: Record<string, string> = {
+  openrouter: "https://openrouter.ai/api/v1/embeddings",
+  mistral: "https://api.mistral.ai/v1/embeddings",
+  ollama: `${process.env.OLLAMA_BASE_URL || "http://localhost:11434"}/v1/embeddings`,
+};
+
+// Legacy completions endpoints (providers that support /v1/completions)
+export const PROVIDER_COMPLETIONS_URLS: Record<string, string> = {
+  openrouter: "https://openrouter.ai/api/v1/completions",
+  groq: "https://api.groq.com/openai/v1/completions",
+  ollama: `${process.env.OLLAMA_BASE_URL || "http://localhost:11434"}/v1/completions`,
 };
 
 export const PROVIDER_LABELS: Record<string, string> = {
@@ -19,4 +51,22 @@ export const PROVIDER_LABELS: Record<string, string> = {
   sambanova: "SN",
   mistral: "Mistral",
   ollama: "Local",
+  github: "GitHub",
+  fireworks: "FW",
+  cohere: "Cohere",
+  cloudflare: "CF",
+  huggingface: "HF",
+  nvidia: "NVIDIA",
+  chutes: "Chutes",
+  llm7: "LLM7",
+  scaleway: "Scaleway",
+  pollinations: "Pollen",
+  ollamacloud: "OllamaCloud",
+  siliconflow: "SiFlow",
+  glhf: "GLHF",
+  together: "Together",
+  hyperbolic: "Hyper",
+  zai: "Z.AI",
+  dashscope: "Qwen",
+  reka: "Reka",
 };

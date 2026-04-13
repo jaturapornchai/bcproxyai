@@ -9,7 +9,7 @@ ensureWorkerStarted();
 
 export async function GET() {
   try {
-    const status = getWorkerStatus();
+    const status = await getWorkerStatus();
     return NextResponse.json({ ok: true, worker: status });
   } catch (err) {
     console.error("[worker] GET error:", err);
@@ -17,17 +17,11 @@ export async function GET() {
   }
 }
 
-export async function POST(req: Request) {
+export async function POST() {
   try {
-    // Allow manual trigger via POST
-    // Check CRON_SECRET only if x-cron-secret header is present (external cron)
-    // Dashboard calls without auth are allowed
-
-    // Run cycle in background without awaiting
     runWorkerCycle().catch((err) => {
       console.error("[worker] manual cycle error:", err);
     });
-
     return NextResponse.json({ ok: true, message: "Worker cycle triggered" });
   } catch (err) {
     console.error("[worker] POST error:", err);

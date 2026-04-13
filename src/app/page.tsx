@@ -1,6 +1,19 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+
+/** Parse user message — handle legacy JSON array format from DB */
+function parseUserMsg(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  if (!raw.startsWith("[")) return raw;
+  try {
+    const arr = JSON.parse(raw) as Array<{ type: string; text?: string }>;
+    if (Array.isArray(arr)) {
+      return arr.filter((p) => p.type === "text" && p.text).map((p) => p.text).join("") || raw;
+    }
+  } catch { /* not JSON */ }
+  return raw;
+}
 import {
   CircleProgress,
   GlowDot,
@@ -21,162 +34,24 @@ import type {
 import { StatsCards } from "../components/StatsCards";
 import { ModelGrid } from "../components/ModelGrid";
 import { ChatPanel } from "../components/ChatPanel";
-import { GuideModal } from "../components/GuideModal";
+import { SetupModal } from "../components/SetupModal";
 import { SpeedRace } from "../components/SpeedRace";
 import { Analytics } from "../components/Analytics";
 import type { AnalyticsData } from "../components/Analytics";
-
-// ─── Gateway Config Card ───────────────────────────────────────────────────────
-
-const ONBOARD_CMD_DOCKER = `docker exec <openclaw-container> \\
-  openclaw onboard \\
-  --non-interactive --accept-risk \\
-  --auth-choice custom-api-key \\
-  --custom-base-url http://host.docker.internal:3333/v1 \\
-  --custom-model-id auto \\
-  --custom-api-key dummy \\
-  --custom-compatibility openai \\
-  --skip-channels --skip-daemon \\
-  --skip-health --skip-search \\
-  --skip-skills --skip-ui`;
-
-const ONBOARD_CMD_LOCAL = `openclaw onboard \\
-  --non-interactive --accept-risk \\
-  --auth-choice custom-api-key \\
-  --custom-base-url http://localhost:3333/v1 \\
-  --custom-model-id auto \\
-  --custom-api-key dummy \\
-  --custom-compatibility openai \\
-  --skip-channels --skip-daemon \\
-  --skip-health --skip-search \\
-  --skip-skills --skip-ui`;
-
-function GatewayConfigCard() {
-  const [copied, setCopied] = useState(false);
-  const [configMode, setConfigMode] = useState<"docker" | "local">("docker");
-  const currentConfig = configMode === "docker" ? ONBOARD_CMD_DOCKER : ONBOARD_CMD_LOCAL;
-
-  const handleCopy = () => {
-    navigator.clipboard.writeText(currentConfig).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
-  };
-
-  return (
-    <div
-      style={{
-        background: "rgba(99,102,241,0.06)",
-        border: "1px solid rgba(99,102,241,0.25)",
-        backdropFilter: "blur(12px)",
-        borderRadius: "1rem",
-        padding: "1.5rem",
-        marginTop: "1.5rem",
-        maxWidth: "48rem",
-        marginLeft: "auto",
-        marginRight: "auto",
-      }}
-    >
-      <div style={{ marginBottom: "0.75rem" }}>
-        <span style={{ fontSize: "0.75rem", color: "rgb(165,180,252)", fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase" }}>
-          Gateway Config
-        </span>
-        <p style={{ fontSize: "0.875rem", color: "rgb(156,163,175)", marginTop: "0.25rem" }}>
-          เชื่อมต่อ OpenClaw กับ BCProxyAI — รันคำสั่งนี้ใน OpenClaw:
-        </p>
-      </div>
-
-      <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.75rem" }}>
-        {([["docker", "OpenClaw บน Docker"], ["local", "OpenClaw บนเครื่อง"]] as const).map(([mode, label]) => (
-          <button
-            key={mode}
-            onClick={() => { setConfigMode(mode); setCopied(false); }}
-            style={{
-              padding: "0.375rem 0.75rem",
-              borderRadius: "0.5rem",
-              fontSize: "0.75rem",
-              fontWeight: 600,
-              cursor: "pointer",
-              border: `1px solid ${configMode === mode ? "rgba(99,102,241,0.5)" : "rgba(255,255,255,0.1)"}`,
-              background: configMode === mode ? "rgba(99,102,241,0.2)" : "transparent",
-              color: configMode === mode ? "rgb(165,180,252)" : "rgb(107,114,128)",
-              transition: "all 0.2s",
-            }}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      <div style={{ position: "relative" }}>
-        <pre
-          style={{
-            background: "rgba(0,0,0,0.4)",
-            border: "1px solid rgba(255,255,255,0.08)",
-            borderRadius: "0.5rem",
-            padding: "1rem",
-            fontFamily: "var(--font-geist-mono), monospace",
-            fontSize: "0.8rem",
-            color: "rgb(209,213,219)",
-            overflowX: "auto",
-            margin: 0,
-          }}
-        >
-          {currentConfig}
-        </pre>
-        <button
-          onClick={handleCopy}
-          style={{
-            position: "absolute",
-            top: "0.5rem",
-            right: "0.5rem",
-            padding: "0.25rem 0.75rem",
-            background: copied ? "rgba(16,185,129,0.3)" : "rgba(99,102,241,0.3)",
-            border: `1px solid ${copied ? "rgba(16,185,129,0.5)" : "rgba(99,102,241,0.5)"}`,
-            borderRadius: "0.375rem",
-            color: copied ? "rgb(110,231,183)" : "rgb(165,180,252)",
-            fontSize: "0.75rem",
-            fontWeight: 600,
-            cursor: "pointer",
-            transition: "all 0.2s",
-          }}
-        >
-          {copied ? "คัดลอกแล้ว ✓" : "คัดลอก"}
-        </button>
-      </div>
-
-      <p style={{ fontSize: "0.7rem", color: "rgb(251,191,36)", marginTop: "0.5rem" }}>
-        {configMode === "docker"
-          ? "* ใช้ host.docker.internal แทน localhost เพราะ OpenClaw อยู่คนละ container"
-          : "* ใช้ localhost ได้เลย เพราะ OpenClaw รันบนเครื่องเดียวกัน"}
-      </p>
-      <p style={{ fontSize: "0.7rem", color: "rgb(156,163,175)", marginTop: "0.25rem" }}>
-        หลังรันคำสั่ง OpenClaw จะตั้งค่า provider ให้อัตโนมัติ (api: openai-completions, contextWindow: 131072)
-      </p>
-
-      <div style={{ marginTop: "1rem" }}>
-        <p style={{ fontSize: "0.75rem", color: "rgb(107,114,128)", marginBottom: "0.5rem", fontWeight: 600 }}>
-          โมเดลพิเศษ:
-        </p>
-        <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-          {[
-            { id: "auto",           desc: "เลือกตัวดีสุดอัตโนมัติ" },
-            { id: "bcproxy/fast",   desc: "เร็วที่สุด" },
-            { id: "bcproxy/tools",  desc: "รองรับ tool calling" },
-            { id: "bcproxy/thai",   desc: "เก่งภาษาไทย" },
-          ].map((m) => (
-            <div key={m.id} style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-              <code style={{ fontSize: "0.75rem", color: "rgb(129,140,248)", fontFamily: "var(--font-geist-mono), monospace", minWidth: "10rem" }}>
-                {m.id}
-              </code>
-              <span style={{ fontSize: "0.75rem", color: "rgb(156,163,175)" }}>— {m.desc}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
+import { ComplaintPanel } from "../components/ComplaintPanel";
+import { RoutingLearnPanel } from "../components/RoutingLearnPanel";
+import { TrendPanel } from "../components/TrendPanel";
+import { MascotScene } from "../components/MascotScene";
+import { InfraPanel } from "../components/InfraPanel";
+import { UptimePanel } from "../components/UptimePanel";
+import { CostOptimizerPanel } from "../components/CostOptimizerPanel";
+import { SchoolBellPanel } from "../components/SchoolBellPanel";
+import { ProviderLimitsPanel } from "../components/ProviderLimitsPanel";
+import { SemanticCachePanel } from "../components/SemanticCachePanel";
+import { WarmupPanel } from "../components/WarmupPanel";
+import { TeachersPanel } from "../components/TeachersPanel";
+import { CodegenPanel } from "../components/CodegenPanel";
+import { DevSuggestionsPanel } from "../components/DevSuggestionsPanel";
 
 // ─── Main Dashboard ────────────────────────────────────────────────────────────
 
@@ -188,7 +63,7 @@ export default function Dashboard() {
   const [triggering, setTriggering] = useState(false);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
   const [, setTick] = useState(0);
-  const [showGuide, setShowGuide] = useState(false);
+  const [showSetup, setShowSetup] = useState(false);
 
   interface GatewayLog {
     id: number;
@@ -203,6 +78,7 @@ export default function Dashboard() {
     createdAt: string;
   }
   const [gatewayLogs, setGatewayLogs] = useState<GatewayLog[]>([]);
+  const [logDetail, setLogDetail] = useState<GatewayLog | null>(null);
 
   interface CostProvider {
     id: string;
@@ -226,6 +102,17 @@ export default function Dashboard() {
   const [costSavings, setCostSavings] = useState<CostSavings | null>(null);
   const [analyticsData, setAnalyticsData] = useState<AnalyticsData | null>(null);
 
+  interface ProviderStatus {
+    provider: string;
+    envVar: string;
+    hasKey: boolean;
+    noKeyRequired: boolean;
+    modelCount: number;
+    availableCount: number;
+    status: "active" | "no_key" | "no_models" | "error";
+  }
+  const [providerStatuses, setProviderStatuses] = useState<ProviderStatus[]>([]);
+
   // Scroll to top on mount
   useEffect(() => {
     window.scrollTo(0, 0);
@@ -239,18 +126,20 @@ export default function Dashboard() {
 
   const fetchAll = useCallback(async () => {
     try {
-      const [s, m, l, cs, an] = await Promise.all([
+      const [s, m, l, cs, an, ps] = await Promise.all([
         fetch("/api/status").then((r) => r.json()),
         fetch("/api/models").then((r) => r.json()),
         fetch("/api/leaderboard").then((r) => r.json()),
         fetch("/api/cost-savings").then((r) => r.json()).catch(() => null),
         fetch("/api/analytics").then((r) => r.json()).catch(() => null),
+        fetch("/api/providers").then((r) => r.json()).catch(() => []),
       ]);
       setStatusData(s);
       setModels(Array.isArray(m) ? m : []);
       setLeaderboard(Array.isArray(l) ? l : []);
       if (cs) setCostSavings(cs);
       if (an) setAnalyticsData(an);
+      if (Array.isArray(ps)) setProviderStatuses(ps);
       setLastRefresh(new Date());
     } catch (err) {
       console.error("fetch error", err);
@@ -315,7 +204,6 @@ export default function Dashboard() {
   const stepBadge: Record<string, string> = {
     scan:      "bg-blue-500/20 text-blue-300 border-blue-500/30",
     health:    "bg-emerald-500/20 text-emerald-300 border-emerald-500/30",
-    benchmark: "bg-indigo-500/20 text-indigo-300 border-indigo-500/30",
     worker:    "bg-gray-500/20 text-gray-300 border-gray-500/30",
   };
 
@@ -330,63 +218,200 @@ export default function Dashboard() {
 
       {/* ── Sticky Nav ─────────────────────────────────────────────────────── */}
       <nav className="sticky top-0 z-50 border-b border-white/5 glass">
-        <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4 sm:px-6">
-          <div className="flex items-center gap-3">
-            <div className="relative">
+        <div className="w-full px-2 sm:px-3">
+          {/* Row 1: Logo + actions */}
+          <div className="flex h-12 items-center justify-between">
+            <div className="flex items-center gap-3">
               <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-indigo-500 to-cyan-500 flex items-center justify-center shadow-lg animate-glow-pulse">
                 <span className="text-xs font-black text-white">BC</span>
               </div>
+              <span className="font-bold text-white tracking-tight">SMLGateway</span>
+              <span className="hidden sm:inline text-xs text-gray-500 border border-gray-800 rounded px-2 py-0.5">
+                AI Gateway
+              </span>
             </div>
-            <span className="font-bold text-white tracking-tight">BCProxyAI</span>
-            <span className="hidden sm:inline text-xs text-gray-500 border border-gray-800 rounded px-2 py-0.5">
-              AI Gateway
-            </span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowSetup(true)}
+                className="px-3 py-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 transition-colors text-xs"
+                title="ตั้งค่า API Key"
+              >
+                <svg className="h-4 w-4 inline mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+                Setup
+              </button>
+              <a
+                href="/guide"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3 py-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 transition-colors text-xs"
+                title="คู่มือการใช้งาน (เปิด tab ใหม่)"
+              >
+                <svg className="h-4 w-4 inline mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+                </svg>
+                คู่มือ
+              </a>
+              <a
+                href="https://github.com/jaturapornchai/sml-gateway"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="p-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 transition-colors"
+                title="GitHub"
+              >
+                <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M12 0C5.374 0 0 5.373 0 12c0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23A11.509 11.509 0 0112 5.803c1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576C20.566 21.797 24 17.3 24 12c0-6.627-5.373-12-12-12z"/>
+                </svg>
+              </a>
+            </div>
           </div>
-          <div className="flex items-center gap-1 text-xs">
+          {/* Row 2: Nav links — wrappable */}
+          <div className="flex flex-wrap gap-1 pb-2">
             {[
-              { id: "status",     label: "ภาพรวม" },
-              { id: "rankings",   label: "อันดับ" },
-              { id: "speed-race", label: "แข่งความเร็ว" },
-              { id: "analytics",  label: "สถิติ" },
-              { id: "all-models", label: "รายชื่อโมเดล" },
-              { id: "chat",       label: "ทดลองแชท" },
-              { id: "gateway-logs", label: "Gateway Log" },
-              { id: "logs",       label: "ประวัติระบบ" },
+              { id: "gateway-logs",  icon: "\u{1F4DD}", label: "สมุดจดงาน" },
+              { id: "codegen",       icon: "\u{1F4BE}", label: "โค้ดระบบ" },
+              { id: "dev-suggestions", icon: "\u{1F4A1}", label: "คำแนะนำ Dev" },
+              { id: "infra",         icon: "\u{1F3D7}", label: "โครงสร้าง" },
+              { id: "status",        icon: "\u{1F3EB}", label: "ครูใหญ่" },
+              { id: "teachers",      icon: "\u{1F3EB}", label: "คณะครู" },
+              { id: "limits",        icon: "\u{1F4CA}", label: "โควต้า" },
+              { id: "cache",         icon: "\u{1F9E0}", label: "แคช" },
+              { id: "warmup",        icon: "\u{1F525}", label: "อุ่นเครื่อง" },
+              { id: "providers",     icon: "\u{1F50C}", label: "ผู้ให้บริการ" },
+              { id: "rankings",      icon: "\u{1F3C6}", label: "ผลงาน" },
+              { id: "speed-race",    icon: "\u{1F3C1}", label: "วิ่งแข่ง" },
+              { id: "analytics",     icon: "\u{1F4CA}", label: "สมุดพก" },
+              { id: "all-models",    icon: "\u{1F393}", label: "นักเรียน" },
+              { id: "chat",          icon: "\u{1F4AC}", label: "แชท" },
+              { id: "smart-routing", icon: "\u{1F9E0}", label: "จัดห้อง" },
+              { id: "trend",         icon: "\u{1F4C8}", label: "พัฒนาการ" },
+              { id: "uptime",        icon: "\u{1F4CB}", label: "ขาด/ลา" },
+              { id: "cost-opt",      icon: "\u{1F4B0}", label: "ค่าเทอม" },
+              { id: "school-bell",   icon: "\u{1F514}", label: "ระฆัง" },
+              { id: "complaints",    icon: "\u26A0\uFE0F",  label: "ร้องเรียน" },
+              { id: "logs",          icon: "\u{1F4D3}", label: "บันทึกครู" },
             ].map((link) => (
               <a
                 key={link.id}
                 href={`#${link.id}`}
-                className="px-3 py-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 transition-colors"
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs text-gray-400 hover:text-white hover:bg-white/8 border border-transparent hover:border-white/10 transition-all"
               >
-                {link.label}
+                <span>{link.icon}</span>
+                <span>{link.label}</span>
               </a>
             ))}
-            <button
-              onClick={() => setShowGuide(true)}
-              className="ml-2 px-3 py-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 transition-colors"
-              title="คู่มือการใช้งาน"
-            >
-              <svg className="h-4 w-4 inline mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
-              </svg>
-              คู่มือ
-            </button>
-            <a
-              href="https://github.com/jaturapornchai/bcproxyai"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="p-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 transition-colors"
-              title="GitHub"
-            >
-              <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M12 0C5.374 0 0 5.373 0 12c0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23A11.509 11.509 0 0112 5.803c1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576C20.566 21.797 24 17.3 24 12c0-6.627-5.373-12-12-12z"/>
-              </svg>
-            </a>
           </div>
         </div>
       </nav>
 
-      <div className="mx-auto max-w-7xl px-4 sm:px-6 py-8 space-y-16">
+      <div className="w-full px-2 sm:px-3 py-3 space-y-3">
+
+        {/* ── Live Mascot Theater (data-driven from gateway logs) ───────── */}
+        <MascotScene />
+
+        {/* ── Gateway Config — moved to /guide page ──────────────────────── */}
+
+        {/* ── Gateway Logs (top of dashboard, wide + big font) ──────────── */}
+        <section id="gateway-logs" className="animate-fade-in-up stagger-0">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-2xl">📝</span>
+            <span className="font-black text-white text-3xl">สมุดจดงาน</span>
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/30 text-sm text-emerald-400">
+              <span className="relative flex h-2 w-2">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
+              </span>
+              LIVE
+            </span>
+            <span className="text-sm text-gray-400">{gatewayLogs.length} หน้า</span>
+          </div>
+
+          <div className="glass rounded-lg overflow-hidden">
+            <div className="overflow-x-auto">
+              {gatewayLogs.length === 0 ? (
+                <div className="px-4 py-8 text-center text-gray-600 text-base">ยังไม่มีเด็กมาส่งการบ้าน</div>
+              ) : (
+                <table className="w-full text-base">
+                  <thead className="bg-gray-900/95 backdrop-blur">
+                    <tr className="border-b border-white/10 text-gray-400 text-sm uppercase">
+                      <th className="px-2 py-1 text-left">เวลา</th>
+                      <th className="px-2 py-1 text-left">สถานะ</th>
+                      <th className="px-2 py-1 text-left">Request</th>
+                      <th className="px-2 py-1 text-left">Resolved</th>
+                      <th className="px-2 py-1 text-left">Provider</th>
+                      <th className="px-2 py-1 text-right">Latency</th>
+                      <th className="px-2 py-1 text-left">ข้อความ</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/5">
+                    {gatewayLogs.map((log) => {
+                      const raw = log.createdAt.includes("Z") || log.createdAt.includes("+") ? log.createdAt : log.createdAt + "Z";
+                      const dt = new Date(raw);
+                      const timeStr = dt.toLocaleString("th-TH", { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, hour12: false, month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+                      const isOk = log.status >= 200 && log.status < 300;
+                      return (
+                        <tr key={log.id} className="hover:bg-white/5">
+                          <td className="px-2 py-1 text-gray-400 whitespace-nowrap font-mono">{timeStr}</td>
+                          <td className="px-2 py-1">
+                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-base font-bold ${
+                              isOk ? "bg-emerald-500/20 text-emerald-300" : "bg-red-500/20 text-red-300"
+                            }`}>
+                              {isOk ? "✓" : "✗"} {log.status}
+                            </span>
+                          </td>
+                          <td className="px-2 py-1 text-indigo-300 font-mono">{log.requestModel}</td>
+                          <td className="px-2 py-1 text-gray-200 font-mono truncate max-w-[260px]">{log.resolvedModel ?? "—"}</td>
+                          <td className="px-2 py-1">
+                            {log.provider ? <ProviderBadge provider={log.provider} /> : <span className="text-gray-600">—</span>}
+                          </td>
+                          <td className="px-2 py-1 text-right text-gray-300 font-mono">{fmtMs(log.latencyMs)}</td>
+                          <td className="px-2 py-1 text-gray-300 truncate max-w-[480px]">
+                            <button
+                              className="text-left hover:text-white transition-colors cursor-pointer truncate max-w-full"
+                              onClick={() => setLogDetail(log)}
+                            >
+                              {log.error ? (
+                                <span className="text-red-400">{log.error.slice(0, 120)}</span>
+                              ) : (
+                                <span>{parseUserMsg(log.userMessage)?.slice(0, 100) ?? "—"}</span>
+                              )}
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        </section>
+
+        {/* ── Code Generation Log (moved to top — after gateway logs) ──── */}
+        <section id="codegen" className="animate-fade-in-up stagger-0">
+          <CodegenPanel />
+        </section>
+
+        {/* ── Dev Suggestions (things AI can't fix — human dev needs to) ── */}
+        <section id="dev-suggestions" className="animate-fade-in-up stagger-0">
+          <DevSuggestionsPanel />
+        </section>
+
+        {/* ── Infrastructure Monitoring ────────────────────────────────── */}
+        <section id="infra" className="animate-fade-in-up stagger-0">
+          <div className="flex items-center gap-3 mb-4">
+            <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-500/20 text-indigo-400">
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+              </svg>
+            </span>
+            <span className="font-bold text-white text-2xl">โครงสร้างระบบ</span>
+            <span className="text-xs text-gray-400 ml-1">Postgres · Valkey · Replicas · Rate Limit</span>
+          </div>
+          <InfraPanel />
+        </section>
 
         {/* ── Section 1: Header + Worker Status ──────────────────────────── */}
         <section id="status" className="animate-fade-in-up">
@@ -397,14 +422,14 @@ export default function Dashboard() {
                 <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-indigo-400 opacity-75" />
                 <span className="relative inline-flex h-2 w-2 rounded-full bg-indigo-400" />
               </span>
-              Live Dashboard
+              ห้องเรียน AI กำลังเปิดสอน
             </div>
             <h1 className="text-5xl sm:text-6xl font-extrabold tracking-tight text-white mb-3">
               <span className="bg-gradient-to-r from-indigo-400 via-purple-400 to-cyan-400 bg-clip-text text-transparent animate-gradient">
-                BCProxyAI
+                SMLGateway
               </span>
             </h1>
-            <p className="text-gray-400 text-lg">Smart AI Gateway — เลือก model ฟรีที่ดีที่สุดให้อัตโนมัติ</p>
+            <p className="text-gray-400 text-lg">โรงเรียน AI — คัดเด็กเก่งฟรีให้ทำงานแทนคุณ 🏫</p>
           </div>
 
           {/* Worker Status Card */}
@@ -422,22 +447,28 @@ export default function Dashboard() {
                 </div>
                 <div>
                   <div className="flex items-center gap-2 mb-1">
-                    <span className="font-bold text-white text-lg">Worker</span>
+                    <span className="font-bold text-white text-lg">ครูใหญ่</span>
                     <span className={`text-sm px-2 py-0.5 rounded-full font-medium ${
                       workerStatus === "running" ? "bg-yellow-500/20 text-yellow-300" :
                       workerStatus === "idle"    ? "bg-indigo-500/20 text-indigo-300" :
                                                   "bg-red-500/20 text-red-300"
                     }`}>
-                      {workerStatus === "running" ? "🟡 กำลังทำงาน" :
-                       workerStatus === "idle"    ? "🟢 ทำงานปกติ" :
-                                                   "🔴 หยุด"}
+                      {workerStatus === "running" ? "🟡 กำลังตรวจการบ้าน" :
+                       workerStatus === "idle"    ? "🟢 นั่งเฝ้าห้อง" :
+                                                   "🔴 ไปพักเบรก"}
                     </span>
                   </div>
                   <div className="flex flex-col gap-1 text-xs text-gray-500">
                     <div className="flex gap-4">
-                      <span>ทำงานล่าสุด: <span className="text-gray-300">{fmtTime(statusData?.worker.lastRun ?? null)}</span></span>
-                      <span>ครั้งถัดไป: <span className="text-gray-300">{fmtTime(statusData?.worker.nextRun ?? null)}</span></span>
+                      <span>เช็คชื่อล่าสุด: <span className="text-gray-300">{fmtTime(statusData?.worker.lastRun ?? null)}</span></span>
+                      <span>เช็คชื่อถัดไป: <span className="text-gray-300">{fmtTime(statusData?.worker.nextRun ?? null)}</span></span>
                     </div>
+                    {statusData?.worker.judgeModel && (
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-gray-600">ตรวจด้วย:</span>
+                        <span className="text-cyan-400 font-mono">{statusData.worker.judgeModel}</span>
+                      </div>
+                    )}
                     <div className="flex items-center gap-3 flex-wrap">
                       {statusData?.worker.nextRun && workerStatus !== "running" && (
                         <div className="flex items-center gap-1.5">
@@ -445,10 +476,6 @@ export default function Dashboard() {
                           <span className="text-indigo-300 font-medium">{fmtCountdown(statusData.worker.nextRun)}</span>
                         </div>
                       )}
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-amber-400">📝</span>
-                        <span className="text-amber-300">คุมสอบ: <span className="font-medium">DeepSeek Chat</span></span>
-                      </div>
                     </div>
                   </div>
                 </div>
@@ -474,14 +501,13 @@ export default function Dashboard() {
                       <path strokeLinecap="round" strokeLinejoin="round" d="M5.636 18.364a9 9 0 010-12.728m12.728 0a9 9 0 010 12.728M12 8v4l2 2" />
                     </svg>
                   )}
-                  รันตอนนี้
+                  สั่งเช็คชื่อเลย!
                 </button>
               </div>
             </div>
           </div>
 
-          {/* Gateway Config */}
-          <GatewayConfigCard />
+          {/* Gateway Config — ย้ายไปเป็น section แยก #gateway-config */}
 
           {/* Cost Savings Card */}
           {costSavings && costSavings.totalTokens > 0 && (
@@ -489,7 +515,7 @@ export default function Dashboard() {
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-2">
                   <span className="text-lg">💰</span>
-                  <span className="font-bold text-white text-lg">เทียบต้นทุน</span>
+                  <span className="font-bold text-white text-lg">ใบเสร็จค่าเทอม</span>
                 </div>
                 <div className="flex items-center gap-3 text-xs text-gray-500">
                   <span>สะสม {costSavings.totalRequests.toLocaleString()} requests</span>
@@ -516,7 +542,7 @@ export default function Dashboard() {
                   </div>
                 ))}
                 <div className="glass rounded-lg p-3 text-center border border-emerald-500/30 bg-emerald-500/5">
-                  <div className="text-xs text-emerald-400 mb-1">BCProxyAI</div>
+                  <div className="text-xs text-emerald-400 mb-1">SMLGateway</div>
                   <div className="text-lg font-bold text-emerald-300">$0.00</div>
                   <div className="text-xs text-emerald-500">ฟรี!</div>
                   <div className="text-[10px] text-emerald-600 mt-1">$0/$0 /1M</div>
@@ -543,40 +569,125 @@ export default function Dashboard() {
           <StatsCards stats={stats} loading={loading} />
         </section>
 
-        {/* ── Model Changes Alert ─────────────────────────────────────────── */}
+        {/* ── Teacher Hierarchy ───────────────────────────────────────── */}
+        <section id="teachers" className="animate-fade-in-up stagger-1">
+          <TeachersPanel />
+        </section>
+
+        {/* ── Provider Limits (TPM/TPD) ──────────────────────────────── */}
+        <section id="limits" className="animate-fade-in-up stagger-1">
+          <ProviderLimitsPanel />
+        </section>
+
+        {/* ── Semantic Cache Stats ───────────────────────────────────── */}
+        <section id="cache" className="animate-fade-in-up stagger-1">
+          <SemanticCachePanel />
+        </section>
+
+        {/* ── Warmup Worker Stats ────────────────────────────────────── */}
+        <section id="warmup" className="animate-fade-in-up stagger-1">
+          <WarmupPanel />
+        </section>
+
+        {/* ── Provider Status — ทุก provider ──────────────────────────── */}
+        <section id="providers" className="animate-fade-in-up stagger-1">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-2xl font-bold text-white flex items-center gap-3">
+              <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-cyan-500/20 text-cyan-400">
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+              </span>
+              ผู้ให้บริการทั้งหมด
+            </h2>
+            <span className="text-sm text-gray-500">
+              {providerStatuses.filter(p => p.status === "active").length}/{providerStatuses.length} ใช้งานได้
+            </span>
+          </div>
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3">
+            {providerStatuses.map((p) => {
+              const c = PROVIDER_COLORS[p.provider] ?? { text: "text-gray-300", bg: "bg-gray-700/40", border: "border-gray-600/40", glow: "rgba(156,163,175,0.5)" };
+              const statusConfig = ({
+                active:    { icon: "\u2705", label: `${p.availableCount}/${p.modelCount} models`, border: "border-emerald-500/30", bg: "bg-emerald-500/5" },
+                no_key:    { icon: "\u{1F511}", label: "ยังไม่มี Key", border: "border-amber-500/30", bg: "bg-amber-500/5" },
+                no_models: { icon: "\u23F3", label: "มี key — รอ scan", border: "border-cyan-500/30", bg: "bg-cyan-500/5" },
+                error:     { icon: "\u{1F6A8}", label: `${p.modelCount} models (offline)`, border: "border-red-500/30", bg: "bg-red-500/5" },
+                disabled:  { icon: "\u{1F6AB}", label: "ปิดใช้งานเอง", border: "border-gray-500/30", bg: "bg-gray-500/5" },
+              } as Record<string, { icon: string; label: string; border: string; bg: string }>)[p.status]
+                ?? { icon: "?", label: p.status, border: "border-gray-500/30", bg: "bg-gray-500/5" };
+
+              return (
+                <div
+                  key={p.provider}
+                  className={`glass rounded-xl p-4 border ${statusConfig.border} ${statusConfig.bg} hover:scale-[1.02] transition-transform cursor-pointer`}
+                  onClick={() => { if (p.status !== "active") setShowSetup(true); }}
+                >
+                  <div className="flex items-center gap-2 mb-2">
+                    <ProviderBadge provider={p.provider} />
+                    <span className="text-sm">{statusConfig.icon}</span>
+                  </div>
+                  <div className={`text-sm font-semibold capitalize ${c.text} mb-1`}>{p.provider}</div>
+                  <div className="text-xs text-gray-500">{statusConfig.label}</div>
+                  {p.status === "no_key" && (
+                    <div className="mt-2 text-[11px] text-amber-300 font-medium">
+                      {"\u2699\uFE0F"} กดเพื่อตั้งค่า
+                    </div>
+                  )}
+                  {p.status === "error" && (
+                    <div className="mt-2 text-[11px] text-red-300 font-medium">
+                      มี key แล้ว — model offline
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+
+        {/* ── Model Changes Alert — แบบโรงเรียน ────────────────────────── */}
         {statusData?.modelChanges && (
-          (statusData.modelChanges.new.length > 0 || statusData.modelChanges.missing.length > 0 || statusData.modelChanges.warning.length > 0) && (
+          (statusData.modelChanges.new.length > 0 || statusData.modelChanges.missing.length > 0 || statusData.modelChanges.warning.length > 0 || (statusData.modelChanges.expelled?.length ?? 0) > 0) && (
             <section className="animate-fade-in-up space-y-3">
-              {/* โมเดลใหม่ */}
+              {/* นักเรียนใหม่ย้ายมา */}
               {statusData.modelChanges.new.length > 0 && (
                 <div className="glass rounded-2xl p-4 border border-emerald-500/30 bg-emerald-500/5">
                   <div className="flex items-center gap-2 mb-3">
-                    <span className="text-lg">🆕</span>
-                    <span className="font-bold text-emerald-400">โมเดลใหม่ ({statusData.modelChanges.new.length})</span>
-                    <span className="text-xs text-gray-500">ภายใน 24 ชม.</span>
+                    <span className="text-lg">🎒</span>
+                    <span className="font-bold text-emerald-400">นักเรียนใหม่ย้ายมา! ({statusData.modelChanges.new.length})</span>
+                    <span className="text-xs text-gray-500">ภายใน 24 ชม. — ยินดีต้อนรับ!</span>
                   </div>
                   <div className="flex flex-wrap gap-2">
                     {statusData.modelChanges.new.map((m) => (
-                      <span key={m.id} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-sm text-emerald-300">
-                        <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+                      <span key={m.id} className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm hover:scale-105 transition-transform cursor-default ${
+                        m.checked
+                          ? "bg-emerald-500/15 border border-emerald-500/30 text-emerald-300"
+                          : "bg-gray-500/10 border border-gray-500/20 text-gray-400"
+                      }`}>
+                        {m.checked ? (
+                          <span className="h-2 w-2 rounded-full bg-emerald-400" title="ตรวจสุขภาพแล้ว" />
+                        ) : (
+                          <span className="h-2 w-2 rounded-full bg-gray-500 animate-pulse" title="รอตรวจสุขภาพ" />
+                        )}
                         {m.name}
-                        <span className="text-xs text-emerald-500/60">({m.provider})</span>
+                        <span className={`text-xs ${m.checked ? "text-emerald-500/60" : "text-gray-600"}`}>({m.provider})</span>
+                        {m.checked && <span className="text-[10px] text-emerald-500/70">✓</span>}
                       </span>
                     ))}
                   </div>
                 </div>
               )}
-              {/* โมเดลหายชั่วคราว */}
+              {/* โดดเรียน */}
               {statusData.modelChanges.warning.length > 0 && (
                 <div className="glass rounded-2xl p-4 border border-amber-500/30 bg-amber-500/5">
                   <div className="flex items-center gap-2 mb-3">
-                    <span className="text-lg">⚠️</span>
-                    <span className="font-bold text-amber-400">หายชั่วคราว ({statusData.modelChanges.warning.length})</span>
-                    <span className="text-xs text-gray-500">ไม่เจอ 2-48 ชม. อาจกลับมา</span>
+                    <span className="text-lg">🏃</span>
+                    <span className="font-bold text-amber-400">โดดเรียน! ({statusData.modelChanges.warning.length})</span>
+                    <span className="text-xs text-gray-500">หายไป 2-48 ชม. — อาจแอบไปนอนหลับ</span>
                   </div>
                   <div className="flex flex-wrap gap-2">
                     {statusData.modelChanges.warning.map((m) => (
-                      <span key={m.id} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-sm text-amber-300">
+                      <span key={m.id} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-sm text-amber-300 hover:scale-105 transition-transform cursor-default">
+                        <span className="text-xs">💤</span>
                         {m.name}
                         <span className="text-xs text-amber-500/60">({m.provider})</span>
                       </span>
@@ -584,17 +695,18 @@ export default function Dashboard() {
                   </div>
                 </div>
               )}
-              {/* โมเดลหายถาวร */}
+              {/* ลาออกจากโรงเรียน (2-7 วัน) */}
               {statusData.modelChanges.missing.length > 0 && (
                 <div className="glass rounded-2xl p-4 border border-red-500/30 bg-red-500/5">
                   <div className="flex items-center gap-2 mb-3">
-                    <span className="text-lg">💀</span>
-                    <span className="font-bold text-red-400">หายถาวร ({statusData.modelChanges.missing.length})</span>
-                    <span className="text-xs text-gray-500">ไม่เจอเกิน 48 ชม.</span>
+                    <span className="text-lg">🪦</span>
+                    <span className="font-bold text-red-400">ลาออกจากโรงเรียน ({statusData.modelChanges.missing.length})</span>
+                    <span className="text-xs text-gray-500">หายไป 2-7 วัน — ยังมีหวังกลับมา</span>
                   </div>
                   <div className="flex flex-wrap gap-2">
                     {statusData.modelChanges.missing.map((m) => (
-                      <span key={m.id} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-500/10 border border-red-500/20 text-sm text-red-400 line-through opacity-70">
+                      <span key={m.id} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-500/10 border border-red-500/20 text-sm text-red-400 line-through opacity-60 hover:opacity-100 transition-opacity cursor-default">
+                        <span className="text-xs">👋</span>
                         {m.name}
                         <span className="text-xs text-red-500/60">({m.provider})</span>
                       </span>
@@ -602,6 +714,48 @@ export default function Dashboard() {
                   </div>
                 </div>
               )}
+              {/* โดนไล่ออก (>7 วัน) — แสดงเสมอแม้ว่าง เพื่อให้รู้ว่ามี bucket นี้ */}
+              <div className="glass rounded-2xl p-4 border border-rose-700/40 bg-gradient-to-br from-rose-950/40 to-black/60">
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="text-lg animate-shake">⛔</span>
+                  <span className="font-bold text-rose-500">
+                    โดนไล่ออก! ({statusData.modelChanges.expelled?.length ?? 0})
+                  </span>
+                  <span className="text-xs text-gray-500">
+                    หายเกิน 7 วัน — ต้องสมัครเรียนใหม่ถึงจะกลับมาได้
+                  </span>
+                </div>
+                {(statusData.modelChanges.expelled?.length ?? 0) === 0 ? (
+                  <div className="text-xs text-gray-600 italic px-1">
+                    🎉 ยังไม่มีนักเรียนโดนไล่ออก — ทุกคนยังมาเรียนสม่ำเสมอ
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {statusData.modelChanges.expelled?.map((m) => {
+                      const lastSeen = m.lastSeen ? new Date(m.lastSeen) : null;
+                      const daysAgo = lastSeen
+                        ? Math.floor((Date.now() - lastSeen.getTime()) / (1000 * 60 * 60 * 24))
+                        : null;
+                      return (
+                        <span
+                          key={m.id}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-950/50 border border-rose-700/40 text-sm text-rose-400 line-through opacity-50 hover:opacity-90 transition-all grayscale hover:grayscale-0 cursor-default"
+                          title={`หายไป ${daysAgo ?? "?"} วัน`}
+                        >
+                          <span className="text-xs">🚷</span>
+                          {m.name}
+                          <span className="text-xs text-rose-600/70">({m.provider})</span>
+                          {daysAgo !== null && (
+                            <span className="text-[10px] text-rose-700/80 font-mono">
+                              -{daysAgo}d
+                            </span>
+                          )}
+                        </span>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </section>
           )
         )}
@@ -615,9 +769,9 @@ export default function Dashboard() {
                   <path strokeLinecap="round" strokeLinejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
                 </svg>
               </span>
-              อันดับโมเดล
+              ผลงาน — ใครเก่งสุด?
             </h2>
-            <span className="text-sm text-gray-500">{leaderboard.length} โมเดลมีคะแนน</span>
+            <span className="text-sm text-gray-500">{leaderboard.length} โมเดล</span>
           </div>
 
           {loading ? (
@@ -627,7 +781,7 @@ export default function Dashboard() {
           ) : leaderboard.length === 0 ? (
             <div className="glass rounded-2xl p-12 text-center text-gray-500">
               <div className="text-5xl mb-3">🏆</div>
-              <p>ยังไม่มีผล Benchmark — กด &quot;รันตอนนี้&quot; เพื่อเริ่ม</p>
+              <p>ยังไม่มีข้อมูล — กด &quot;สั่งเช็คชื่อเลย!&quot; เพื่อเริ่มสแกน</p>
             </div>
           ) : (
             <div className="glass rounded-2xl overflow-hidden">
@@ -638,12 +792,36 @@ export default function Dashboard() {
                     <th className="px-4 py-3 text-left">ชื่อโมเดล</th>
                     <th className="px-3 py-3 text-left hidden sm:table-cell">ผู้ให้บริการ</th>
                     <th className="px-4 py-3 text-left">คะแนน</th>
+                    <th className="px-3 py-3 text-left hidden lg:table-cell">ความถนัด</th>
                     <th className="px-4 py-3 text-right hidden md:table-cell">ความเร็ว</th>
                     <th className="px-4 py-3 text-right hidden lg:table-cell">ขนาด</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/5">
-                  {leaderboard.map((entry, i) => (
+                  {leaderboard.map((entry, i) => {
+                    // Category badge colors
+                    const catColors: Record<string, string> = {
+                      thai: "bg-emerald-500/20 text-emerald-300",
+                      code: "bg-blue-500/20 text-blue-300",
+                      math: "bg-purple-500/20 text-purple-300",
+                      instruction: "bg-cyan-500/20 text-cyan-300",
+                      creative: "bg-pink-500/20 text-pink-300",
+                      knowledge: "bg-amber-500/20 text-amber-300",
+                      vision: "bg-violet-500/20 text-violet-300",
+                      audio: "bg-rose-500/20 text-rose-300",
+                    };
+                    const catEmoji: Record<string, string> = {
+                      thai: "\u0E44\u0E17\u0E22", code: "</>", math: "\u03C0",
+                      instruction: "\u2611", creative: "\u270D", knowledge: "\u{1F4D6}",
+                      vision: "\u{1F441}", audio: "\u{1F3B5}",
+                    };
+                    // Top 3 categories sorted by score
+                    const cats = entry.categories ? Object.entries(entry.categories)
+                      .filter(([, s]) => s > 0)
+                      .sort((a, b) => b[1] - a[1])
+                      .slice(0, 4) : [];
+
+                    return (
                     <tr key={entry.modelId} className="hover:bg-white/3 transition-colors group">
                       <td className="px-4 py-4 text-sm font-bold">
                         {i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : (
@@ -669,7 +847,21 @@ export default function Dashboard() {
                           </div>
                           <span className="text-sm font-bold text-indigo-300 w-12 text-right">{entry.percentage}%</span>
                         </div>
-                        <div className="text-xs text-gray-600 mt-0.5">{entry.totalScore}/{entry.maxScore} คะแนน</div>
+                        <div className="text-xs text-gray-600 mt-0.5">{entry.questionsAnswered} ข้อ</div>
+                      </td>
+                      <td className="px-3 py-4 hidden lg:table-cell">
+                        <div className="flex flex-wrap gap-1 max-w-[200px]">
+                          {cats.map(([cat, score]) => (
+                            <span key={cat} className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${catColors[cat] ?? "bg-gray-500/20 text-gray-300"}`}>
+                              {catEmoji[cat] ?? cat} {score.toFixed(0)}
+                            </span>
+                          ))}
+                          {entry.supportsVision && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-violet-500/20 text-violet-300">
+                              👁
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="px-4 py-4 text-right hidden md:table-cell">
                         <span className="text-sm text-gray-400">{fmtMs(entry.avgLatencyMs)}</span>
@@ -680,7 +872,8 @@ export default function Dashboard() {
                         </span>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -710,85 +903,95 @@ export default function Dashboard() {
                 <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
               </svg>
             </span>
-            <h2 className="text-2xl font-bold text-white">แชทกับโมเดล</h2>
+            <h2 className="text-2xl font-bold text-white">แชท</h2>
           </div>
           <ChatPanel availableModels={availableModels} />
         </section>
 
-        {/* ── Section 6: Gateway Logs ──────────────────────────────────── */}
-        <section id="gateway-logs" className="animate-fade-in-up stagger-5">
+        {/* ── Section: Smart Auto-Routing ───────────────────────────────── */}
+        <section id="smart-routing" className="animate-fade-in-up stagger-5">
           <div className="flex items-center gap-3 mb-4">
-            <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-purple-500/20 text-purple-400">
+            <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-500/20 text-indigo-400">
               <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
               </svg>
             </span>
-            <span className="font-bold text-white text-2xl">Gateway Log</span>
-            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-xs text-emerald-400">
-              <span className="relative flex h-2 w-2">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-                <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
-              </span>
-              LIVE
-            </span>
-            <span className="text-xs text-gray-500">{gatewayLogs.length} รายการ</span>
+            <span className="font-bold text-white text-2xl">จัดห้องเรียนอัตโนมัติ</span>
+            <span className="text-xs text-gray-400 ml-1">ครูเลือกเด็กเก่งให้ตามวิชา</span>
           </div>
-
-          <div className="glass rounded-2xl overflow-hidden">
-            <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
-              {gatewayLogs.length === 0 ? (
-                <div className="px-4 py-8 text-center text-gray-600">ยังไม่มี request เข้า Gateway</div>
-              ) : (
-                <table className="w-full text-xs">
-                  <thead className="sticky top-0 bg-gray-900/90 backdrop-blur">
-                    <tr className="border-b border-white/10 text-gray-500">
-                      <th className="px-3 py-2 text-left">เวลา</th>
-                      <th className="px-3 py-2 text-left">สถานะ</th>
-                      <th className="px-3 py-2 text-left">Request Model</th>
-                      <th className="px-3 py-2 text-left">Resolved</th>
-                      <th className="px-3 py-2 text-left">Provider</th>
-                      <th className="px-3 py-2 text-right">Latency</th>
-                      <th className="px-3 py-2 text-left">ข้อความ</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-white/5">
-                    {gatewayLogs.map((log) => {
-                      const raw = log.createdAt.includes("Z") || log.createdAt.includes("+") ? log.createdAt : log.createdAt + "Z";
-                      const dt = new Date(raw);
-                      const timeStr = dt.toLocaleString("th-TH", { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, hour12: false, month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
-                      const isOk = log.status >= 200 && log.status < 300;
-                      return (
-                        <tr key={log.id} className="hover:bg-white/3">
-                          <td className="px-3 py-2 text-gray-500 whitespace-nowrap">{timeStr}</td>
-                          <td className="px-3 py-2">
-                            <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-bold ${
-                              isOk ? "bg-emerald-500/20 text-emerald-300" : "bg-red-500/20 text-red-300"
-                            }`}>
-                              {isOk ? "✓" : "✗"} {log.status}
-                            </span>
-                          </td>
-                          <td className="px-3 py-2 text-indigo-300 font-mono">{log.requestModel}</td>
-                          <td className="px-3 py-2 text-gray-300 font-mono truncate max-w-[150px]">{log.resolvedModel ?? "—"}</td>
-                          <td className="px-3 py-2">
-                            {log.provider && <ProviderBadge provider={log.provider} />}
-                          </td>
-                          <td className="px-3 py-2 text-right text-gray-400">{fmtMs(log.latencyMs)}</td>
-                          <td className="px-3 py-2 text-gray-500 truncate max-w-[200px]">
-                            {log.error ? (
-                              <span className="text-red-400" title={log.error}>{log.error.slice(0, 80)}</span>
-                            ) : (
-                              <span title={log.userMessage ?? ""}>{log.userMessage?.slice(0, 60) ?? "—"}</span>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          </div>
+          <RoutingLearnPanel />
         </section>
+
+        {/* ── Section: Model Performance Trend ─────────────────────────────── */}
+        <section id="trend" className="animate-fade-in-up stagger-5">
+          <div className="flex items-center gap-3 mb-4">
+            <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-cyan-500/20 text-cyan-400">
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+              </svg>
+            </span>
+            <span className="font-bold text-white text-2xl">พัฒนาการนักเรียน</span>
+            <span className="text-xs text-gray-400 ml-1">เก่งขึ้นหรือแย่ลง?</span>
+          </div>
+          <TrendPanel />
+        </section>
+
+        {/* ── Section: Provider Uptime ─────────────────────────────────────── */}
+        <section id="uptime" className="animate-fade-in-up stagger-5">
+          <div className="flex items-center gap-3 mb-4">
+            <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-500/20 text-emerald-400">
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+              </svg>
+            </span>
+            <span className="font-bold text-white text-2xl">สถิติขาด/ลา/มาสาย</span>
+            <span className="text-xs text-gray-400 ml-1">Provider ไหนขยัน ไหนขี้เกียจ</span>
+          </div>
+          <UptimePanel />
+        </section>
+
+        {/* ── Section: Token Cost Optimizer ─────────────────────────────────── */}
+        <section id="cost-opt" className="animate-fade-in-up stagger-5">
+          <div className="flex items-center gap-3 mb-4">
+            <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-amber-500/20 text-amber-400">
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </span>
+            <span className="font-bold text-white text-2xl">ค่าเทอม</span>
+            <span className="text-xs text-gray-400 ml-1">ใช้ไปเท่าไหร่ ประหยัดได้อีก!</span>
+          </div>
+          <CostOptimizerPanel />
+        </section>
+
+        {/* ── Section: School Bell ─────────────────────────────────────────── */}
+        <section id="school-bell" className="animate-fade-in-up stagger-5">
+          <div className="flex items-center gap-3 mb-4">
+            <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-yellow-500/20 text-yellow-400">
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+              </svg>
+            </span>
+            <span className="font-bold text-white text-2xl">ระฆังโรงเรียน</span>
+            <span className="text-xs text-gray-400 ml-1">School Bell Alert</span>
+          </div>
+          <SchoolBellPanel />
+        </section>
+
+        {/* ── Section: Complaint System ─────────────────────────────────── */}
+        <section id="complaints" className="animate-fade-in-up stagger-5">
+          <div className="flex items-center gap-3 mb-4">
+            <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-red-500/20 text-red-400">
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+              </svg>
+            </span>
+            <span className="font-bold text-white text-2xl">ใบร้องเรียน — เด็กไหนเกเร?</span>
+            <span className="text-xs text-gray-400 ml-1">ฟ้องครูเลย!</span>
+          </div>
+          <ComplaintPanel />
+        </section>
+
 
         {/* ── Section 7: บันทึกการทำงาน ─────────────────────────────────── */}
         <section id="logs" className="animate-fade-in-up stagger-5">
@@ -798,14 +1001,14 @@ export default function Dashboard() {
                 <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
               </svg>
             </span>
-            <span className="font-bold text-white text-2xl">บันทึกการทำงาน</span>
+            <span className="font-bold text-white text-2xl">บันทึกประจำวันของครู</span>
             <span className="text-xs text-gray-500">{logs.length} รายการล่าสุด</span>
           </div>
 
           <div className="glass rounded-2xl overflow-hidden">
-            <div className="font-mono text-xs divide-y divide-white/5 max-h-[500px] overflow-y-auto">
+            <div className="font-mono text-xs divide-y divide-white/5">
               {logs.length === 0 ? (
-                <div className="px-4 py-8 text-center text-gray-600">ยังไม่มีบันทึก</div>
+                <div className="px-4 py-8 text-center text-gray-600">ครูยังไม่ได้จดอะไร</div>
               ) : (
                 logs.map((log, i) => {
                   const rawLog = log.createdAt.includes("Z") || log.createdAt.includes("+") ? log.createdAt : log.createdAt + "Z";
@@ -830,13 +1033,61 @@ export default function Dashboard() {
 
         {/* ── Footer ──────────────────────────────────────────────────────── */}
         <footer className="text-center text-xs text-gray-700 border-t border-white/5 pt-8 pb-4">
-          BCProxyAI — Smart AI Gateway สำหรับ <span className="text-gray-500">OpenClaw</span> และ <span className="text-gray-500">HiClaw</span>
+          SMLGateway — โรงเรียน AI ที่คัดแต่เด็กเก่ง 🏫 สำหรับ <span className="text-gray-500">OpenClaw</span> และ <span className="text-gray-500">HiClaw</span>
         </footer>
 
       </div>
 
       {/* ── Guide Modal ──────────────────────────────────────────────────── */}
-      {showGuide && <GuideModal onClose={() => setShowGuide(false)} />}
+
+      {/* ── Setup Modal ──────────────────────────────────────────────────── */}
+      <SetupModal open={showSetup} onClose={() => setShowSetup(false)} />
+
+      {/* ── Log Detail Modal ─────────────────────────────────────────────── */}
+      {logDetail && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setLogDetail(null)}>
+          <div className="bg-gray-900 border border-white/10 rounded-2xl shadow-2xl max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-6 py-4 border-b border-white/10">
+              <div className="flex items-center gap-3">
+                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-bold ${
+                  logDetail.status >= 200 && logDetail.status < 300 ? "bg-emerald-500/20 text-emerald-300" : "bg-red-500/20 text-red-300"
+                }`}>
+                  {logDetail.status}
+                </span>
+                {logDetail.provider && <ProviderBadge provider={logDetail.provider} />}
+                <span className="text-gray-500 text-xs">{fmtMs(logDetail.latencyMs)}</span>
+              </div>
+              <button onClick={() => setLogDetail(null)} className="text-gray-500 hover:text-white text-lg cursor-pointer">✕</button>
+            </div>
+            <div className="px-6 py-4 space-y-4">
+              <div>
+                <div className="text-xs text-gray-500 mb-1">Model</div>
+                <div className="text-sm text-indigo-300 font-mono">{logDetail.requestModel} → {logDetail.resolvedModel ?? "—"}</div>
+              </div>
+              {logDetail.error && (
+                <div>
+                  <div className="text-xs text-gray-500 mb-1">Error</div>
+                  <div className="text-sm text-red-400 bg-red-500/10 rounded-lg p-3 font-mono whitespace-pre-wrap break-all">{logDetail.error}</div>
+                </div>
+              )}
+              <div>
+                <div className="text-xs text-gray-500 mb-1">ข้อความผู้ใช้</div>
+                <div className="text-sm text-gray-300 bg-white/5 rounded-lg p-3 whitespace-pre-wrap break-all">
+                  {parseUserMsg(logDetail.userMessage) ?? "—"}
+                </div>
+              </div>
+              {logDetail.assistantMessage && (
+                <div>
+                  <div className="text-xs text-gray-500 mb-1">คำตอบ AI</div>
+                  <div className="text-sm text-gray-300 bg-white/5 rounded-lg p-3 whitespace-pre-wrap break-all">
+                    {logDetail.assistantMessage}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

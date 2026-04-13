@@ -1,9 +1,9 @@
 {
   "mcpServers": {
-    "bcproxyai": {
+    "sml-gateway": {
       "command": "node",
       "args": ["dist/mcp/server.js"],
-      "cwd": "<path-to-bcproxyai>",
+      "cwd": "<path-to-sml-gateway>",
       "env": {
         "OPENROUTER_API_KEY": "<your-openrouter-api-key>",
         "KILO_API_KEY": "",

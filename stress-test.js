@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * BCProxyAI Stress Test
+ * SMLGateway Stress Test
  * ส่ง requests แบบ concurrent ผ่าน Gateway เหมือนที่ OpenClaw เรียก
  */
 
@@ -151,7 +151,7 @@ function printReport() {
 
   console.log("\n");
   console.log("═══════════════════════════════════════════════════════");
-  console.log("  BCProxyAI Stress Test Report");
+  console.log("  SMLGateway Stress Test Report");
   console.log("═══════════════════════════════════════════════════════");
   console.log("");
   console.log(`  Total Requests:    ${stats.total}`);
@@ -199,7 +199,7 @@ function printReport() {
 }
 
 async function main() {
-  console.log("BCProxyAI Stress Test");
+  console.log("SMLGateway Stress Test");
   console.log(`  Target: ${BASE_URL}`);
   console.log(`  Requests: ${TOTAL_REQUESTS} | Concurrency: ${CONCURRENCY}`);
   console.log(`  Models: ${MODELS.join(", ")}`);

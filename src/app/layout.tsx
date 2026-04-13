@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "BCProxyAI — AI Gateway ฟรี",
+  title: "SMLGateway — AI Gateway ฟรี",
   description: "Smart AI Gateway — เลือก model ฟรีที่ดีที่สุดให้อัตโนมัติ สำหรับ OpenClaw และ HiClaw",
 };
 

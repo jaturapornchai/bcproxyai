@@ -18,6 +18,7 @@ import { isProviderEnabledSync } from "@/lib/provider-toggle";
 import { canFitRequest, parseLimitHeaders, parseLimitError, recordLimit } from "@/lib/provider-limits";
 import { recordOutcomeLearning, recordFailStreak, canHandleTokens, getCategoryWinners, detectCategory, isModelUnhealthyForCategory } from "@/lib/learning";
 import { upstreamAgent } from "@/lib/upstream-agent";
+import { repairToolCallArguments, hasStructurallyBrokenToolCalls } from "@/lib/tool-repair";
 
 // ── Category mapping: routing category → exam question category ──
 const ROUTING_TO_EXAM_CAT: Record<string, string> = {
@@ -801,6 +802,33 @@ async function isOllamaModelLoaded(modelId: string): Promise<boolean> {
   }
 }
 
+// ── Pattern B+: Retry with a tools-capable model ──
+interface ToolRetryResult { response: Response; provider: string; modelId: string; dbModelId: string; }
+
+async function retryWithToolsModel(
+  body: Record<string, unknown>,
+  caps: RequestCapabilities,
+  excludeModelId: string,
+  isStream: boolean
+): Promise<ToolRetryResult | null> {
+  const candidates = await getAvailableModels({ ...caps, hasTools: true });
+  const filtered = candidates.filter(c => c.model_id !== excludeModelId);
+  if (!filtered.length) {
+    console.log("[ToolRepair] No tools-capable models available for retry");
+    return null;
+  }
+  const pick = filtered[0];
+  console.log(`[ToolRepair] Retry with ${pick.provider}/${pick.model_id}`);
+
+  try {
+    const resp = await forwardToProvider(pick.provider, pick.model_id, body, isStream, AbortSignal.timeout(15_000));
+    return { response: resp, provider: pick.provider, modelId: pick.model_id, dbModelId: pick.id };
+  } catch (err) {
+    console.log(`[ToolRepair] Retry failed: ${String(err)}`);
+    return null;
+  }
+}
+
 function isRetryableStatus(status: number): boolean {
   return status === 413 || status === 429 || status === 410 || status >= 500;
 }
@@ -1527,6 +1555,45 @@ export async function POST(req: NextRequest) {
 
               const hasToolCalls = Array.isArray(firstMsg?.tool_calls) && (firstMsg!.tool_calls!.length > 0);
 
+              // ── Pattern B+: repair malformed tool_call arguments ──
+              if (hasToolCalls) {
+                const wasRepaired = repairToolCallArguments(json);
+                if (wasRepaired) {
+                  console.log(`[PatternB+] Repaired tool_call arguments for ${provider}/${actualModelId}`);
+                }
+              }
+
+              // ── Pattern B+: detect structurally broken tool_calls → retry with another model ──
+              if (hasToolCalls) {
+                const structCheck = hasStructurallyBrokenToolCalls(json);
+                if (structCheck.broken) {
+                  console.log(`[PatternB+] Structurally broken: ${structCheck.reason} — retrying`);
+                  const retryResult = await retryWithToolsModel(body, caps, actualModelId, false);
+                  if (retryResult && retryResult.response.ok) {
+                    try {
+                      const retryJson = await retryResult.response.json() as Record<string, unknown>;
+                      repairToolCallArguments(retryJson);
+                      const retryCheck = hasStructurallyBrokenToolCalls(retryJson);
+                      if (!retryCheck.broken) {
+                        console.log(`[PatternB+] Retry succeeded with ${retryResult.provider}/${retryResult.modelId}`);
+                        ensureChatCompletionFields(retryJson, retryResult.provider, retryResult.modelId);
+                        const retryHeaders = new Headers();
+                        retryHeaders.set("Content-Type", "application/json");
+                        retryHeaders.set("X-SMLGateway-Provider", retryResult.provider);
+                        retryHeaders.set("X-SMLGateway-Model", retryResult.modelId);
+                        retryHeaders.set("X-SMLGateway-ToolRepair", "retried");
+                        retryHeaders.set("Access-Control-Allow-Origin", "*");
+                        await logGateway(modelField, retryResult.modelId, retryResult.provider, 200, Date.now() - startTime,
+                          0, 0, null, userMsg, `[tool-repair-retry from ${provider}/${actualModelId}]`);
+                        return new Response(JSON.stringify(retryJson), { status: 200, headers: retryHeaders });
+                      }
+                    } catch { /* retry parse failed, continue with original */ }
+                  }
+                  console.log(`[PatternB+] Retry did not fix structural issue — returning original`);
+                }
+              }
+
+
               const badReason = isResponseBad(content, caps.hasTools, hasToolCalls);
               if (badReason) {
                 console.log(`[BAD-RESPONSE] ${provider}/${actualModelId} — ${badReason}: "${content.slice(0, 100)}"`);
@@ -1841,6 +1908,9 @@ async function buildProxiedResponse(
         }
       }
     }
+
+    // Pattern B+: repair tool_call arguments before numeric coercion
+    repairToolCallArguments(json);
 
     if (json.choices) {
       for (const choice of json.choices) {

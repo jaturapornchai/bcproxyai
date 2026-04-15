@@ -389,17 +389,19 @@ async function getAvailableModels(caps: RequestCapabilities, benchmarkCategory?:
 async function logGateway(
   requestModel: string, resolvedModel: string | null, provider: string | null,
   status: number, latencyMs: number, inputTokens: number, outputTokens: number,
-  error: string | null, userMessage: string | null, assistantMessage: string | null
+  error: string | null, userMessage: string | null, assistantMessage: string | null,
+  requestId: string | null = null, clientIp: string | null = null
 ) {
   try {
     const sql = getSqlClient();
     await sql`
       INSERT INTO gateway_logs (request_model, resolved_model, provider, status, latency_ms,
-        input_tokens, output_tokens, error, user_message, assistant_message)
+        input_tokens, output_tokens, error, user_message, assistant_message, request_id, client_ip)
       VALUES (
         ${requestModel}, ${resolvedModel}, ${provider}, ${status}, ${latencyMs},
         ${inputTokens}, ${outputTokens}, ${error},
-        ${userMessage?.slice(0, 500) ?? null}, ${assistantMessage?.slice(0, 500) ?? null}
+        ${userMessage?.slice(0, 500) ?? null}, ${assistantMessage?.slice(0, 500) ?? null},
+        ${requestId}, ${clientIp}
       )
     `;
   } catch {
@@ -898,6 +900,7 @@ export async function POST(req: NextRequest) {
       cacheHeaders.set("X-SMLGateway-Provider", cachedHit.provider);
       cacheHeaders.set("X-SMLGateway-Model", cachedHit.model);
       cacheHeaders.set("X-SMLGateway-Cache", "HIT");
+      cacheHeaders.set("X-SMLGateway-Request-Id", _reqId);
       if (softBackoff) cacheHeaders.set("X-Resceo-Backoff", "true");
       cacheHeaders.set("Access-Control-Allow-Origin", "*");
       const cacheBody = {
@@ -969,7 +972,8 @@ export async function POST(req: NextRequest) {
           await logGateway(
             "sml/consensus", best.model.model_id, best.model.provider, 200, totalLatency,
             usage?.prompt_tokens ?? 0, usage?.completion_tokens ?? 0, null, userMsg,
-            `[consensus: ${valid.map((v) => v.model.provider + "/" + v.model.model_id).join(", ")}] ${best.content.slice(0, 300)}`
+            `[consensus: ${valid.map((v) => v.model.provider + "/" + v.model.model_id).join(", ")}] ${best.content.slice(0, 300)}`,
+            _reqId, ip
           );
 
           const headers = new Headers();
@@ -977,6 +981,7 @@ export async function POST(req: NextRequest) {
           headers.set("X-SMLGateway-Provider", best.model.provider);
           headers.set("X-SMLGateway-Model", best.model.model_id);
           headers.set("X-SMLGateway-Consensus", valid.map((v) => `${v.model.provider}/${v.model.model_id}(${v.content.length}chars/${v.latency}ms)`).join(", "));
+          headers.set("X-SMLGateway-Request-Id", _reqId);
           if (softBackoff) headers.set("X-Resceo-Backoff", "true");
           headers.set("Access-Control-Allow-Origin", "*");
           return new Response(JSON.stringify(best.json), { status: 200, headers });
@@ -1003,7 +1008,7 @@ export async function POST(req: NextRequest) {
         return openAIError(response.status, { message: errText || `Provider ${provider} returned ${response.status}` });
       }
       console.log(`[RES:${_reqId}] ${response.status} | ${provider}/${modelId} | ${Date.now() - _reqTime}ms | direct`);
-      return buildProxiedResponse(response, provider!, modelId!, isStream, estInputTokens, softBackoff);
+      return buildProxiedResponse(response, provider!, modelId!, isStream, estInputTokens, softBackoff, _reqId);
     }
 
     // ---- Match by model string ----
@@ -1024,7 +1029,7 @@ export async function POST(req: NextRequest) {
         return openAIError(response.status, { message: errText || `Provider ${row.provider} returned ${response.status}` });
       }
       console.log(`[RES:${_reqId}] ${response.status} | ${row.provider}/${row.model_id} | ${Date.now() - _reqTime}ms | match`);
-      return buildProxiedResponse(response, row.provider, row.model_id, isStream, estInputTokens, softBackoff);
+      return buildProxiedResponse(response, row.provider, row.model_id, isStream, estInputTokens, softBackoff, _reqId);
     }
 
     // ---- Smart routing: auto / fast / tools / thai ----
@@ -1063,7 +1068,7 @@ export async function POST(req: NextRequest) {
     }
     if (finalCandidates.length === 0) {
       const reason = "ไม่มี model ที่ผ่านสอบ — รอ worker exam cycle";
-      await logGateway(modelField, null, null, 503, Date.now() - _reqTime, 0, 0, reason, extractUserMessage(body), null);
+      await logGateway(modelField, null, null, 503, Date.now() - _reqTime, 0, 0, reason, extractUserMessage(body), null, _reqId, ip);
       console.log(`[RES:${_reqId}] 503 | no passed models | ${reason}`);
       return openAIError(503, { message: reason });
     }
@@ -1189,6 +1194,62 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // ── Dev options: prefer / exclude / max_latency / strategy ─────────────
+    // From body.extra or X- headers (both supported, body wins)
+    // - prefer: string[] provider names → rank first
+    // - exclude: string[] provider names → drop
+    // - max_latency_ms: number → drop models whose avg_latency > limit
+    // - strategy: "fastest" | "strongest" | "cheapest" — preset optimization hints
+    const extra = (body as Record<string, unknown>).extra as Record<string, unknown> | undefined;
+    const parseCsv = (v: unknown): string[] =>
+      (typeof v === "string" ? v.split(",") : Array.isArray(v) ? (v as unknown[]).map(String) : [])
+        .map(s => s.trim().toLowerCase()).filter(Boolean);
+    const prefer = parseCsv(extra?.prefer ?? req.headers.get("x-smlgateway-prefer"));
+    const exclude = parseCsv(extra?.exclude ?? req.headers.get("x-smlgateway-exclude"));
+    const maxLatencyMs = Number(extra?.max_latency_ms ?? req.headers.get("x-smlgateway-max-latency") ?? 0);
+    const strategy = String(extra?.strategy ?? req.headers.get("x-smlgateway-strategy") ?? "").toLowerCase();
+
+    if (exclude.length > 0) {
+      const before = finalCandidates.length;
+      finalCandidates = finalCandidates.filter(c => !exclude.includes(c.provider.toLowerCase()));
+      console.log(`[DEV-EXCLUDE:${_reqId}] dropped ${before - finalCandidates.length} models from [${exclude.join(",")}]`);
+    }
+
+    if (maxLatencyMs > 0) {
+      const before = finalCandidates.length;
+      finalCandidates = finalCandidates.filter(c => (c.avg_latency ?? 0) === 0 || (c.avg_latency ?? 0) <= maxLatencyMs);
+      if (before - finalCandidates.length > 0) {
+        console.log(`[DEV-LAT:${_reqId}] dropped ${before - finalCandidates.length} models with avg_latency>${maxLatencyMs}ms`);
+      }
+    }
+
+    if (prefer.length > 0) {
+      const preferred = finalCandidates.filter(c => prefer.includes(c.provider.toLowerCase()));
+      const rest = finalCandidates.filter(c => !prefer.includes(c.provider.toLowerCase()));
+      finalCandidates = [...preferred, ...rest];
+      console.log(`[DEV-PREFER:${_reqId}] ranked ${preferred.length} preferred models first: [${prefer.join(",")}]`);
+    }
+
+    if (strategy === "fastest") {
+      // sort by avg_latency ASC (models with data first)
+      finalCandidates = [...finalCandidates].sort((a, b) => {
+        const al = a.avg_latency ?? Number.MAX_SAFE_INTEGER;
+        const bl = b.avg_latency ?? Number.MAX_SAFE_INTEGER;
+        return al - bl;
+      });
+      console.log(`[DEV-STRATEGY:${_reqId}] fastest — top: ${finalCandidates.slice(0,3).map(c => `${c.provider}/${c.model_id}(${c.avg_latency ?? "?"}ms)`).join(", ")}`);
+    } else if (strategy === "strongest") {
+      // prefer larger tier + bigger context
+      const tierRank: Record<string, number> = { xlarge: 4, large: 3, medium: 2, small: 1 };
+      finalCandidates = [...finalCandidates].sort((a, b) => {
+        const at = tierRank[a.tier] ?? 0;
+        const bt = tierRank[b.tier] ?? 0;
+        if (bt !== at) return bt - at;
+        return (b.context_length ?? 0) - (a.context_length ?? 0);
+      });
+      console.log(`[DEV-STRATEGY:${_reqId}] strongest — top: ${finalCandidates.slice(0,3).map(c => `${c.provider}/${c.model_id}(${c.tier}/${c.context_length})`).join(", ")}`);
+    }
+
     // ─── Provider-first selection ─────────────────────────────────────────
     // ขั้นตอน:
     //   1. ตัดทิ้ง model ที่เพิ่ง fail ติดกัน (isRecentlyDead)
@@ -1266,7 +1327,7 @@ export async function POST(req: NextRequest) {
           ? "ไม่มี tool-calling model พร้อมใช้งาน"
           : "ทุก model ติด cooldown หรือขาด API key";
       const latency = Date.now() - startTime;
-      await logGateway(modelField, null, null, 503, latency, 0, 0, reason, userMsg, null);
+      await logGateway(modelField, null, null, 503, latency, 0, 0, reason, userMsg, null, _reqId, ip);
       console.log(`[RES:${_reqId}] 503 | no candidates | ${reason}`);
       return openAIError(503, { message: reason });
     }
@@ -1344,7 +1405,8 @@ export async function POST(req: NextRequest) {
             }
             const usage = json.usage;
             await logGateway(modelField, winner.model_id, winner.provider, 200, latency,
-              usage?.prompt_tokens ?? 0, usage?.completion_tokens ?? 0, null, userMsg, content?.slice(0, 500) ?? null);
+              usage?.prompt_tokens ?? 0, usage?.completion_tokens ?? 0, null, userMsg, content?.slice(0, 500) ?? null,
+              _reqId, ip);
             await recordRoutingResult(winner.id, winner.provider, promptCategory, true, latency);
             recordOutcome(winner.provider, winner.model_id, true, latency);
             recordOutcomeLearning({
@@ -1372,6 +1434,7 @@ export async function POST(req: NextRequest) {
             hedgeHeaders.set("X-SMLGateway-Provider", winner.provider);
             hedgeHeaders.set("X-SMLGateway-Model", winner.model_id);
             hedgeHeaders.set("X-SMLGateway-Hedge", "true");
+            hedgeHeaders.set("X-SMLGateway-Request-Id", _reqId);
             if (softBackoff) hedgeHeaders.set("X-Resceo-Backoff", "true");
             hedgeHeaders.set("Access-Control-Allow-Origin", "*");
             const _hpt = usage?.prompt_tokens ?? 0; const _hct = usage?.completion_tokens ?? 0;
@@ -1552,7 +1615,8 @@ export async function POST(req: NextRequest) {
 
               const usage = json.usage;
               await logGateway(modelField, actualModelId, provider, 200, latency,
-                usage?.prompt_tokens ?? 0, usage?.completion_tokens ?? 0, null, userMsg, content?.slice(0, 500) ?? null);
+                usage?.prompt_tokens ?? 0, usage?.completion_tokens ?? 0, null, userMsg, content?.slice(0, 500) ?? null,
+                _reqId, ip);
               await recordRoutingResult(dbModelId, provider, promptCategory, true, latency);
               recordOutcome(provider, actualModelId, true, latency);
               recordOutcomeLearning({
@@ -1605,7 +1669,7 @@ export async function POST(req: NextRequest) {
             }
           }
 
-          const proxied = await buildProxiedResponse(response, provider, actualModelId, isStream, estInputTokens, softBackoff);
+          const proxied = await buildProxiedResponse(response, provider, actualModelId, isStream, estInputTokens, softBackoff, _reqId);
           const streamLatency = Date.now() - startTime;
           await recordRoutingResult(dbModelId, provider, promptCategory, true, streamLatency);
           recordOutcome(provider, actualModelId, true, streamLatency);
@@ -1615,7 +1679,7 @@ export async function POST(req: NextRequest) {
             recordOutcome(provider, actualModelId, false, streamLatency);
             console.log(`[SLOW-COOLDOWN] ${provider}/${actualModelId} ${streamLatency}ms > ${slowThrStream}ms → 2min cooldown`);
           }
-          await logGateway(modelField, actualModelId, provider, 200, streamLatency, 0, 0, null, userMsg, "[stream]");
+          await logGateway(modelField, actualModelId, provider, 200, streamLatency, 0, 0, null, userMsg, "[stream]", _reqId, ip);
           recordBattleEvent(outcomeFromLatency(streamLatency, true)).catch(() => { /* cosmetic */ });
           console.log(`[RES:${_reqId}] 200 | ${provider}/${actualModelId} | ${streamLatency}ms | stream | Q:"${_reqMsg}"`);
           return proxied;
@@ -1759,9 +1823,9 @@ export async function POST(req: NextRequest) {
           if (response.ok) {
             const streamLatency = Date.now() - startTime;
             recordOutcome(provider, actualModelId, true, streamLatency);
-            await logGateway(modelField, actualModelId, provider, 200, streamLatency, 0, 0, null, userMsg, "[relaxed-retry]");
+            await logGateway(modelField, actualModelId, provider, 200, streamLatency, 0, 0, null, userMsg, "[relaxed-retry]", _reqId, ip);
             console.log(`[RES:${_reqId}] 200 | ${provider}/${actualModelId} | ${streamLatency}ms | relaxed-retry stream | Q:"${_reqMsg}"`);
-            return buildProxiedResponse(response, provider, actualModelId, isStream, estInputTokens, softBackoff);
+            return buildProxiedResponse(response, provider, actualModelId, isStream, estInputTokens, softBackoff, _reqId);
           }
           const errText = await response.text().catch(() => "");
           lastError = `${provider}/${actualModelId}: HTTP ${response.status}`;
@@ -1792,7 +1856,7 @@ export async function POST(req: NextRequest) {
       const reasonSummary = skipReasons.slice(0, 3).join(", ");
       lastError = `ไม่มี candidate ผ่าน filter — skipped=${skipReasons.length} (${reasonSummary}${skipReasons.length > 3 ? "..." : ""})`;
     }
-    await logGateway(modelField, lastModelId, lastProvider, 503, latency, 0, 0, lastError.slice(0, 300), userMsg, null);
+    await logGateway(modelField, lastModelId, lastProvider, 503, latency, 0, 0, lastError.slice(0, 300), userMsg, null, _reqId, ip);
     recordBattleEvent("fail").catch(() => { /* cosmetic */ });
     console.log(`[RES:${_reqId}] 503 | ${triedProviders.size} tried ${blockedProviders.size} blocked ${skippedCandidates.length} skipped | ${latency}ms | Q:"${_reqMsg}" | ${lastError.slice(0, 150)}`);
     return openAIError(503, {
@@ -1810,12 +1874,14 @@ async function buildProxiedResponse(
   modelId: string,
   stream: boolean,
   estimatedInputTokens = 0,
-  softBackoff = false
+  softBackoff = false,
+  requestId: string | null = null
 ): Promise<Response> {
   const headers = new Headers();
   headers.set("Content-Type", upstream.headers.get("Content-Type") || "application/json");
   headers.set("X-SMLGateway-Provider", provider);
   headers.set("X-SMLGateway-Model", modelId);
+  if (requestId) headers.set("X-SMLGateway-Request-Id", requestId);
   if (softBackoff) headers.set("X-Resceo-Backoff", "true");
   headers.set("Access-Control-Allow-Origin", "*");
 

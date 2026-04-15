@@ -212,6 +212,12 @@ export async function runMigrations(): Promise<void> {
 
     await sql`CREATE INDEX IF NOT EXISTS idx_gateway_logs_created ON gateway_logs(created_at)`;
 
+    // Add request_id + client_ip for /v1/trace/:reqId + /api/my-stats endpoints
+    await sql`ALTER TABLE gateway_logs ADD COLUMN IF NOT EXISTS request_id TEXT`;
+    await sql`ALTER TABLE gateway_logs ADD COLUMN IF NOT EXISTS client_ip TEXT`;
+    await sql`CREATE INDEX IF NOT EXISTS idx_gateway_logs_req_id ON gateway_logs(request_id) WHERE request_id IS NOT NULL`;
+    await sql`CREATE INDEX IF NOT EXISTS idx_gateway_logs_client_ip ON gateway_logs(client_ip, created_at DESC) WHERE client_ip IS NOT NULL`;
+
     // ตารางจำ rate limit per provider/model จาก error message + header
     await sql`
       CREATE TABLE IF NOT EXISTS provider_limits (

@@ -232,6 +232,17 @@ Model:       sml/auto  (หรือเลือก model เฉพาะ)
   GET /v1/models/search?category=code&supports_tools=1&top=5
   GET /v1/models/search?category=vision&supports_vision=1&top=3
 
+Dev tools เพิ่มเติม:
+  POST /v1/compare                   ยิง prompt ไปหลาย model พร้อมกัน (max 10)
+  GET  /v1/trace/:reqId              ดู log ของ request เดิม
+  GET  /api/my-stats?window=24h      สรุปใช้งานของ IP ตัวเอง (p50/p95/p99)
+
+Dev controls (headers):
+  X-SMLGateway-Prefer:   groq,cerebras       ดัน provider ขึ้นบน
+  X-SMLGateway-Exclude:  mistral              ตัดออก
+  X-SMLGateway-Max-Latency: 3000              กรอง model ที่ช้าเกิน
+  X-SMLGateway-Strategy: fastest|strongest    หรือใช้ preset
+
 ตัวอย่าง config ใน framework ต่างๆ:
   Vercel AI SDK:  createOpenAI({ baseURL, apiKey: "dummy" })
   LiteLLM:        model="openai/sml/auto", api_base="..."

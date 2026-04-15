@@ -148,6 +148,9 @@ Trigger manual: `curl -X POST http://localhost:3334/api/worker`
 | `POST /v1/chat/completions` | OpenAI-compatible chat (text / vision / tools / stream) |
 | `GET  /v1/models` | รายการโมเดลทั้งหมด (รวม virtual models) |
 | `GET  /v1/models/search` | ค้นหา/จัดอันดับ model ตาม category, context, tools ฯลฯ |
+| `POST /v1/compare` | ยิง prompt เดียวไปหลาย model พร้อมกัน (สูงสุด 10) |
+| `GET  /v1/trace/:reqId` | ดู log ของ request เดิม (จาก `X-SMLGateway-Request-Id` header) |
+| `GET  /api/my-stats?window=24h` | สรุปการใช้งานของ IP ตัวเอง (p50/p95/p99 + top models) |
 | `POST /v1/completions` | legacy completion endpoint |
 | `POST /v1/embeddings` | embeddings (proxy ไป provider ที่รองรับ) |
 | `GET  /api/status` | health summary + counts |
@@ -163,11 +166,30 @@ Trigger manual: `curl -X POST http://localhost:3334/api/worker`
 
 **Response headers ของ `/v1/chat/completions`:**
 ```
-X-SMLGateway-Model       ชื่อ model ที่ตอบจริง
-X-SMLGateway-Provider    provider ที่ตอบ
-X-SMLGateway-Latency-Ms  latency ms
-X-SMLGateway-Cache       HIT / MISS
-X-SMLGateway-Hedge       winner index (0-2)
+X-SMLGateway-Model        ชื่อ model ที่ตอบจริง
+X-SMLGateway-Provider     provider ที่ตอบ
+X-SMLGateway-Request-Id   ใช้กับ /v1/trace/:reqId เพื่อดูรายละเอียด
+X-SMLGateway-Cache        HIT (ถ้าดึงจาก semantic cache)
+X-SMLGateway-Hedge        true (ถ้าชนะจาก hedge)
+X-SMLGateway-Consensus    รายชื่อ model ถ้าใช้ sml/consensus
+X-Resceo-Backoff          true ถ้าเรียกถี่เกิน soft limit (ไม่บล็อก — hint)
+```
+
+**Dev controls ของ `/v1/chat/completions`** (ผ่าน `extra` body field หรือ `X-SMLGateway-*` headers):
+```
+prefer:          ["groq","cerebras"]   ดัน provider เหล่านี้ขึ้นบน (CSV ก็ได้)
+exclude:         ["mistral"]           ตัดทิ้ง
+max_latency_ms:  3000                  กรอง model ที่ avg_latency เกินนี้
+strategy:        "fastest"             เรียง latency asc
+strategy:        "strongest"           เรียง tier + context desc
+```
+ตัวอย่าง curl:
+```bash
+curl -X POST http://localhost:3334/v1/chat/completions \
+  -H "X-SMLGateway-Prefer: groq,cerebras" \
+  -H "X-SMLGateway-Strategy: fastest" \
+  -H "X-SMLGateway-Max-Latency: 3000" \
+  -d '{"model":"sml/auto","messages":[...]}'
 ```
 
 ---

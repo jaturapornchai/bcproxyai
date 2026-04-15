@@ -4,7 +4,7 @@ import { openAIError, toOpenAIModelObject, unixNow } from "@/lib/openai-compat";
 
 export const dynamic = "force-dynamic";
 
-// Virtual sml/* models
+// Virtual sml/* models — must match entries in /v1/models/route.ts
 const VIRTUAL_MODELS: Record<string, { description: string }> = {
   "sml/auto": { description: "Best available model (highest benchmark score)" },
   "sml/fast": { description: "Fastest model (lowest latency)" },
@@ -13,15 +13,29 @@ const VIRTUAL_MODELS: Record<string, { description: string }> = {
   "sml/consensus": { description: "Send to 3 models, pick best answer" },
 };
 
+/**
+ * GET /v1/models/:modelId
+ *
+ * Catch-all so multi-segment ids (e.g. "sml/tools", "groq/moonshotai/kimi-k2")
+ * resolve correctly. Next.js' single-segment [model] route would 404 with
+ * Next's default HTML page, breaking OpenAI SDK clients that pre-validate
+ * model existence.
+ */
 export async function GET(
   _req: NextRequest,
-  { params }: { params: Promise<{ model: string }> }
+  { params }: { params: Promise<{ model: string[] }> }
 ) {
   try {
-    const { model: modelParam } = await params;
-    const modelId = decodeURIComponent(modelParam);
+    const { model: segments } = await params;
+    const modelId = Array.isArray(segments)
+      ? segments.map(decodeURIComponent).join("/")
+      : decodeURIComponent(String(segments ?? ""));
 
-    // Check virtual models
+    if (!modelId) {
+      return openAIError(400, { message: "Model id required", param: "model" });
+    }
+
+    // Virtual models first
     if (VIRTUAL_MODELS[modelId]) {
       return NextResponse.json(
         toOpenAIModelObject(modelId, "sml", unixNow()),
@@ -29,11 +43,14 @@ export async function GET(
       );
     }
 
+    // Real models — lookup by model_id OR fully-qualified "provider/model_id"
     const sql = getSqlClient();
     const rows = await sql<{ provider: string; model_id: string; first_seen: Date | null }[]>`
       SELECT m.provider, m.model_id, m.first_seen
       FROM models m
-      WHERE m.model_id = ${modelId} OR (m.provider || '/' || m.model_id) = ${modelId}
+      WHERE m.model_id = ${modelId}
+         OR (m.provider || '/' || m.model_id) = ${modelId}
+         OR m.id = ${modelId}
       LIMIT 1
     `;
 

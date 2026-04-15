@@ -224,7 +224,13 @@ Model:       sml/auto  (หรือเลือก model เฉพาะ)
 รองรับ:
   POST /v1/chat/completions   — Chat (text, vision, tools, stream)
   GET  /v1/models              — รายชื่อ model ทั้งหมด
+  GET  /v1/models/search       — ค้นหา model ตาม category, context, tools, ฯลฯ
   POST /v1/embeddings          — Embeddings (provider ที่รองรับ)
+
+ตัวอย่างค้นหา model:
+  GET /v1/models/search?category=thai&min_context=200000&top=3
+  GET /v1/models/search?category=code&supports_tools=1&top=5
+  GET /v1/models/search?category=vision&supports_vision=1&top=3
 
 ตัวอย่าง config ใน framework ต่างๆ:
   Vercel AI SDK:  createOpenAI({ baseURL, apiKey: "dummy" })

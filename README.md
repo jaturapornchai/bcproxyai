@@ -147,6 +147,7 @@ Trigger manual: `curl -X POST http://localhost:3334/api/worker`
 |---|---|
 | `POST /v1/chat/completions` | OpenAI-compatible chat (text / vision / tools / stream) |
 | `GET  /v1/models` | รายการโมเดลทั้งหมด (รวม virtual models) |
+| `GET  /v1/models/search` | ค้นหา/จัดอันดับ model ตาม category, context, tools ฯลฯ |
 | `POST /v1/completions` | legacy completion endpoint |
 | `POST /v1/embeddings` | embeddings (proxy ไป provider ที่รองรับ) |
 | `GET  /api/status` | health summary + counts |

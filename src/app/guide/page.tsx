@@ -850,6 +850,22 @@ curl http://localhost:3334/v1/trace/5m3obi
             <li>ถ้า Docker: base URL เป็น <InlineCode>host.docker.internal:3334</InlineCode> ไหม?</li>
           </ul>
 
+          <SubTitle>404 model not found (sml/tools, groq/vendor/model)</SubTitle>
+          <P>
+            model ID ที่มี <InlineCode>/</InlineCode> เช่น <InlineCode>sml/tools</InlineCode> หรือ <InlineCode>groq/vendor/model</InlineCode>
+            ต้องใช้ได้ตามปกติ — ตรวจสอบได้เลย:
+          </P>
+          <Code>{`# virtual models (sml/auto, sml/fast, sml/tools, sml/thai, sml/consensus)
+curl http://localhost:3334/v1/models/sml/tools
+# → { "id": "sml/tools", "object": "model", ... }
+
+# provider/model format
+curl http://localhost:3334/v1/models/groq/llama-3.3-70b-versatile
+# → { "id": "groq/llama-3.3-70b-versatile", ... }
+
+# ถ้าได้ HTML หรือ 404 — ให้ rebuild container
+docker compose up -d --build sml-gateway`}</Code>
+
           <SubTitle>Error 413 (payload too large)</SubTitle>
           <P>
             เกิดเมื่อ context ที่ส่งใหญ่เกินกว่า model จะรับได้

@@ -26,6 +26,15 @@ export const PROVIDER_URLS: Record<string, string> = {
   zai: "https://api.z.ai/api/paas/v4/chat/completions",
   dashscope: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions",
   reka: "https://api.reka.ai/v1/chat/completions",
+  // ── เพิ่มเติม ──
+  deepseek: "https://api.deepseek.com/v1/chat/completions",
+  deepinfra: "https://api.deepinfra.com/v1/openai/chat/completions",
+  novita: "https://api.novita.ai/v3/openai/chat/completions",
+  monsterapi: "https://llm.monsterapi.ai/v1/chat/completions",
+  friendli: "https://api.friendli.ai/dedicated/v1/chat/completions",
+  xai: "https://api.x.ai/v1/chat/completions",
+  moonshot: "https://api.moonshot.ai/v1/chat/completions",
+  ai21: "https://api.ai21.com/studio/v1/chat/completions",
 };
 
 // Embedding endpoints (providers that support embeddings)
@@ -69,4 +78,12 @@ export const PROVIDER_LABELS: Record<string, string> = {
   zai: "Z.AI",
   dashscope: "Qwen",
   reka: "Reka",
+  deepseek: "DeepSeek",
+  deepinfra: "DeepInfra",
+  novita: "Novita",
+  monsterapi: "Monster",
+  friendli: "Friendli",
+  xai: "xAI",
+  moonshot: "Moonshot",
+  ai21: "AI21",
 };

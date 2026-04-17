@@ -9,11 +9,14 @@
 
 **Stateless** — gateway ไม่เก็บ conversation history / session memory. Client (OpenClaw, Aider, IDE plugin, ฯลฯ) เป็นคนจัดการ history เอง แล้วส่ง `messages[]` array มาทุก request ตามมาตรฐาน OpenAI API. ระบบมีแค่ `semantic_cache` (cache response ตาม embedding similarity) + routing memory (`live_score`, `fail_streak`, category winners) ซึ่งเป็น aggregate stat ไม่ผูกกับ user.
 
+**Auto-Discovery** — ทุก worker cycle (15 นาที) ระบบสแกน internet หา provider ใหม่จาก 3 แหล่ง: (1) OpenRouter `/api/v1/providers`, (2) HuggingFace inference list, (3) URL pattern probe (Anthropic, OpenAI, Perplexity, Anyscale, Lepton, OctoAI, Volcano Ark, Writer, Voyage, Lambda Labs, RunPod). Provider ที่พบใหม่ → บันทึกลง `provider_catalog` (status `pending`) + emit `event` + สร้าง `dev_suggestion` ให้ Dev wire เข้า code (PROVIDER_URLS + ENV_MAP).
+
 ## สิ่งที่ Dev ได้ทันที
 
 | | |
 |---|---|
-| 🆓 Free | 21 providers ฟรี, 300+ models, ไม่มี token cost |
+| 🆓 Free | 30+ providers ฟรี, 300+ models, ไม่มี token cost |
+| 🌐 Auto-Discovery | สแกน OpenRouter/HuggingFace/URL pattern หา provider ใหม่ทุก 15 นาที |
 | ⚡ Fast | hedge top-3, warmup, semantic cache → p50 ~500ms |
 | 🎯 Smart routing | per-category teacher (thai/code/tools/vision/...) |
 | 🔄 Auto-fallback | provider ล่ม → สลับทันที, circuit breaker + cooldown |
@@ -110,6 +113,7 @@ Trigger manual: `curl -X POST http://localhost:3334/api/worker`
 | `model_category_scores` | คะแนนรายโมเดลต่อ 12 หมวด (code, thai, tools, vision, ...) |
 | `exam_attempts` / `exam_answers` | ผลสอบ + คอลัมน์ `exam_level` (primary/middle/high/university) |
 | `worker_state` | key-value config (เช่น `exam_level` ที่ใช้สอบรอบถัดไป) |
+| `provider_catalog` | registry ของ provider ที่ระบบรู้จัก (seed + auto-discovered จาก OpenRouter/HF/pattern) |
 | `gateway_logs` | log ทุก request (model, provider, latency, status) |
 | `health_logs` | ping ทุก cycle + cooldown_until |
 | `model_fail_streak` | fail streak + cooldown exponential |
@@ -205,6 +209,8 @@ Trigger manual: `curl -X POST http://localhost:3334/api/worker`
 | `GET  /api/exam-config` | active exam level + 4 ระดับ + ตัวอย่างข้อสอบ (`?includeQuestions=1&level=primary`) |
 | `POST /api/exam-config` | ตั้งระดับสอบ `{ "level": "primary"\|"middle"\|"high"\|"university" }` |
 | `POST /api/exam-reset` | ลบประวัติสอบทั้งหมด + trigger worker ให้สอบใหม่ทันที |
+| `GET  /api/provider-catalog` | รายการ provider ทั้งหมด (seed + discovered) + summary ตาม source |
+| `POST /api/provider-catalog` | trigger auto-discovery ทันที (สแกน OpenRouter, HF, URL pattern) |
 | `GET  /guide` | คู่มือเชื่อมต่อ (long-form page) |
 | `GET  /` | dashboard |
 

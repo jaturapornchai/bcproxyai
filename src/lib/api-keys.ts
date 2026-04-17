@@ -31,6 +31,14 @@ const ENV_MAP: Record<string, string> = {
   zai: "ZAI_API_KEY",
   dashscope: "DASHSCOPE_API_KEY",
   reka: "REKA_API_KEY",
+  deepseek: "DEEPSEEK_API_KEY",
+  deepinfra: "DEEPINFRA_API_KEY",
+  novita: "NOVITA_API_KEY",
+  monsterapi: "MONSTERAPI_API_KEY",
+  friendli: "FRIENDLI_API_KEY",
+  xai: "XAI_API_KEY",
+  moonshot: "MOONSHOT_API_KEY",
+  ai21: "AI21_API_KEY",
 };
 
 // Cache DB keys for 30s to avoid hitting DB on every request

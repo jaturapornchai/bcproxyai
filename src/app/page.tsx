@@ -53,6 +53,7 @@ import { TeachersPanel } from "../components/TeachersPanel";
 import { CodegenPanel } from "../components/CodegenPanel";
 import { DevSuggestionsPanel } from "../components/DevSuggestionsPanel";
 import { ExamLevelPanel } from "../components/ExamLevelPanel";
+import { ProviderCatalogPanel } from "../components/ProviderCatalogPanel";
 
 // ─── Main Dashboard ────────────────────────────────────────────────────────────
 
@@ -282,6 +283,7 @@ export default function Dashboard() {
               { id: "cache",         icon: "\u{1F9E0}", label: "แคช" },
               { id: "warmup",        icon: "\u{1F525}", label: "อุ่นเครื่อง" },
               { id: "providers",     icon: "\u{1F50C}", label: "ผู้ให้บริการ" },
+              { id: "provider-catalog", icon: "\u{1F310}", label: "Catalog" },
               { id: "rankings",      icon: "\u{1F3C6}", label: "ผลงาน" },
               { id: "speed-race",    icon: "\u{1F3C1}", label: "วิ่งแข่ง" },
               { id: "analytics",     icon: "\u{1F4CA}", label: "สมุดพก" },
@@ -609,6 +611,16 @@ export default function Dashboard() {
             <span className="text-xs text-gray-400 ml-1">ตั้งระดับความยาก · ดูข้อสอบ · สั่งสอบใหม่ทุกคน</span>
           </div>
           <ExamLevelPanel />
+        </section>
+
+        {/* ── Provider Catalog — Auto-Discovery ─────────────────────────── */}
+        <section id="provider-catalog" className="animate-fade-in-up stagger-1">
+          <div className="flex items-center gap-3 mb-3">
+            <span className="text-2xl">🌐</span>
+            <span className="font-bold text-white text-2xl">Catalog Provider</span>
+            <span className="text-xs text-gray-400 ml-1">ระบบค้นหา provider ใหม่จาก internet อัตโนมัติ</span>
+          </div>
+          <ProviderCatalogPanel />
         </section>
 
         {/* ── Teacher Hierarchy ───────────────────────────────────────── */}

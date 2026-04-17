@@ -143,6 +143,29 @@ export async function runMigrations(): Promise<void> {
     await sql`ALTER TABLE exam_attempts ADD COLUMN IF NOT EXISTS next_exam_at TIMESTAMPTZ`;
     await sql`ALTER TABLE exam_attempts ADD COLUMN IF NOT EXISTS consecutive_fails INT DEFAULT 0`;
     await sql`ALTER TABLE exam_attempts ADD COLUMN IF NOT EXISTS exam_level TEXT`;
+
+    // ─── Provider Catalog (Auto-Discovery) ──────────────────────────────────
+    // Registry ของ provider ที่ระบบรู้จัก — รวม seed จาก code + auto-discovered
+    // status: 'active' (มี code support), 'pending' (พบใหม่ ยังไม่ wire ใน code), 'failed' (ทดสอบไม่ผ่าน)
+    // source: 'seed' | 'openrouter' | 'huggingface' | 'pattern' | 'manual'
+    await sql`
+      CREATE TABLE IF NOT EXISTS provider_catalog (
+        name TEXT PRIMARY KEY,
+        label TEXT,
+        base_url TEXT NOT NULL,
+        env_var TEXT,
+        homepage TEXT,
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('active', 'pending', 'failed', 'paused')),
+        source TEXT NOT NULL DEFAULT 'manual',
+        notes TEXT,
+        free_tier BOOLEAN DEFAULT false,
+        last_probed_at TIMESTAMPTZ,
+        probe_status_code INT,
+        discovered_at TIMESTAMPTZ DEFAULT now(),
+        updated_at TIMESTAMPTZ DEFAULT now()
+      )
+    `;
+    await sql`CREATE INDEX IF NOT EXISTS idx_provider_catalog_status ON provider_catalog(status, source)`;
     await sql`
       CREATE TABLE IF NOT EXISTS discovered_questions (
         id BIGSERIAL PRIMARY KEY,

@@ -2,6 +2,7 @@ import { getSqlClient } from "@/lib/db/schema";
 import { scanModels } from "./scanner";
 import { checkHealth } from "./health";
 import { runExams } from "./exam";
+import { discoverProviders } from "./provider-discovery";
 import { appointTeachers } from "@/lib/teacher";
 import { acquireLeader, renewLeader, releaseLeader } from "./leader";
 import { startWarmup } from "./warmup";
@@ -9,6 +10,7 @@ import { startWarmup } from "./warmup";
 export { scanModels } from "./scanner";
 export { checkHealth } from "./health";
 export { runExams } from "./exam";
+export { discoverProviders } from "./provider-discovery";
 
 export interface WorkerStatus {
   status: "idle" | "running" | "error";
@@ -103,6 +105,19 @@ export async function runWorkerCycle(): Promise<void> {
   let scanResult = { found: 0, new: 0 };
   let healthResult = { checked: 0, available: 0, cooldown: 0 };
   let examResult: { examined: number; passed: number; failed: number; level: string } = { examined: 0, passed: 0, failed: 0, level: "university" };
+
+  // Step 0: Provider auto-discovery — ค้นหา provider ใหม่จาก internet ก่อน scan models
+  try {
+    await logWorker("worker", "Step 0: Discovering providers");
+    const disc = await discoverProviders();
+    if (disc.newFound > 0) {
+      await logWorker("worker", `🆕 พบ provider ใหม่ ${disc.newFound}: ${disc.newProviders.join(", ")}`, "success");
+    }
+  } catch (err) {
+    await logWorker("worker", `Step 0 (discovery) failed: ${err}`, "error");
+  }
+
+  await renewLeader();
 
   try {
     // Step 1: Scan

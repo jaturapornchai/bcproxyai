@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { getNextApiKey } from "@/lib/api-keys";
-import { PROVIDER_URLS } from "@/lib/providers";
+import { resolveProviderUrl } from "@/lib/provider-resolver";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +17,7 @@ export async function POST(req: NextRequest) {
       return new Response(JSON.stringify({ error: "Missing fields" }), { status: 400 });
     }
 
-    const url = PROVIDER_URLS[provider];
+    const url = resolveProviderUrl(provider);
     const apiKey = getNextApiKey(provider);
     if (!url) {
       return new Response(JSON.stringify({ error: `Unknown provider: ${provider}` }), { status: 400 });

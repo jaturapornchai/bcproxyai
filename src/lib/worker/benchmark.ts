@@ -1,10 +1,8 @@
 import { getSqlClient } from "@/lib/db/schema";
 import { getNextApiKey } from "@/lib/api-keys";
-import { PROVIDER_URLS } from "@/lib/providers";
+import { resolveProviderUrl } from "@/lib/provider-resolver";
 
-// DeepSeek as judge (cheap + reliable)
-const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY ?? "";
-const DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions";
+// DeepSeek as judge (cheap + reliable) — key resolved from DB at call time
 const DEEPSEEK_MODEL = "deepseek-chat";
 
 // Fallback judges if DeepSeek unavailable
@@ -140,7 +138,7 @@ export async function askModel(
   question: string,
   options?: { imageUrl?: string }
 ): Promise<{ answer: string; latency: number; error?: string }> {
-  const url = PROVIDER_URLS[provider];
+  const url = resolveProviderUrl(provider);
   if (!url) return { answer: "", latency: 0, error: "unknown provider" };
 
   const start = Date.now();
@@ -200,13 +198,14 @@ export async function judgeAnswer(
 ตอบ JSON เท่านั้น: {"score":N,"reasoning":"อธิบายสั้นๆ"}`;
 
   // Try DeepSeek first (cheap + reliable)
-  if (DEEPSEEK_API_KEY) {
+  const deepseekKey = getNextApiKey("deepseek");
+  if (deepseekKey) {
     try {
-      const res = await fetch(DEEPSEEK_URL, {
+      const res = await fetch(resolveProviderUrl("deepseek"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${DEEPSEEK_API_KEY}`,
+          Authorization: `Bearer ${deepseekKey}`,
         },
         body: JSON.stringify({
           model: DEEPSEEK_MODEL,
@@ -236,7 +235,7 @@ export async function judgeAnswer(
   // Fallback: free models from OpenRouter
   for (const judgeModel of FALLBACK_JUDGE_MODELS) {
     try {
-      const res = await fetch(PROVIDER_URLS.openrouter, {
+      const res = await fetch(resolveProviderUrl("openrouter"), {
         method: "POST",
         headers: buildHeaders("openrouter"),
         body: JSON.stringify({
@@ -311,7 +310,7 @@ export async function runBenchmarks(): Promise<{
 
   let totalQuestions = 0;
   let testedModels = 0;
-  let lastJudgeModel = DEEPSEEK_API_KEY ? DEEPSEEK_MODEL : FALLBACK_JUDGE_MODELS[0];
+  let lastJudgeModel = getNextApiKey("deepseek") ? DEEPSEEK_MODEL : FALLBACK_JUDGE_MODELS[0];
 
   const CONCURRENCY = 20;
   let idx = 0;

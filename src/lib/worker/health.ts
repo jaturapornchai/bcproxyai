@@ -1,6 +1,6 @@
 import { getSqlClient } from "@/lib/db/schema";
 import { getNextApiKey } from "@/lib/api-keys";
-import { PROVIDER_URLS } from "@/lib/providers";
+import { resolveProviderUrl } from "@/lib/provider-resolver";
 
 async function logWorker(step: string, message: string, level = "info") {
   try {
@@ -23,7 +23,7 @@ interface DbModel {
 export async function pingModel(
   model: DbModel
 ): Promise<{ status: string; latency: number; error?: string; isNonChat?: boolean }> {
-  const url = PROVIDER_URLS[model.provider];
+  const url = resolveProviderUrl(model.provider);
   if (!url) return { status: "error", latency: 0, error: "unknown provider" };
 
   const key = getNextApiKey(model.provider);
@@ -122,7 +122,7 @@ const TINY_PNG_BASE64 =
 export async function testVisionSupport(
   model: DbModel
 ): Promise<0 | 1 | -1> {
-  const url = PROVIDER_URLS[model.provider];
+  const url = resolveProviderUrl(model.provider);
   if (!url) return -1;
 
   const key = getNextApiKey(model.provider);
@@ -188,7 +188,7 @@ export async function testVisionSupport(
 export async function testToolSupport(
   model: DbModel
 ): Promise<0 | 1 | -1> {
-  const url = PROVIDER_URLS[model.provider];
+  const url = resolveProviderUrl(model.provider);
   if (!url) return -1;
 
   const key = getNextApiKey(model.provider);

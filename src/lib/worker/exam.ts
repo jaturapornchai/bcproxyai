@@ -10,7 +10,7 @@
  */
 import { getSqlClient } from "@/lib/db/schema";
 import { getNextApiKey } from "@/lib/api-keys";
-import { PROVIDER_URLS } from "@/lib/providers";
+import { resolveProviderUrl } from "@/lib/provider-resolver";
 import { computeNextExamAt, getLiveSuccessRate } from "@/lib/learning";
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
@@ -940,7 +940,7 @@ async function askModel(
   modelId: string,
   question: ExamQuestion
 ): Promise<AskResult> {
-  const url = PROVIDER_URLS[provider];
+  const url = resolveProviderUrl(provider);
   if (!url) return { answer: "", latency: 0, error: "unknown provider" };
 
   const apiKey = getNextApiKey(provider);

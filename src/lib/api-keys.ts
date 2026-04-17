@@ -1,45 +1,20 @@
-// API Key Rotation — round-robin + cooldown on 429
+/**
+ * API Key Rotation — round-robin + cooldown on 429
+ *
+ * **Source of truth: api_keys table in DB only.**
+ * (.env.local API key entries are ignored — set keys via Setup modal in dashboard.)
+ *
+ * Special cases:
+ *   - ollama: ไม่ต้อง key (default "ollama")
+ *   - pollinations: ไม่ต้อง key
+ */
 import { getSqlClient } from "@/lib/db/schema";
+import { getAllProviderNames } from "@/lib/provider-resolver";
+
+const NO_KEY_REQUIRED = new Set(["ollama", "pollinations"]);
 
 const keyIndexMap = new Map<string, number>();
 const cooldownMap = new Map<string, number>(); // "provider:key" -> cooldown until timestamp
-
-const ENV_MAP: Record<string, string> = {
-  openrouter: "OPENROUTER_API_KEY",
-  kilo: "KILO_API_KEY",
-  google: "GOOGLE_AI_API_KEY",
-  groq: "GROQ_API_KEY",
-  cerebras: "CEREBRAS_API_KEY",
-  sambanova: "SAMBANOVA_API_KEY",
-  mistral: "MISTRAL_API_KEY",
-  ollama: "OLLAMA_API_KEY",
-  github: "GITHUB_MODELS_TOKEN",
-  fireworks: "FIREWORKS_API_KEY",
-  cohere: "COHERE_API_KEY",
-  cloudflare: "CLOUDFLARE_API_TOKEN",
-  huggingface: "HF_TOKEN",
-  nvidia: "NVIDIA_API_KEY",
-  chutes: "CHUTES_API_KEY",
-  llm7: "LLM7_API_KEY",
-  scaleway: "SCALEWAY_API_KEY",
-  pollinations: "POLLINATIONS_API_KEY",
-  ollamacloud: "OLLAMA_CLOUD_API_KEY",
-  siliconflow: "SILICONFLOW_API_KEY",
-  glhf: "GLHF_API_KEY",
-  together: "TOGETHER_API_KEY",
-  hyperbolic: "HYPERBOLIC_API_KEY",
-  zai: "ZAI_API_KEY",
-  dashscope: "DASHSCOPE_API_KEY",
-  reka: "REKA_API_KEY",
-  deepseek: "DEEPSEEK_API_KEY",
-  deepinfra: "DEEPINFRA_API_KEY",
-  novita: "NOVITA_API_KEY",
-  monsterapi: "MONSTERAPI_API_KEY",
-  friendli: "FRIENDLI_API_KEY",
-  xai: "XAI_API_KEY",
-  moonshot: "MOONSHOT_API_KEY",
-  ai21: "AI21_API_KEY",
-};
 
 // Cache DB keys for 30s to avoid hitting DB on every request
 let dbKeysCache: Record<string, string> = {};
@@ -54,8 +29,9 @@ async function refreshDbKeys(): Promise<void> {
     const rows = await sql<{ provider: string; api_key: string }[]>`
       SELECT provider, api_key FROM api_keys
     `;
-    dbKeysCache = {};
-    for (const r of rows) dbKeysCache[r.provider] = r.api_key;
+    const next: Record<string, string> = {};
+    for (const r of rows) next[r.provider] = r.api_key;
+    dbKeysCache = next;
     dbKeysCacheTime = Date.now();
   } catch {
     // ignore
@@ -86,24 +62,11 @@ function cleanExpired() {
 
 export function getNextApiKey(provider: string): string {
   cleanExpired();
-  const envVar = ENV_MAP[provider];
-  if (!envVar) return "";
 
-  // Priority: .env > DB
-  let raw = process.env[envVar] ?? "";
-  const envKeys = raw.split(",").map((k) => k.trim()).filter(Boolean);
-
-  // Fallback to DB key if no env key
-  if (envKeys.length === 0) {
-    const dbKey = getDbKeySync(provider);
-    if (dbKey) raw = dbKey;
-  } else {
-    raw = envKeys.join(",");
-  }
-
+  const raw = getDbKeySync(provider);
   const keys = raw.split(",").map((k) => k.trim()).filter(Boolean);
-  // Ollama ไม่ต้อง key — ใส่ default "ollama"
-  if (keys.length === 0 && provider === "ollama") return "ollama";
+
+  if (keys.length === 0 && NO_KEY_REQUIRED.has(provider)) return provider;
   if (keys.length === 0) return "";
 
   // Filter out cooled-down keys
@@ -127,18 +90,18 @@ export function markKeyCooldown(provider: string, key: string, durationMs = 3000
 
 /**
  * ตรวจสอบว่า provider มี API key พร้อมใช้งานหรือไม่
- * ใช้เพื่อกรอง provider/model ที่ใช้งานไม่ได้ออกจากระบบ
+ * (DB only — ไม่อ่าน process.env)
  */
 export function hasProviderKey(provider: string): boolean {
-  if (provider === "ollama") return true; // Ollama local ไม่ต้อง key
+  if (NO_KEY_REQUIRED.has(provider)) return true;
   return getNextApiKey(provider).length > 0;
 }
 
 /**
- * คืนรายชื่อ provider ที่มี key ใช้งานได้
+ * คืนรายชื่อ provider ที่มี key ใช้งานได้ (DB-driven)
  */
 export function getAvailableProviders(): string[] {
-  return Object.keys(ENV_MAP).filter(hasProviderKey);
+  return getAllProviderNames().filter(hasProviderKey);
 }
 
 /**
@@ -147,7 +110,7 @@ export function getAvailableProviders(): string[] {
  */
 export function getApiKeysRecord(): Record<string, string> {
   const result: Record<string, string> = {};
-  for (const provider of Object.keys(ENV_MAP)) {
+  for (const provider of getAllProviderNames()) {
     result[provider] = getNextApiKey(provider);
   }
   return result;

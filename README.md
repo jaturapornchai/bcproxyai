@@ -9,7 +9,9 @@
 
 **Stateless** — gateway ไม่เก็บ conversation history / session memory. Client (OpenClaw, Aider, IDE plugin, ฯลฯ) เป็นคนจัดการ history เอง แล้วส่ง `messages[]` array มาทุก request ตามมาตรฐาน OpenAI API. ระบบมีแค่ `semantic_cache` (cache response ตาม embedding similarity) + routing memory (`live_score`, `fail_streak`, category winners) ซึ่งเป็น aggregate stat ไม่ผูกกับ user.
 
-**Auto-Discovery** — ทุก worker cycle (15 นาที) ระบบสแกน internet หา provider ใหม่จาก 3 แหล่ง: (1) OpenRouter `/api/v1/providers`, (2) HuggingFace inference list, (3) URL pattern probe (Anthropic, OpenAI, Perplexity, Anyscale, Lepton, OctoAI, Volcano Ark, Writer, Voyage, Lambda Labs, RunPod). Provider ที่พบใหม่ → บันทึกลง `provider_catalog` (status `pending`) + emit `event` + สร้าง `dev_suggestion` ให้ Dev wire เข้า code (PROVIDER_URLS + ENV_MAP).
+**DB-driven config** — Provider list และ API keys อยู่ใน database ทั้งหมด (`provider_catalog` + `api_keys` table). `.env.local` ใช้แค่ runtime config (Ollama URL, Cloudflare account ID) — **ไม่อ่าน API key จาก env**. ตั้งค่าทุกอย่างผ่าน Setup modal ในหน้า dashboard.
+
+**Auto-Discovery** — ทุก worker cycle (15 นาที) ระบบสแกน internet หา provider ใหม่จาก 3 แหล่ง: (1) OpenRouter `/api/v1/providers`, (2) HuggingFace inference list, (3) URL pattern probe (Anthropic, OpenAI, Perplexity, Anyscale, Lepton, OctoAI, Volcano Ark, Writer, Voyage, Lambda Labs, RunPod). Provider ที่พบใหม่ → INSERT `provider_catalog` ด้วย `status='active'` ทันที — ใช้งานได้เลยจาก Setup modal (ไม่ต้องรอ Dev wire เข้า code).
 
 ## สิ่งที่ Dev ได้ทันที
 

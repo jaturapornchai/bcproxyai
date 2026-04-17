@@ -3,51 +3,18 @@
 import { useCallback, useEffect, useState } from "react";
 import { PROVIDER_COLORS, ProviderBadge } from "./shared";
 
-// ─── Provider metadata ───────────────────────────────────────────────────────
-
-interface ProviderInfo {
-  provider: string;
-  label: string;
-  description: string;
-  signupUrl: string;
-  envVar: string;
-  icon: string;
-}
-
-const PROVIDERS: ProviderInfo[] = [
-  { provider: "openrouter", label: "OpenRouter", description: "รวม model จากหลายเจ้า (OpenAI, Anthropic, Google, Meta ฯลฯ) ผ่าน API เดียว", signupUrl: "https://openrouter.ai/keys", envVar: "OPENROUTER_API_KEY", icon: "\u{1F310}" },
-  { provider: "kilo", label: "Kilo AI", description: "AI Gateway ฟรี รองรับหลาย model", signupUrl: "https://kilo.ai", envVar: "KILO_API_KEY", icon: "\u26A1" },
-  { provider: "google", label: "Google AI", description: "Gemini Pro, Flash, Ultra — ฟรี tier ให้ใช้ได้เยอะ", signupUrl: "https://aistudio.google.com/apikey", envVar: "GOOGLE_AI_API_KEY", icon: "\u{1F50D}" },
-  { provider: "groq", label: "Groq", description: "LPU inference เร็วมาก — Llama, Mixtral, Gemma ฟรี", signupUrl: "https://console.groq.com/keys", envVar: "GROQ_API_KEY", icon: "\u{1F3CE}\uFE0F" },
-  { provider: "cerebras", label: "Cerebras", description: "Wafer-scale inference เร็วสุด — Llama ฟรี", signupUrl: "https://cloud.cerebras.ai/", envVar: "CEREBRAS_API_KEY", icon: "\u{1F9E0}" },
-  { provider: "sambanova", label: "SambaNova", description: "RDU inference — Llama, DeepSeek ฟรี", signupUrl: "https://cloud.sambanova.ai/", envVar: "SAMBANOVA_API_KEY", icon: "\u{1F680}" },
-  { provider: "mistral", label: "Mistral AI", description: "Mistral, Mixtral, Codestral — ฟรี tier", signupUrl: "https://console.mistral.ai/api-keys", envVar: "MISTRAL_API_KEY", icon: "\u{1F4A8}" },
-  { provider: "ollama", label: "Ollama (Local)", description: "รัน model บนเครื่องตัวเอง — ไม่ต้องใช้ key", signupUrl: "https://ollama.com/download", envVar: "OLLAMA_API_KEY", icon: "\u{1F4BB}" },
-  { provider: "github", label: "GitHub Models", description: "AI models ฟรีจาก GitHub Marketplace", signupUrl: "https://github.com/marketplace/models", envVar: "GITHUB_MODELS_TOKEN", icon: "\u{1F431}" },
-  { provider: "fireworks", label: "Fireworks AI", description: "Fast inference — Llama, Mixtral, Phi ฟรี tier", signupUrl: "https://fireworks.ai/account/api-keys", envVar: "FIREWORKS_API_KEY", icon: "\u{1F386}" },
-  { provider: "cohere", label: "Cohere", description: "Command R+ — เก่ง RAG และ multilingual", signupUrl: "https://dashboard.cohere.com/api-keys", envVar: "COHERE_API_KEY", icon: "\u{1F4E1}" },
-  { provider: "cloudflare", label: "Cloudflare AI", description: "Workers AI — รัน model บน edge ฟรี", signupUrl: "https://dash.cloudflare.com/profile/api-tokens", envVar: "CLOUDFLARE_API_TOKEN", icon: "\u2601\uFE0F" },
-  { provider: "huggingface", label: "HuggingFace", description: "Inference API — model หลากหลายที่สุด", signupUrl: "https://huggingface.co/settings/tokens", envVar: "HF_TOKEN", icon: "\u{1F917}" },
-  { provider: "nvidia", label: "NVIDIA NIM", description: "NVIDIA Inference Microservices — Llama, Nemotron, DeepSeek ฟรี (1000 req/month)", signupUrl: "https://build.nvidia.com/", envVar: "NVIDIA_API_KEY", icon: "\u{1F7E2}" },
-  { provider: "chutes", label: "Chutes.ai", description: "Community GPU — DeepSeek R1, Qwen3-235B, Kimi K2 ไม่จำกัดรายเดือน", signupUrl: "https://chutes.ai/", envVar: "CHUTES_API_KEY", icon: "\u{1F4A8}" },
-  { provider: "llm7", label: "LLM7.io", description: "Gateway ฟรี 30 RPM — DeepSeek R1, Qwen2.5 Coder, 27+ models", signupUrl: "https://token.llm7.io/", envVar: "LLM7_API_KEY", icon: "\u{1F511}" },
-  { provider: "scaleway", label: "Scaleway 🇪🇺", description: "EU Generative APIs — 1M tokens ฟรีถาวร (Qwen3, gpt-oss, DeepSeek R1)", signupUrl: "https://console.scaleway.com/generative-api/models", envVar: "SCALEWAY_API_KEY", icon: "\u{1F1EA}\u{1F1FA}" },
-  { provider: "pollinations", label: "Pollinations AI", description: "ฟรีไม่ต้อง key — GPT-5, Claude, Gemini, DeepSeek V3.2 (1 RPH per IP)", signupUrl: "https://enter.pollinations.ai/", envVar: "POLLINATIONS_API_KEY", icon: "\u{1F338}" },
-  { provider: "ollamacloud", label: "Ollama Cloud", description: "Large models 120B+ — gpt-oss, deepseek-v3, qwen3-coder:480b (100 RPH)", signupUrl: "https://ollama.com/cloud", envVar: "OLLAMA_CLOUD_API_KEY", icon: "\u{2601}\uFE0F" },
-  { provider: "siliconflow", label: "SiliconFlow 🇨🇳", description: "Qwen3, DeepSeek R1 distill, GLM-4 — 50 RPD free (1000 RPD ถ้าเติม $1)", signupUrl: "https://siliconflow.com/", envVar: "SILICONFLOW_API_KEY", icon: "\u{1F52E}" },
-  { provider: "glhf", label: "glhf.chat", description: "Beta ฟรี — run ทุก HuggingFace model ที่ vLLM support (Llama 3.3, Qwen Coder)", signupUrl: "https://glhf.chat/", envVar: "GLHF_API_KEY", icon: "\u{1F3AE}" },
-  { provider: "together", label: "Together AI", description: "71 free models — DeepSeek V3.1, Llama 4 Scout, Qwen 2.5, Mixtral ($25 credit)", signupUrl: "https://api.together.xyz/settings/api-keys", envVar: "TOGETHER_API_KEY", icon: "\u{1F91D}" },
-  { provider: "hyperbolic", label: "Hyperbolic", description: "Llama 405B, DeepSeek R1 — $1 signup credit (ใช้ inference ได้)", signupUrl: "https://app.hyperbolic.ai/signup", envVar: "HYPERBOLIC_API_KEY", icon: "\u{1F300}" },
-  { provider: "zai", label: "Z.AI (GLM)", description: "Zhipu GLM-4.5, GLM-4-Flash, GLM-4-Long (1M context) — free signup credits", signupUrl: "https://z.ai/manage-apikey/apikey-list", envVar: "ZAI_API_KEY", icon: "\u{1F5FF}" },
-  { provider: "dashscope", label: "Alibaba Qwen", description: "DashScope — Qwen2.5 72B, Qwen-VL, Coder 32B (1M input + 1M output tokens ฟรี 90 วัน)", signupUrl: "https://bailian.console.alibabacloud.com/", envVar: "DASHSCOPE_API_KEY", icon: "\u{1F9E7}" },
-  { provider: "reka", label: "Reka AI", description: "Reka Flash, Reka Core — $10 ฟรีทุกเดือนแบบอัตโนมัติ (auto-refresh)", signupUrl: "https://platform.reka.ai/", envVar: "REKA_API_KEY", icon: "\u{1F30A}" },
-];
-
 // ─── Types ───────────────────────────────────────────────────────────────────
+
+// Provider list มาจาก DB (provider_catalog) — ไม่มี hardcoded
+// Icon/description มาจาก lookup (เหลือไว้สำหรับ provider seed) — ที่ discover ใหม่จะใช้ default
 
 interface ProviderStatus {
   provider: string;
-  envVar: string;
+  label: string;          // จาก DB (provider_catalog.label)
+  envVar: string;         // จาก DB
+  homepage: string;       // จาก DB (provider_catalog.homepage)
+  source: string;         // 'seed' | 'openrouter' | 'huggingface' | 'pattern' | 'manual'
+  freeTier: boolean;
   hasKey: boolean;
   hasDbKey: boolean;
   noKeyRequired: boolean;
@@ -56,6 +23,26 @@ interface ProviderStatus {
   availableCount: number;
   status: "active" | "no_key" | "no_models" | "error" | "disabled";
 }
+
+// Icon overrides สำหรับ provider ที่รู้จักดี — ที่ไม่มีใน map ใช้ default
+const PROVIDER_ICONS: Record<string, string> = {
+  openrouter: "\u{1F310}", kilo: "\u26A1", google: "\u{1F50D}",
+  groq: "\u{1F3CE}\uFE0F", cerebras: "\u{1F9E0}", sambanova: "\u{1F680}",
+  mistral: "\u{1F4A8}", ollama: "\u{1F4BB}", github: "\u{1F431}",
+  fireworks: "\u{1F386}", cohere: "\u{1F4E1}", cloudflare: "\u2601\uFE0F",
+  huggingface: "\u{1F917}", nvidia: "\u{1F7E2}", chutes: "\u{1F4A8}",
+  llm7: "\u{1F511}", scaleway: "\u{1F1EA}\u{1F1FA}", pollinations: "\u{1F338}",
+  ollamacloud: "\u2601\uFE0F", siliconflow: "\u{1F52E}", glhf: "\u{1F3AE}",
+  together: "\u{1F91D}", hyperbolic: "\u{1F300}", zai: "\u{1F5FF}",
+  dashscope: "\u{1F9E7}", reka: "\u{1F30A}",
+  deepseek: "\u{1F40B}", deepinfra: "\u{1F4E6}", novita: "\u{1F31F}",
+  monsterapi: "\u{1F47E}", friendli: "\u{1F91F}", xai: "\u{1D54F}",
+  moonshot: "\u{1F319}", ai21: "\u{1F523}",
+};
+const SOURCE_BADGE: Record<string, string> = {
+  seed: "ในตัว", openrouter: "พบจาก OpenRouter",
+  huggingface: "พบจาก HuggingFace", pattern: "พบจาก URL probe", manual: "เพิ่มเอง",
+};
 
 interface SetupModalProps {
   open: boolean;
@@ -256,12 +243,19 @@ export function SetupModal({ open, onClose }: SetupModalProps) {
               ))}
             </div>
           ) : (
-            PROVIDERS.map((info) => {
-              const st = statusMap.get(info.provider);
-              const isActive = st?.status === "active";
-              const hasKey = st?.hasKey ?? false;
-              const hasDbKey = st?.hasDbKey ?? false;
-              const noKeyReq = st?.noKeyRequired ?? false;
+            statuses.map((st) => {
+              const info = {
+                provider: st.provider,
+                label: st.label,
+                envVar: st.envVar,
+                signupUrl: st.homepage || "#",
+                icon: PROVIDER_ICONS[st.provider] ?? "\u{1F310}",
+                description: `${SOURCE_BADGE[st.source] ?? st.source}${st.freeTier ? " · 🆓 free tier" : ""}`,
+              };
+              const isActive = st.status === "active";
+              const hasKey = st.hasKey;
+              const hasDbKey = st.hasDbKey;
+              const noKeyReq = st.noKeyRequired;
               const c = PROVIDER_COLORS[info.provider] ?? { text: "text-gray-300", bg: "bg-gray-700/40", border: "border-gray-600/40", glow: "rgba(156,163,175,0.5)" };
               const isSaving = saving[info.provider] ?? false;
               const isTesting = testing[info.provider] ?? false;
@@ -269,9 +263,9 @@ export function SetupModal({ open, onClose }: SetupModalProps) {
               const testRes = testResult[info.provider];
               const result = saveResult[info.provider];
 
-              const isEnabled = st?.enabled ?? true;
+              const isEnabled = st.enabled;
               let statusBadge: { text: string; cls: string };
-              switch (st?.status) {
+              switch (st.status) {
                 case "disabled":
                   statusBadge = { text: "ปิดใช้งานเอง", cls: "bg-gray-500/20 text-gray-400 border-gray-500/30" };
                   break;
@@ -294,7 +288,7 @@ export function SetupModal({ open, onClose }: SetupModalProps) {
                   className={`glass rounded-xl p-4 border transition-all ${
                     !isEnabled ? "border-gray-600/20 bg-gray-800/20 opacity-60" :
                     isActive ? "border-emerald-500/20 bg-emerald-500/[0.02]" :
-                    st?.status === "error" ? "border-red-500/10 bg-red-500/[0.02]" :
+                    st.status === "error" ? "border-red-500/10 bg-red-500/[0.02]" :
                     "border-white/5 hover:border-white/10"
                   }`}
                 >
@@ -468,10 +462,10 @@ export function SetupModal({ open, onClose }: SetupModalProps) {
               <span className="font-bold">หมายเหตุ</span>
             </div>
             <ul className="text-xs text-gray-500 space-y-1 list-disc list-inside">
-              <li>Key ที่กรอกจะบันทึกลง database — ไม่ต้องรีสตาร์ท</li>
-              <li>ถ้าตั้ง key ใน <code className="text-indigo-300">.env.local</code> ด้วย จะใช้ .env.local เป็นหลัก</li>
+              <li>Key ที่กรอกบันทึกลง database — ไม่ต้องรีสตาร์ท</li>
+              <li>ระบบ <strong className="text-amber-300">ไม่อ่าน .env.local</strong> สำหรับ API key — ตั้งค่าผ่านหน้านี้เท่านั้น</li>
+              <li>Provider list มาจาก DB (รวม provider ที่ระบบ auto-discovery จาก internet)</li>
               <li>กด <strong className="text-white">Scan เลย!</strong> หลังบันทึก key เพื่อค้นหา model ทันที</li>
-              <li>ทุกเจ้าให้ใช้ฟรี — ไม่มีค่าใช้จ่าย</li>
             </ul>
           </div>
         </div>

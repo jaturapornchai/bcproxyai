@@ -1,7 +1,7 @@
 import { getSqlClient } from "@/lib/db/schema";
 import { getRedis } from "@/lib/redis";
 import { getNextApiKey } from "@/lib/api-keys";
-import { PROVIDER_URLS } from "@/lib/providers";
+import { resolveProviderUrl } from "@/lib/provider-resolver";
 import { upstreamAgent } from "@/lib/upstream-agent";
 import { recordOutcome } from "@/lib/live-score";
 
@@ -46,7 +46,7 @@ async function acquireWarmupLeader(): Promise<boolean> {
 }
 
 async function pingOnce(candidate: WarmupCandidate): Promise<void> {
-  const url = PROVIDER_URLS[candidate.provider];
+  const url = resolveProviderUrl(candidate.provider);
   if (!url) return;
 
   const key = getNextApiKey(candidate.provider);

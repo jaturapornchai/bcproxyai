@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { getSqlClient } from "@/lib/db/schema";
 import { getNextApiKey, markKeyCooldown, hasProviderKey } from "@/lib/api-keys";
-import { PROVIDER_URLS } from "@/lib/providers";
+import { resolveProviderUrl } from "@/lib/provider-resolver";
 import { clearCache } from "@/lib/cache";
 import { compressMessages } from "@/lib/prompt-compress";
 import { openAIError, ensureChatCompletionFields } from "@/lib/openai-compat";
@@ -569,7 +569,7 @@ async function forwardToProvider(
   stream: boolean,
   externalSignal?: AbortSignal
 ): Promise<Response> {
-  const url = PROVIDER_URLS[provider];
+  const url = resolveProviderUrl(provider);
   if (!url) throw new Error(`Unknown provider: ${provider}`);
 
   const apiKey = getNextApiKey(provider);

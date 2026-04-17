@@ -254,34 +254,21 @@ export async function discoverProviders(): Promise<DiscoveryResult> {
     existing.add(d.name); // ป้องกัน duplicate ใน rounds เดียวกัน
     newOnes.push(d);
 
+    // Auto-add: status='active' ทันที — ระบบ resolve URL/env จาก DB เอง ไม่ต้องรอ Dev wire
+    const envGuess = `${d.name.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_API_KEY`;
     await sql`
-      INSERT INTO provider_catalog (name, label, base_url, homepage, status, source, free_tier, notes, last_probed_at, probe_status_code)
-      VALUES (${d.name}, ${d.name}, ${d.base_url}, ${d.homepage ?? null}, 'pending', ${d.source}, false, ${d.notes ?? null}, now(), 200)
+      INSERT INTO provider_catalog (name, label, base_url, env_var, homepage, status, source, free_tier, notes, last_probed_at, probe_status_code)
+      VALUES (${d.name}, ${d.name}, ${d.base_url}, ${envGuess}, ${d.homepage ?? null}, 'active', ${d.source}, false, ${d.notes ?? null}, now(), 200)
       ON CONFLICT (name) DO UPDATE SET
         last_probed_at = now(),
         notes = COALESCE(EXCLUDED.notes, provider_catalog.notes),
         updated_at = now()
     `;
 
-    // Emit event
+    // Emit event (informational only — no human action needed)
     await sql`
       INSERT INTO events (type, title, detail, severity)
-      VALUES ('provider_discovered', ${`พบ provider ใหม่: ${d.name}`}, ${`${d.source} → ${d.base_url}`}, 'info')
-    `.catch(() => {});
-
-    // Suggest Dev to wire it
-    await sql`
-      INSERT INTO dev_suggestions (severity, category, title, description, target_files, proposed_change, evidence, source)
-      VALUES (
-        'info',
-        'provider',
-        ${`เพิ่ม provider ใหม่: ${d.name}`},
-        ${`Auto-discovery พบ provider ใหม่จาก ${d.source}. ถ้าใช้งานจริง ต้องเพิ่ม entry ใน PROVIDER_URLS + ENV_MAP + .env.example`},
-        ${'src/lib/providers.ts, src/lib/api-keys.ts, .env.example'},
-        ${`${d.name}: "${d.base_url}"`},
-        ${d.notes ?? null},
-        'discovery-worker'
-      )
+      VALUES ('provider_discovered', ${`เพิ่ม provider ใหม่อัตโนมัติ: ${d.name}`}, ${`${d.source} → ${d.base_url} — พร้อมใช้งานทันที (ใส่ key ใน Setup ได้เลย)`}, 'info')
     `.catch(() => {});
   }
 

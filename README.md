@@ -150,8 +150,8 @@ Trigger manual: `curl -X POST http://localhost:3334/api/worker`
 
 ระดับสูงครอบคลุมข้อของระดับต่ำกว่า (เด็กมหาลัยต้องตอบข้อประถมได้) — score normalize เป็น % เพื่อเทียบข้ามระดับได้
 
-ตั้งค่าระดับ: dashboard section **🎚 ระดับสอบ** หรือ `POST /api/exam-config { "level": "primary" }`
-สอบใหม่ทุกคน: ปุ่มในหน้าเดียวกัน หรือ `POST /api/exam-reset` (ลบ `exam_attempts` + `model_category_scores` ทั้งหมด แล้ว trigger worker)
+ตั้งค่าระดับ: dashboard section **🎚 ระดับสอบ** — คลิกการ์ดระดับ → save อัตโนมัติทันที (ไม่มีปุ่มยืนยัน) หรือ `POST /api/exam-config { "level": "primary" }`
+สอบใหม่ทุกคน: ปุ่ม **🔄 สอบใหม่ทุกคน** (กด 2 ครั้งเพื่อยืนยัน) หรือ `POST /api/exam-reset` — ลบ `exam_attempts` + `model_category_scores` ทั้งหมด แล้ว trigger worker
 
 **Appoint:** หลัง exam ทุก cycle → `DELETE FROM teachers` + bulk insert (atomic swap)
 **Routing:** `sml/auto` + category prompt → route ไปครูหัวหน้าของหมวดนั้นก่อน

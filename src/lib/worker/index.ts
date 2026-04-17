@@ -102,7 +102,7 @@ export async function runWorkerCycle(): Promise<void> {
 
   let scanResult = { found: 0, new: 0 };
   let healthResult = { checked: 0, available: 0, cooldown: 0 };
-  let examResult = { examined: 0, passed: 0, failed: 0 };
+  let examResult: { examined: number; passed: number; failed: number; level: string } = { examined: 0, passed: 0, failed: 0, level: "university" };
 
   try {
     // Step 1: Scan

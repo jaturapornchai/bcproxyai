@@ -142,6 +142,7 @@ export async function runMigrations(): Promise<void> {
     await sql`CREATE INDEX IF NOT EXISTS idx_category_winners_cat ON category_winners(category, wins DESC)`;
     await sql`ALTER TABLE exam_attempts ADD COLUMN IF NOT EXISTS next_exam_at TIMESTAMPTZ`;
     await sql`ALTER TABLE exam_attempts ADD COLUMN IF NOT EXISTS consecutive_fails INT DEFAULT 0`;
+    await sql`ALTER TABLE exam_attempts ADD COLUMN IF NOT EXISTS exam_level TEXT`;
     await sql`
       CREATE TABLE IF NOT EXISTS discovered_questions (
         id BIGSERIAL PRIMARY KEY,

@@ -106,7 +106,8 @@ Trigger manual: `curl -X POST http://localhost:3334/api/worker`
 | `models` | รายการโมเดล + flags (vision, tools, thai, ...) + live_score |
 | `teachers` | ครูใหญ่ + ครูหัวหน้าต่อ category + ครูคุมสอบ (rebuild ทุก cycle) |
 | `model_category_scores` | คะแนนรายโมเดลต่อ 12 หมวด (code, thai, tools, vision, ...) |
-| `exam_attempts` / `exam_answers` | ผลสอบ 25 ข้อ, threshold 50% |
+| `exam_attempts` / `exam_answers` | ผลสอบ + คอลัมน์ `exam_level` (primary/middle/high/university) |
+| `worker_state` | key-value config (เช่น `exam_level` ที่ใช้สอบรอบถัดไป) |
 | `gateway_logs` | log ทุก request (model, provider, latency, status) |
 | `health_logs` | ping ทุก cycle + cooldown_until |
 | `model_fail_streak` | fail streak + cooldown exponential |
@@ -138,7 +139,20 @@ Trigger manual: `curl -X POST http://localhost:3334/api/worker`
 - **ครูหัวหน้าหมวด (head)** — 1 ตัวต่อ category (12 หมวด: code, thai, tools, vision, math, reasoning, extraction, classification, comprehension, instruction, json, safety)
 - **ครูคุมสอบ (proctor)** — ≤ 10 ตัว, ใช้ออกและเกรดข้อสอบ
 
-**Exam:** 25 คำถาม (mixed category) + threshold 50% → โมเดลที่ผ่านเข้า pool
+### Exam — 4 ระดับความยาก (cumulative)
+
+| ระดับ | ชื่อ | จำนวนข้อ | ผ่าน |
+|------|------|---------|------|
+| 🟢 `primary`    | ประถม      | 10 | ≥ 70% |
+| 🟡 `middle`     | มัธยมต้น   | 19 | ≥ 75% |
+| 🟠 `high`       | มัธยมปลาย  | 27 | ≥ 80% |
+| 🔴 `university` | มหาลัย     | 35 | ≥ 85% |
+
+ระดับสูงครอบคลุมข้อของระดับต่ำกว่า (เด็กมหาลัยต้องตอบข้อประถมได้) — score normalize เป็น % เพื่อเทียบข้ามระดับได้
+
+ตั้งค่าระดับ: dashboard section **🎚 ระดับสอบ** หรือ `POST /api/exam-config { "level": "primary" }`
+สอบใหม่ทุกคน: ปุ่มในหน้าเดียวกัน หรือ `POST /api/exam-reset` (ลบ `exam_attempts` + `model_category_scores` ทั้งหมด แล้ว trigger worker)
+
 **Appoint:** หลัง exam ทุก cycle → `DELETE FROM teachers` + bulk insert (atomic swap)
 **Routing:** `sml/auto` + category prompt → route ไปครูหัวหน้าของหมวดนั้นก่อน
 
@@ -186,6 +200,9 @@ Trigger manual: `curl -X POST http://localhost:3334/api/worker`
 | `GET  /api/warmup-stats` | warmup cycle stats |
 | `GET  /api/metrics` | Prometheus text format |
 | `POST /api/worker` | trigger scan+exam cycle ด้วยมือ |
+| `GET  /api/exam-config` | active exam level + 4 ระดับ + ตัวอย่างข้อสอบ (`?includeQuestions=1&level=primary`) |
+| `POST /api/exam-config` | ตั้งระดับสอบ `{ "level": "primary"\|"middle"\|"high"\|"university" }` |
+| `POST /api/exam-reset` | ลบประวัติสอบทั้งหมด + trigger worker ให้สอบใหม่ทันที |
 | `GET  /guide` | คู่มือเชื่อมต่อ (long-form page) |
 | `GET  /` | dashboard |
 

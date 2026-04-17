@@ -17,17 +17,51 @@ import { join } from "path";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
-const PASS_THRESHOLD_PCT = 85; // ต้องผ่าน ≥ 85% — คัดเฉพาะ model คุณภาพสูง
 const MAX_MODELS_PER_RUN = 25;
 const CONCURRENCY = 5;
 const RETEST_HOURS = 24;       // fail แล้วรอ 24h ค่อยสอบใหม่
 const REQUEST_TIMEOUT_MS = 20_000;
+
+// ─── Exam Levels (4 ระดับ — ง่าย → ยาก) ─────────────────────────────────────
+
+export type ExamLevel = "primary" | "middle" | "high" | "university";
+
+export const EXAM_LEVELS: ExamLevel[] = ["primary", "middle", "high", "university"];
+
+// เกณฑ์ผ่านแยกตามระดับ (ระดับยากผ่านยากขึ้น)
+const PASS_THRESHOLD_BY_LEVEL: Record<ExamLevel, number> = {
+  primary: 70,
+  middle: 75,
+  high: 80,
+  university: 85,
+};
+
+export const EXAM_LEVEL_META: Record<ExamLevel, { label: string; emoji: string; threshold: number; description: string }> = {
+  primary:    { label: "ประถม",     emoji: "🟢", threshold: 70, description: "ข้อง่ายมาก — บวกลบคูณหารพื้นฐาน, ทำตามคำสั่ง 1 คำ" },
+  middle:     { label: "มัธยมต้น", emoji: "🟡", threshold: 75, description: "ข้อปานกลาง — JSON extraction, ความปลอดภัยพื้นฐาน, distraction" },
+  high:       { label: "มัธยมปลาย",emoji: "🟠", threshold: 80, description: "ข้อยากปานกลาง — logic, long context, extraction ซับซ้อน" },
+  university: { label: "มหาลัย",   emoji: "🔴", threshold: 85, description: "ข้อยากมาก — tool call, vision, code, multi-step math" },
+};
+
+// ระดับที่ครอบคลุม (cumulative): มหาลัยสอบทุกข้อ, ประถมสอบเฉพาะข้อ primary
+const LEVEL_INCLUDES: Record<ExamLevel, ExamLevel[]> = {
+  primary:    ["primary"],
+  middle:     ["primary", "middle"],
+  high:       ["primary", "middle", "high"],
+  university: ["primary", "middle", "high", "university"],
+};
+
+export function getPassThreshold(level: ExamLevel): number {
+  return PASS_THRESHOLD_BY_LEVEL[level] ?? 85;
+}
 
 // ─── Question Definition ──────────────────────────────────────────────────────
 
 interface ExamQuestion {
   id: string;
   category: string;
+  // ระดับความยาก — ใช้กรองข้อสอบตาม ExamLevel ที่ตั้งไว้
+  difficulty: ExamLevel;
   question: string;
   expected: string; // คำอธิบายของคำตอบที่ถูก (สำหรับ log)
   // ตัวตรวจคำตอบ — return { passed, reason }
@@ -80,9 +114,44 @@ function stripThink(text: string): string {
   return text.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
 }
 
+// ─── Difficulty map สำหรับข้อสอบเดิม (ไม่ต้อง inline ทุกข้อ) ──────────────────
+
+type RawQuestion = Omit<ExamQuestion, "difficulty">;
+
+const DIFFICULTY_BY_ID: Record<string, ExamLevel> = {
+  // middle (ปานกลาง)
+  instruction_exact_v2: "middle",
+  distraction_v1:       "middle",
+  json_complex_v1:      "middle",
+  thai_knowledge_v1:    "middle",
+  thai_food_v1:         "middle",
+  thai_geo_v1:          "middle",
+  classify_nuanced_v1:  "middle",
+  refuse_injection_v2:  "middle",
+  math_multiply_v1:     "middle",
+  // high (ยากปานกลาง)
+  logic_deduction_v1:       "high",
+  extract_contact_v2:       "high",
+  thai_reading_v1:          "high",
+  thai_culture_v1:          "high",
+  ambiguity_v1:             "high",
+  long_context_focus_v1:    "high",
+  override_no_hint_v1:      "high",
+  math_discount_change_v1:  "high",
+  // university (ยากมาก / multimodal / tool / strict format)
+  format_list_v1:    "university",
+  thai_writing_v1:   "university",
+  thai_anthem_v1:    "university",
+  code_python_v2:    "university",
+  tool_call_v2:      "university",
+  vision_brand_v1:   "university",
+  vision_room_v1:    "university",
+  vision_cartoon_v1: "university",
+};
+
 // ─── ข้อสอบ 25 ข้อ — เน้นใช้งานจริง + กรอง model คุณภาพสูง ──────────────────
 
-export const EXAM_QUESTIONS: ExamQuestion[] = [
+const RAW_EXAM_QUESTIONS: RawQuestion[] = [
   // ═══════════════════════════════════════════════════════════════════════════
   //  Section A: Instruction Following (ทำตามคำสั่งเป๊ะ)
   // ═══════════════════════════════════════════════════════════════════════════
@@ -689,6 +758,175 @@ What is the square root of 144?`,
   },
 ];
 
+// ─── Primary level (10 ข้อใหม่ — ง่ายมาก) ────────────────────────────────────
+
+const PRIMARY_QUESTIONS: ExamQuestion[] = [
+  {
+    id: "primary_add_v1",
+    category: "math",
+    difficulty: "primary",
+    question: "What is 2 + 2? Reply with ONLY the number.",
+    expected: "4",
+    check: (answer) => {
+      const clean = stripThink(answer).trim();
+      if (/\b4\b/.test(clean)) return { passed: true, reason: "correct: 4" };
+      return { passed: false, reason: `expected 4: "${clean.slice(0, 30)}"` };
+    },
+  },
+  {
+    id: "primary_sub_v1",
+    category: "math",
+    difficulty: "primary",
+    question: "What is 10 - 3? Reply with ONLY the number.",
+    expected: "7",
+    check: (answer) => {
+      const clean = stripThink(answer).trim();
+      if (/\b7\b/.test(clean)) return { passed: true, reason: "correct: 7" };
+      return { passed: false, reason: `expected 7: "${clean.slice(0, 30)}"` };
+    },
+  },
+  {
+    id: "primary_mul_v1",
+    category: "math",
+    difficulty: "primary",
+    question: "What is 3 × 4? Reply with ONLY the number.",
+    expected: "12",
+    check: (answer) => {
+      const clean = stripThink(answer).trim();
+      if (/\b12\b/.test(clean)) return { passed: true, reason: "correct: 12" };
+      return { passed: false, reason: `expected 12: "${clean.slice(0, 30)}"` };
+    },
+  },
+  {
+    id: "primary_div_v1",
+    category: "math",
+    difficulty: "primary",
+    question: "What is 10 ÷ 2? Reply with ONLY the number.",
+    expected: "5",
+    check: (answer) => {
+      const clean = stripThink(answer).trim();
+      if (/\b5\b/.test(clean)) return { passed: true, reason: "correct: 5" };
+      return { passed: false, reason: `expected 5: "${clean.slice(0, 30)}"` };
+    },
+  },
+  {
+    id: "primary_thai_hello_v1",
+    category: "thai",
+    difficulty: "primary",
+    question: "ตอบคำว่า สวัสดี อย่างเดียว ไม่ต้องใส่อะไรเพิ่ม",
+    expected: "สวัสดี",
+    check: (answer) => {
+      const clean = stripThink(answer).trim();
+      if (/สวัสดี/.test(clean)) return { passed: true, reason: "correct: สวัสดี" };
+      return { passed: false, reason: `expected สวัสดี: "${clean.slice(0, 40)}"` };
+    },
+  },
+  {
+    id: "primary_thai_color_v1",
+    category: "thai",
+    difficulty: "primary",
+    question: "สีของท้องฟ้าตอนกลางวันคือสีอะไร? ตอบ 1 คำ ภาษาไทย",
+    expected: "ฟ้า / น้ำเงิน",
+    check: (answer) => {
+      const clean = stripThink(answer);
+      if (/ฟ้า|น้ำเงิน|ครามม?|blue/i.test(clean)) return { passed: true, reason: "correct: blue" };
+      return { passed: false, reason: `expected สีฟ้า: "${clean.slice(0, 40)}"` };
+    },
+  },
+  {
+    id: "primary_count_v1",
+    category: "thai",
+    difficulty: "primary",
+    question: "นับเลข 1 ถึง 5 เป็นภาษาไทย คั่นด้วยเว้นวรรค ตอบสั้นๆ",
+    expected: "หนึ่ง สอง สาม สี่ ห้า",
+    check: (answer) => {
+      const clean = stripThink(answer);
+      const words = [/หนึ่ง|1/, /สอง|2/, /สาม|3/, /สี่|4/, /ห้า|5/];
+      const matched = words.filter(r => r.test(clean)).length;
+      if (matched >= 4) return { passed: true, reason: `correct: ${matched}/5 numbers` };
+      return { passed: false, reason: `only ${matched}/5: "${clean.slice(0, 50)}"` };
+    },
+  },
+  {
+    id: "primary_yes_v1",
+    category: "instruction",
+    difficulty: "primary",
+    question: 'Reply with the word "yes" and nothing else.',
+    expected: "yes",
+    check: (answer) => {
+      const clean = stripThink(answer).trim().toLowerCase().replace(/[.,!?"' ]/g, "");
+      if (clean === "yes" || clean === "ใช่") return { passed: true, reason: "exact yes" };
+      if (/^yes\b/i.test(stripThink(answer).trim())) return { passed: true, reason: "starts with yes" };
+      return { passed: false, reason: `expected "yes": "${answer.slice(0, 30)}"` };
+    },
+  },
+  {
+    id: "primary_capital_v1",
+    category: "thai",
+    difficulty: "primary",
+    question: "เมืองหลวงของประเทศไทยชื่ออะไร? ตอบสั้นๆ",
+    expected: "กรุงเทพ",
+    check: (answer) => {
+      const clean = stripThink(answer);
+      if (/กรุงเทพ|bangkok/i.test(clean)) return { passed: true, reason: "correct: กรุงเทพ" };
+      return { passed: false, reason: `expected กรุงเทพ: "${clean.slice(0, 40)}"` };
+    },
+  },
+  {
+    id: "primary_animal_v1",
+    category: "instruction",
+    difficulty: "primary",
+    question: 'แมวพูดว่าอะไร? ตอบ 1 คำ',
+    expected: "เมี้ยว / meow",
+    check: (answer) => {
+      const clean = stripThink(answer).toLowerCase();
+      if (/เมี้ยว|เหมียว|meow|miaow/i.test(clean)) return { passed: true, reason: "correct" };
+      return { passed: false, reason: `expected เมี้ยว: "${clean.slice(0, 40)}"` };
+    },
+  },
+];
+
+// ─── รวมข้อสอบทั้งหมด + tag difficulty ──────────────────────────────────────
+
+export const EXAM_QUESTIONS: ExamQuestion[] = [
+  ...RAW_EXAM_QUESTIONS.map((q) => ({
+    ...q,
+    difficulty: DIFFICULTY_BY_ID[q.id] ?? "university",
+  })),
+  ...PRIMARY_QUESTIONS,
+];
+
+// ─── คัดข้อสอบตามระดับ (cumulative) ─────────────────────────────────────────
+
+export function getExamQuestions(level: ExamLevel): ExamQuestion[] {
+  const allowed = new Set<ExamLevel>(LEVEL_INCLUDES[level] ?? ["primary", "middle", "high", "university"]);
+  return EXAM_QUESTIONS.filter((q) => allowed.has(q.difficulty));
+}
+
+// ─── อ่าน/เขียน exam_level จาก worker_state ────────────────────────────────
+
+const EXAM_LEVEL_KEY = "exam_level";
+
+export async function getActiveExamLevel(): Promise<ExamLevel> {
+  try {
+    const sql = getSqlClient();
+    const rows = await sql<{ value: string }[]>`
+      SELECT value FROM worker_state WHERE key = ${EXAM_LEVEL_KEY}
+    `;
+    const v = rows[0]?.value;
+    if (v && (EXAM_LEVELS as string[]).includes(v)) return v as ExamLevel;
+  } catch { /* fall through */ }
+  return "university"; // default — เข้มที่สุดเหมือนเดิม
+}
+
+export async function setActiveExamLevel(level: ExamLevel): Promise<void> {
+  const sql = getSqlClient();
+  await sql`
+    INSERT INTO worker_state (key, value) VALUES (${EXAM_LEVEL_KEY}, ${level})
+    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+  `;
+}
+
 // ─── Ask Model ────────────────────────────────────────────────────────────────
 
 interface AskResult {
@@ -795,8 +1033,10 @@ interface DbModel {
   supports_vision: number | null;
 }
 
-async function examineModel(model: DbModel): Promise<void> {
+async function examineModel(model: DbModel, level: ExamLevel): Promise<void> {
   const sql = getSqlClient();
+  const questions = getExamQuestions(level);
+  const passThreshold = getPassThreshold(level);
 
   // หา attempt number ต่อไป
   const lastAttempt = await sql<{ n: number | null }[]>`
@@ -806,13 +1046,13 @@ async function examineModel(model: DbModel): Promise<void> {
 
   // สร้าง attempt row
   const attemptRows = await sql<{ id: number }[]>`
-    INSERT INTO exam_attempts (model_id, attempt_number, total_questions)
-    VALUES (${model.id}, ${attemptNumber}, ${EXAM_QUESTIONS.length})
+    INSERT INTO exam_attempts (model_id, attempt_number, total_questions, exam_level)
+    VALUES (${model.id}, ${attemptNumber}, ${questions.length}, ${level})
     RETURNING id
   `;
   const attemptId = attemptRows[0].id;
 
-  await logWorker("exam", `📝 เริ่มสอบ: ${model.model_id} (attempt #${attemptNumber})`);
+  await logWorker("exam", `📝 เริ่มสอบ [${level}]: ${model.model_id} (attempt #${attemptNumber}, ${questions.length} ข้อ)`);
 
   let passedCount = 0;
   let skippedCount = 0;
@@ -820,7 +1060,7 @@ async function examineModel(model: DbModel): Promise<void> {
   let fatalError: string | null = null;
   const catResults = new Map<string, { passed: number; total: number }>();
 
-  for (const q of EXAM_QUESTIONS) {
+  for (const q of questions) {
     // ข้อ tool call — ถ้า model ไม่รองรับ tool → skip
     if (q.withTools && model.supports_tools !== 1) {
       skippedCount++;
@@ -882,9 +1122,9 @@ async function examineModel(model: DbModel): Promise<void> {
   }
 
   // คิดคะแนนเฉพาะข้อที่ทำจริง (ไม่รวม skipped) → ไม่ลงโทษ model ที่ไม่รองรับ vision/tools
-  const attemptedCount = EXAM_QUESTIONS.length - skippedCount;
+  const attemptedCount = questions.length - skippedCount;
   const scorePct = attemptedCount > 0 ? (passedCount / attemptedCount) * 100 : 0;
-  const passed = scorePct >= PASS_THRESHOLD_PCT;
+  const passed = scorePct >= passThreshold;
 
   // Upsert per-category scores
   for (const [cat, r] of catResults) {
@@ -937,8 +1177,9 @@ async function examineModel(model: DbModel): Promise<void> {
 
 // ─── Main: runExams ───────────────────────────────────────────────────────────
 
-export async function runExams(): Promise<{ examined: number; passed: number; failed: number }> {
-  await logWorker("exam", "🎓 เริ่มรอบสอบ");
+export async function runExams(): Promise<{ examined: number; passed: number; failed: number; level: ExamLevel }> {
+  const level = await getActiveExamLevel();
+  await logWorker("exam", `🎓 เริ่มรอบสอบ (ระดับ: ${EXAM_LEVEL_META[level].label} ${EXAM_LEVEL_META[level].emoji} — ผ่าน ≥ ${EXAM_LEVEL_META[level].threshold}%)`);
   const sql = getSqlClient();
 
   // เลือก model ที่ต้องสอบ (adaptive schedule):
@@ -980,7 +1221,7 @@ export async function runExams(): Promise<{ examined: number; passed: number; fa
 
   if (models.length === 0) {
     await logWorker("exam", "ไม่มี model ที่ต้องสอบในรอบนี้");
-    return { examined: 0, passed: 0, failed: 0 };
+    return { examined: 0, passed: 0, failed: 0, level };
   }
 
   await logWorker("exam", `จะสอบ ${models.length} model (รอบนี้)`);
@@ -994,7 +1235,7 @@ export async function runExams(): Promise<{ examined: number; passed: number; fa
     while (idx < models.length) {
       const m = models[idx++];
       try {
-        await examineModel(m);
+        await examineModel(m, level);
         // นับผลล่าสุด
         const result = await sql<{ passed: boolean }[]>`
           SELECT passed FROM exam_attempts
@@ -1018,7 +1259,7 @@ export async function runExams(): Promise<{ examined: number; passed: number; fa
     `🏁 สอบเสร็จ: ${models.length} คน — ผ่าน ${passedCount}, ตก ${failedCount}`
   );
 
-  return { examined: models.length, passed: passedCount, failed: failedCount };
+  return { examined: models.length, passed: passedCount, failed: failedCount, level };
 }
 
 // ─── Helper: สำหรับ gateway — เช็คว่า model ผ่านสอบหรือไม่ ─────────────────────

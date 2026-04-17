@@ -52,6 +52,7 @@ import { WarmupPanel } from "../components/WarmupPanel";
 import { TeachersPanel } from "../components/TeachersPanel";
 import { CodegenPanel } from "../components/CodegenPanel";
 import { DevSuggestionsPanel } from "../components/DevSuggestionsPanel";
+import { ExamLevelPanel } from "../components/ExamLevelPanel";
 
 // ─── Main Dashboard ────────────────────────────────────────────────────────────
 
@@ -275,6 +276,7 @@ export default function Dashboard() {
               { id: "dev-suggestions", icon: "\u{1F4A1}", label: "คำแนะนำ Dev" },
               { id: "infra",         icon: "\u{1F3D7}", label: "โครงสร้าง" },
               { id: "status",        icon: "\u{1F3EB}", label: "ครูใหญ่" },
+              { id: "exam-level",    icon: "\u{1F39A}", label: "ระดับสอบ" },
               { id: "teachers",      icon: "\u{1F3EB}", label: "คณะครู" },
               { id: "limits",        icon: "\u{1F4CA}", label: "โควต้า" },
               { id: "cache",         icon: "\u{1F9E0}", label: "แคช" },
@@ -597,6 +599,16 @@ export default function Dashboard() {
 
           {/* Stats Cards */}
           <StatsCards stats={stats} loading={loading} />
+        </section>
+
+        {/* ── Exam Level Selector — เลือกระดับยาก/ง่าย + ดูตัวอย่างข้อสอบ ── */}
+        <section id="exam-level" className="animate-fade-in-up stagger-1">
+          <div className="flex items-center gap-3 mb-3">
+            <span className="text-2xl">🎚</span>
+            <span className="font-bold text-white text-2xl">ระดับสอบ</span>
+            <span className="text-xs text-gray-400 ml-1">ตั้งระดับความยาก · ดูข้อสอบ · สั่งสอบใหม่ทุกคน</span>
+          </div>
+          <ExamLevelPanel />
         </section>
 
         {/* ── Teacher Hierarchy ───────────────────────────────────────── */}

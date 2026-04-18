@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { getSqlClient } from "@/lib/db/schema";
 import { getAllProviderToggles } from "@/lib/provider-toggle";
 
@@ -17,9 +17,12 @@ interface CatalogRow {
   free_tier: boolean;
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
     const sql = getSqlClient();
+    // ?source=all → ทุก provider (รวม OR/HF discovered)
+    // default → เฉพาะที่มี endpoint direct (seed + manual) — Setup modal ใช้
+    const includeAll = req.nextUrl.searchParams.get("source") === "all";
 
     // Model counts per provider
     const rows = await sql<{ provider: string; model_count: number; available_count: number }[]>`
@@ -45,12 +48,21 @@ export async function GET() {
     } catch { /* table may not exist yet */ }
 
     // Provider list from catalog (DB)
-    const catalogRows = await sql<CatalogRow[]>`
-      SELECT name, label, env_var, homepage, source, free_tier
-      FROM provider_catalog
-      WHERE status = 'active'
-      ORDER BY source = 'seed' DESC, name
-    `;
+    // Default: เฉพาะ seed + manual (มี endpoint direct จริง — ใส่ key ใน Setup ได้)
+    // OR/HF/pattern discovered → ดูใน Catalog panel แยก
+    const catalogRows = includeAll
+      ? await sql<CatalogRow[]>`
+          SELECT name, label, env_var, homepage, source, free_tier
+          FROM provider_catalog
+          WHERE status = 'active'
+          ORDER BY source = 'seed' DESC, name
+        `
+      : await sql<CatalogRow[]>`
+          SELECT name, label, env_var, homepage, source, free_tier
+          FROM provider_catalog
+          WHERE status = 'active' AND source IN ('seed', 'manual')
+          ORDER BY source = 'seed' DESC, name
+        `;
 
     const toggleMap = await getAllProviderToggles();
 

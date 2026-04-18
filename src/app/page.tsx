@@ -312,6 +312,40 @@ export default function Dashboard() {
 
       <div className="w-full px-2 sm:px-3 py-3 space-y-3">
 
+        {/* ── First-run banner: ไม่มี API key เลย → บอกให้ Setup ก่อน ─── */}
+        {providerStatuses.length > 0 && providerStatuses.every((p) => !p.hasKey) && (
+          <section className="animate-fade-in-up">
+            <div className="rounded-xl border-2 border-amber-500/40 bg-gradient-to-r from-amber-500/10 to-orange-500/10 p-5 shadow-lg shadow-amber-500/10">
+              <div className="flex items-start gap-4 flex-wrap">
+                <span className="text-4xl">🔑</span>
+                <div className="flex-1 min-w-[260px]">
+                  <div className="font-bold text-amber-200 text-lg mb-1">ยังไม่มี API key เลย!</div>
+                  <div className="text-sm text-amber-100/80 mb-2">
+                    SMLGateway ต้องมี API key อย่างน้อย 1 provider ถึงจะใช้งานได้ —
+                    สมัครฟรีที่ <strong className="text-white">OpenRouter</strong> หรือ <strong className="text-white">Groq</strong> (แนะนำ — ฟรี ใช้ง่าย)
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap text-xs">
+                    <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer"
+                       className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white border border-white/20 transition-colors">
+                      🌐 สมัคร OpenRouter (ฟรี)
+                    </a>
+                    <a href="https://console.groq.com/keys" target="_blank" rel="noopener noreferrer"
+                       className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white border border-white/20 transition-colors">
+                      🏎 สมัคร Groq (ฟรี — เร็วสุด)
+                    </a>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowSetup(true)}
+                  className="px-5 py-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-white font-bold text-sm shadow-lg shadow-amber-500/30 transition-all whitespace-nowrap"
+                >
+                  ⚙️ ใส่ API key ตอนนี้
+                </button>
+              </div>
+            </div>
+          </section>
+        )}
+
         {/* ── Live Mascot Theater (data-driven from gateway logs) ───────── */}
         <MascotScene />
 

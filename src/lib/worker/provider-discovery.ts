@@ -212,8 +212,33 @@ async function probePatternCandidates(existingNames: Set<string>): Promise<Disco
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+// Alias map: slug หลายแบบ → canonical name เดียว
+// เพื่อกัน duplicate ระหว่าง seed และ OpenRouter/HF/pattern
+const ALIAS_MAP: Record<string, string> = {
+  // Moonshot AI
+  moonshotai:        "moonshot",
+  // Google — AI Studio, Vertex, direct = ผู้ผลิตเดียวกัน
+  googleaistudio:    "google",
+  googlevertex:      "google",
+  // Alibaba Qwen
+  alibaba:           "dashscope",
+  alibabacloud:      "dashscope",
+  qwen:              "dashscope",
+  // Amazon — Nova เป็นแบรนด์ใน Bedrock
+  amazonnova:        "amazonbedrock",
+  amazon:            "amazonbedrock",
+  // ByteDance / Volcano Ark
+  volcanoark:        "bytedance",
+  bytedancevolcano:  "bytedance",
+  // OpenRouter slug "moonshot-ai" alt spellings
+  moonshot_ai:       "moonshot",
+  // HuggingFace slug forms
+  fal_ai:            "falai",
+};
+
 function normalizeName(slug: string): string {
-  return slug.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const norm = slug.toLowerCase().replace(/[^a-z0-9]/g, "");
+  return ALIAS_MAP[norm] ?? norm;
 }
 
 async function getExistingNames(): Promise<Set<string>> {

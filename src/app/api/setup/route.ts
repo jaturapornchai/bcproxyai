@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSqlClient } from "@/lib/db/schema";
 import { setProviderEnabled, getAllProviderToggles } from "@/lib/provider-toggle";
+import { triggerExamForProvider } from "@/lib/worker/exam";
+import { runWorkerCycle } from "@/lib/worker";
 
 export const dynamic = "force-dynamic";
 
@@ -60,7 +62,16 @@ export async function POST(req: NextRequest) {
       ON CONFLICT (provider) DO UPDATE SET api_key = EXCLUDED.api_key, updated_at = now()
     `;
 
-    return NextResponse.json({ ok: true, action: "saved" });
+    // ใส่ key ใหม่ → ให้ model ที่เคยตก/รอ schedule ของ provider นี้ค่อยสอบใหม่ทันที
+    // (กันสอบวน: เฉพาะ attempt ที่เก่ากว่า 5 นาที + worker cycle ตรวจซ้ำอีกชั้น)
+    const { scheduled } = await triggerExamForProvider(provider);
+
+    // Trigger worker cycle (fire-and-forget) — scan + exam ใหม่
+    runWorkerCycle().catch((err) => {
+      console.error("[setup] worker trigger error:", err);
+    });
+
+    return NextResponse.json({ ok: true, action: "saved", retriggeredExams: scheduled });
   } catch (err) {
     console.error("[setup] POST error:", err);
     return NextResponse.json({ error: "Internal error" }, { status: 500 });

@@ -1214,6 +1214,8 @@ export async function runExams(): Promise<{ examined: number; passed: number; fa
         OR (la.next_exam_at IS NOT NULL AND la.next_exam_at <= now())
         OR (la.next_exam_at IS NULL AND la.passed = false)
       )
+      -- กัน infinite re-exam: model ที่เพิ่งสอบเสร็จในช่วง 5 นาทีล่าสุด ห้ามสอบซ้ำ
+      AND (la.finished_at IS NULL OR la.finished_at < now() - interval '5 minutes')
     ORDER BY la.attempt_number NULLS FIRST, m.provider, m.model_id
     LIMIT ${MAX_MODELS_PER_RUN}
   `;
@@ -1260,6 +1262,39 @@ export async function runExams(): Promise<{ examined: number; passed: number; fa
   );
 
   return { examined: models.length, passed: passedCount, failed: failedCount, level };
+}
+
+// ─── Helper: trigger ให้ model ของ provider สอบใหม่ทันทีในรอบถัดไป ────────────
+//
+// ใช้เมื่อ:
+//   - ใส่ API key ใหม่ใน Setup → ให้ model ที่เคยตก/รอ schedule ค่อยสอบใหม่ทันที
+//
+// กัน infinite loop:
+//   - ตั้ง next_exam_at = now() เฉพาะ attempt ที่เก่ากว่า 5 นาที
+//   - exam selection query ก็มี guard "finished_at < now() - 5 min" ซ้ำอีกชั้น
+//   - หาก model สอบใหม่แล้วยังตก examFailStreak จะเพิ่ม → next_exam_at เลื่อนไกลขึ้น (3 ครั้ง = 72h)
+export async function triggerExamForProvider(provider: string): Promise<{ scheduled: number }> {
+  try {
+    const sql = getSqlClient();
+    const result = await sql<{ id: number }[]>`
+      UPDATE exam_attempts
+      SET next_exam_at = now()
+      WHERE id IN (
+        SELECT DISTINCT ON (ea.model_id) ea.id
+        FROM exam_attempts ea
+        JOIN models m ON m.id = ea.model_id
+        WHERE m.provider = ${provider}
+          AND ea.finished_at IS NOT NULL
+          AND ea.finished_at < now() - interval '5 minutes'
+        ORDER BY ea.model_id, ea.started_at DESC
+      )
+      RETURNING id
+    `;
+    return { scheduled: result.length };
+  } catch (err) {
+    console.error("[triggerExamForProvider]", err);
+    return { scheduled: 0 };
+  }
 }
 
 // ─── Helper: สำหรับ gateway — เช็คว่า model ผ่านสอบหรือไม่ ─────────────────────

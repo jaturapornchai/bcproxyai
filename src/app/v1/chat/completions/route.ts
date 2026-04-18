@@ -1744,9 +1744,13 @@ export async function POST(req: NextRequest) {
           if (isDailyLimit) {
             await logCooldown(dbModelId, `TPD exhausted: ${errText.slice(0, 150)}`, 429, 24 * 60);
             console.log(`[TPD-EXHAUST] ${provider}/${actualModelId} → 24h cooldown`);
-          } else if (st === 413 || st === 422 || /context_length|too large/i.test(errText)) {
-            // Hard error — cooldown model นาน (ไม่ retry)
-            await logCooldown(dbModelId, `HTTP ${st}: ${errText}`, st, 30);
+          } else if (/context_length|context window|too long for/i.test(errText)) {
+            // ตรง context overflow จริงๆ → cooldown 30 นาที (request นี้ใหญ่จริง model นี้ไม่รับ)
+            await logCooldown(dbModelId, `Context overflow: ${errText.slice(0, 150)}`, st, 30);
+          } else if (st === 413 || st === 422) {
+            // 413/422 generic (เช่น Groq TPM overflow) → cooldown สั้น 2 นาที
+            // เพราะ model ยังใช้ได้ ถ้า request เล็กกว่า / TPM reset
+            await logCooldown(dbModelId, `HTTP ${st}: ${errText.slice(0, 150)}`, st, 2);
           } else {
             // Exponential cooldown: 1m → 2 → 4 → 8 → 16 → 60 min
             const streakCooldownMs = await recordFailStreak(dbModelId);

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSqlClient } from "@/lib/db/schema";
 import { getCached, setCache } from "@/lib/cache";
+import { isRedisHealthy } from "@/lib/redis";
 
 export const dynamic = "force-dynamic";
 
@@ -8,6 +9,7 @@ interface HealthResult {
   status: "healthy" | "degraded" | "down";
   checks: {
     database: { ok: boolean; latencyMs: number };
+    redis: { ok: boolean };
     providers: {
       total: number;
       available: number;
@@ -23,9 +25,14 @@ interface HealthResult {
       recentSuccessRate: number;
       avgLatencyMs: number;
     };
+    minServingModels: number; // models that passed the exam (score>=50) and not in cooldown
   };
   alerts: string[];
 }
+
+// Minimum number of exam-passed, non-cooldown models below which the gateway
+// is considered "not ready" (returns 503 to upstream load balancer).
+const MIN_SERVING_MODELS = 3;
 
 export async function GET() {
   try {
@@ -52,14 +59,20 @@ export async function GET() {
         status: "down",
         checks: {
           database: { ok: false, latencyMs: 0 },
+          redis: { ok: false },
           providers: { total: 0, available: 0, cooldown: 0, percentAvailable: 0 },
           worker: { status: "unknown", lastRun: null, minutesSinceLastRun: -1 },
           gateway: { recentSuccessRate: 0, avgLatencyMs: 0 },
+          minServingModels: 0,
         },
         alerts,
       };
       return NextResponse.json(result, { status: 503 });
     }
+
+    // --- Redis check (parallel with the rest is fine — it's fast) ---
+    const redisOk = await isRedisHealthy();
+    if (!redisOk) alerts.push("Redis ping ล้มเหลว — semantic cache + leader lock เสีย");
 
     const sql = getSqlClient();
 
@@ -141,10 +154,36 @@ export async function GET() {
       alerts.push(`Success rate ต่ำกว่า 50% (${recentSuccessRate}%)`);
     }
 
+    // --- Min serving models (passed exam ≥ 50% AND not in cooldown) ---
+    // This is the readiness signal for the load balancer: if we don't have
+    // enough exam-validated, non-rate-limited models, the gateway can't
+    // reliably serve /v1/* and should be pulled out of rotation.
+    const minServingRows = await sql<{ count: number }[]>`
+      SELECT COUNT(DISTINCT m.id) as count FROM models m
+      INNER JOIN (
+        SELECT DISTINCT ON (model_id) model_id, score_pct, passed
+        FROM exam_attempts WHERE finished_at IS NOT NULL
+        ORDER BY model_id, started_at DESC
+      ) ex ON m.id = ex.model_id AND ex.passed = true AND ex.score_pct >= 50
+      LEFT JOIN (
+        SELECT hl.model_id, hl.cooldown_until FROM health_logs hl
+        INNER JOIN (SELECT model_id, MAX(id) as max_id FROM health_logs GROUP BY model_id) latest
+          ON hl.model_id = latest.model_id AND hl.id = latest.max_id
+      ) h ON m.id = h.model_id
+      WHERE h.cooldown_until IS NULL OR h.cooldown_until <= now()
+    `;
+    const minServingModels = Number(minServingRows[0]?.count ?? 0);
+    if (minServingModels < MIN_SERVING_MODELS) {
+      alerts.push(`เหลือ model พร้อมใช้แค่ ${minServingModels} (ต้องการอย่างน้อย ${MIN_SERVING_MODELS})`);
+    }
+
     let status: "healthy" | "degraded" | "down" = "healthy";
-    if (percentAvailable === 0 || !dbOk) {
+    // Hard "down" — the gateway truly can't serve /v1/*
+    if (!dbOk || minServingModels === 0) {
       status = "down";
     } else if (
+      !redisOk ||
+      minServingModels < MIN_SERVING_MODELS ||
       percentAvailable <= 20 ||
       minutesSinceLastRun >= 120 ||
       recentSuccessRate <= 50 ||
@@ -157,15 +196,21 @@ export async function GET() {
       status,
       checks: {
         database: { ok: dbOk, latencyMs: dbLatencyMs },
+        redis: { ok: redisOk },
         providers: { total, available, cooldown, percentAvailable },
         worker: { status: workerStatus, lastRun, minutesSinceLastRun },
         gateway: { recentSuccessRate, avgLatencyMs },
+        minServingModels,
       },
       alerts,
     };
 
     setCache("api:health", result, 5000);
-    return NextResponse.json(result);
+    // 503 only when we truly can't serve — load balancer should pull us out.
+    // "degraded" still returns 200 so observers can see the warning without
+    // triggering failover storms.
+    const httpStatus = status === "down" ? 503 : 200;
+    return NextResponse.json(result, { status: httpStatus });
   } catch (err) {
     console.error("[health] error:", err);
     return NextResponse.json(
@@ -173,9 +218,11 @@ export async function GET() {
         status: "down",
         checks: {
           database: { ok: false, latencyMs: 0 },
+          redis: { ok: false },
           providers: { total: 0, available: 0, cooldown: 0, percentAvailable: 0 },
           worker: { status: "unknown", lastRun: null, minutesSinceLastRun: -1 },
           gateway: { recentSuccessRate: 0, avgLatencyMs: 0 },
+          minServingModels: 0,
         },
         alerts: [`Internal error: ${String(err)}`],
       },

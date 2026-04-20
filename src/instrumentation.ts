@@ -3,12 +3,18 @@
  * Registers SIGTERM/SIGINT handlers to drain in-flight requests before exit.
  */
 import { upstreamAgent } from "@/lib/upstream-agent";
+import { startPrewarm } from "@/lib/prewarm";
 
 export let shuttingDown = false;
 
 export async function register() {
   if (process.env.NEXT_RUNTIME === "nodejs") {
     const DRAIN_TIMEOUT_MS = 15_000;
+
+    // Warm TLS connections to the providers we route to most often, so the
+    // first real chat request doesn't pay the ~30-100ms handshake cost.
+    // Best-effort, errors swallowed.
+    startPrewarm();
 
     const shutdown = async (signal: string) => {
       if (shuttingDown) return;

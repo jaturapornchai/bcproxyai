@@ -3,6 +3,7 @@ import { getSqlClient } from "@/lib/db/schema";
 import { getNextApiKey, markKeyCooldown, hasProviderKey } from "@/lib/api-keys";
 import { resolveProviderUrl, resolveProviderAuth } from "@/lib/provider-resolver";
 import { clearCache } from "@/lib/cache";
+import { registerInvalidator as registerModelListInvalidator } from "@/lib/model-list-cache";
 import { compressMessages } from "@/lib/prompt-compress";
 import { openAIError, ensureChatCompletionFields } from "@/lib/openai-compat";
 import { autoDetectComplaint } from "@/lib/auto-complaint";
@@ -302,7 +303,30 @@ const VISION_PRIORITY_PROVIDERS = ["google", "groq", "ollama", "github"];
 // category_winners (tools category loss_streak), and exam_answers (tools question pass rate).
 // See `recordOutcomeLearning()` and `getCategoryWinners("tools")`.
 
+// In-memory cache for the (heavy) model-list query — 4-table JOIN that hits
+// every chat request. 30-sec TTL is short enough that health flips propagate
+// quickly without thundering the DB.
+//
+// Key: caps shape that affects the SQL (vision/tools/json) so we don't return
+// vision-required rows to a tools query. estTokens is excluded — sort tweak
+// only, not row filter.
+const modelListCache = new Map<string, { rows: ModelRow[]; exp: number }>();
+const MODEL_LIST_TTL_MS = 30_000;
+function modelListCacheKey(caps: RequestCapabilities): string {
+  return `${caps.hasImages ? 1 : 0}:${caps.hasTools ? 1 : 0}:${caps.needsJsonSchema ? 1 : 0}`;
+}
+// Register with the shared hook so health/scan workers can invalidate.
+registerModelListInvalidator(() => modelListCache.clear());
+
 async function getAvailableModels(caps: RequestCapabilities, benchmarkCategory?: string, estTokens?: number): Promise<ModelRow[]> {
+  const ck = modelListCacheKey(caps);
+  const now = Date.now();
+  const hit = modelListCache.get(ck);
+  if (hit && hit.exp > now) {
+    // Sort tweak depends on estTokens — re-apply on cached rows
+    return reorderForLatency([...hit.rows], estTokens);
+  }
+
   const sql = getSqlClient();
 
   const visionFilter = caps.hasImages ? `AND m.supports_vision = 1` : "";
@@ -361,6 +385,12 @@ async function getAvailableModels(caps: RequestCapabilities, benchmarkCategory?:
       COALESCE(rs.avg_lat_real, ex.total_latency_ms::float, 9999999) ASC
   `) as ModelRow[];
 
+  modelListCache.set(ck, { rows: [...rows], exp: now + MODEL_LIST_TTL_MS });
+  return reorderForLatency(rows, estTokens);
+}
+
+// Pure sort tweak split out so cache hits can re-apply it cheaply.
+function reorderForLatency(rows: ModelRow[], estTokens?: number): ModelRow[] {
   // Apply Ollama slowness penalty: push Ollama to end if any cloud provider is available
   const cloudRows = rows.filter(r => r.provider !== "ollama");
   const ollamaRows = rows.filter(r => r.provider === "ollama");

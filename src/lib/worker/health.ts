@@ -1,6 +1,7 @@
 import { getSqlClient } from "@/lib/db/schema";
 import { getNextApiKey } from "@/lib/api-keys";
 import { resolveProviderUrl } from "@/lib/provider-resolver";
+import { invalidateModelListCache } from "@/lib/model-list-cache";
 
 async function logWorker(step: string, message: string, level = "info") {
   try {
@@ -380,6 +381,10 @@ export async function checkHealth(): Promise<{
 
   const msg = `Health check done: checked=${checked}, available=${available}, cooldown=${cooldownCount}`;
   await logWorker("health", msg);
+
+  // Cooldowns + tool flags may have moved — drop the model-list cache so the
+  // chat path picks up fresh availability on the next request.
+  invalidateModelListCache();
 
   return { checked, available, cooldown: cooldownCount };
 }

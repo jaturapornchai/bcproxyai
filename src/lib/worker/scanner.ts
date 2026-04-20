@@ -1,6 +1,7 @@
 import { getSqlClient } from "@/lib/db/schema";
 import { getNextApiKey, getAvailableProviders } from "@/lib/api-keys";
 import { emitEvent } from "@/lib/routing-learn";
+import { invalidateModelListCache } from "@/lib/model-list-cache";
 import { isProviderEnabled } from "@/lib/provider-toggle";
 
 interface ModelRow {
@@ -1077,5 +1078,6 @@ export async function scanModels(): Promise<{ found: number; new: number; disapp
   const msg = `Scan: พบ ${allModels.length} | OR=${orModels.length} Kilo=${kiloModels.length} GG=${googleModels.length} Groq=${groqModels.length} Cer=${cerebrasModels.length} SN=${sambaNovaModels.length} Mis=${mistralModels.length} Oll=${ollamaModels.length} GH=${githubModels.length} FW=${fireworksModels.length} Coh=${cohereModels.length} CF=${cloudflareModels.length} HF=${hfModels.length} NV=${nvidiaModels.length} Ch=${chutesModels.length} L7=${llm7Models.length} Sc=${scalewayModels.length} Pol=${pollinationsModels.length} OC=${ollamaCloudModels.length} SF=${siliconflowModels.length} GLHF=${glhfModels.length} Tg=${togetherModels.length} Hy=${hyperbolicModels.length} Z=${zaiModels.length} DS=${dashscopeModels.length} Reka=${rekaModels.length} | ใหม่ ${newCount} | หายไป ${disappearedCount}`;
   await logWorker("scan", msg);
 
+  invalidateModelListCache();
   return { found: allModels.length, new: newCount, disappeared: disappearedCount };
 }

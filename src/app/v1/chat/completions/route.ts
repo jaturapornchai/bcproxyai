@@ -483,7 +483,7 @@ function parseModelField(model: string): {
   if (model === "sml/thai") return { mode: "thai" };
   if (model === "sml/consensus") return { mode: "consensus" };
 
-  const providerMatch = model.match(/^(thaillm|typhoon|openrouter|kilo|google|groq|cerebras|sambanova|mistral|ollama|github|fireworks|cohere|cloudflare|huggingface|nvidia|chutes|llm7|scaleway|pollinations|ollamacloud|siliconflow|glhf|together|hyperbolic|zai|dashscope|reka)\/(.+)$/);
+  const providerMatch = model.match(/^(chinda|thaillm|typhoon|openrouter|kilo|google|groq|cerebras|sambanova|mistral|ollama|github|fireworks|cohere|cloudflare|huggingface|nvidia|chutes|llm7|scaleway|pollinations|ollamacloud|siliconflow|glhf|together|hyperbolic|zai|dashscope|reka)\/(.+)$/);
   if (providerMatch) return { mode: "direct", provider: providerMatch[1], modelId: providerMatch[2] };
 
   return { mode: "match", modelId: model };
@@ -585,10 +585,13 @@ async function forwardToProvider(
   const apiKey = getNextApiKey(provider);
   if (!apiKey) throw new Error(`No API key for provider: ${provider}`);
 
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${apiKey}`,
-  };
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  // Chinda (iApp Technology) uses `apikey:` header instead of Bearer
+  if (provider === "chinda") {
+    headers["apikey"] = apiKey;
+  } else {
+    headers["Authorization"] = `Bearer ${apiKey}`;
+  }
 
   if (provider === "openrouter") {
     headers["HTTP-Referer"] = "https://smlgateway.ai";

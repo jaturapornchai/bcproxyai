@@ -882,24 +882,6 @@ async function fetchThaiLLMModels(): Promise<ModelRow[]> {
   });
 }
 
-async function fetchChindaModels(): Promise<ModelRow[]> {
-  // Chinda (iApp) doesn't expose /v1/models — only one public model right now
-  const apiKey = getNextApiKey("chinda");
-  if (!apiKey) return [];
-  const curated = [{ id: "chinda-qwen3-4b", ctx: 32_768 }];
-  return curated.map((m) => ({
-    id: `chinda:${m.id}`,
-    name: m.id,
-    provider: "chinda",
-    model_id: m.id,
-    context_length: m.ctx,
-    tier: calcTier(m.ctx),
-    description: "Thai LLM 4B (Qwen3) — fine-tuned by iApp Technology",
-    supports_vision: 0,
-    supports_tools: 0,
-  }));
-}
-
 async function fetchHuggingFaceModels(): Promise<ModelRow[]> {
   const token = getNextApiKey("huggingface");
   if (!token) return [];
@@ -976,7 +958,7 @@ export async function scanModels(): Promise<{ found: number; new: number; disapp
     cloudflareModels, hfModels, nvidiaModels,
     chutesModels, llm7Models, scalewayModels, pollinationsModels, ollamaCloudModels,
     siliconflowModels, glhfModels, togetherModels, hyperbolicModels,
-    zaiModels, dashscopeModels, rekaModels, typhoonModels, thaillmModels, chindaModels,
+    zaiModels, dashscopeModels, rekaModels, typhoonModels, thaillmModels,
   ] = await Promise.all([
     guard("openrouter", fetchOpenRouterModels),
     guard("kilo", fetchKiloModels),
@@ -1006,7 +988,6 @@ export async function scanModels(): Promise<{ found: number; new: number; disapp
     guard("reka", fetchRekaModels),
     guard("typhoon", fetchTyphoonModels),
     guard("thaillm", fetchThaiLLMModels),
-    guard("chinda", fetchChindaModels),
   ]);
 
   const allModels = [
@@ -1015,7 +996,7 @@ export async function scanModels(): Promise<{ found: number; new: number; disapp
     ...cloudflareModels, ...hfModels, ...nvidiaModels,
     ...chutesModels, ...llm7Models, ...scalewayModels, ...pollinationsModels, ...ollamaCloudModels,
     ...siliconflowModels, ...glhfModels, ...togetherModels, ...hyperbolicModels,
-    ...zaiModels, ...dashscopeModels, ...rekaModels, ...typhoonModels, ...thaillmModels, ...chindaModels,
+    ...zaiModels, ...dashscopeModels, ...rekaModels, ...typhoonModels, ...thaillmModels,
   ];
   const foundIds = new Set(allModels.map(m => m.id));
   let newCount = 0;

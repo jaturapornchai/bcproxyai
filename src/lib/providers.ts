@@ -1,7 +1,6 @@
 export const PROVIDER_URLS: Record<string, string> = {
   thaillm: "https://api.thaillm.or.th/v1/chat/completions",
   typhoon: "https://api.opentyphoon.ai/v1/chat/completions",
-  chinda: "https://api.iapp.co.th/v3/llm/chinda-thaillm-4b/chat/completions",
   openrouter: "https://openrouter.ai/api/v1/chat/completions",
   kilo: "https://api.kilo.ai/api/gateway/chat/completions",
   google:
@@ -54,7 +53,6 @@ export const PROVIDER_COMPLETIONS_URLS: Record<string, string> = {
 export const PROVIDER_LABELS: Record<string, string> = {
   thaillm: "ThaiLLM",
   typhoon: "Typhoon",
-  chinda: "Chinda",
   openrouter: "OR",
   kilo: "Kilo",
   google: "GG",

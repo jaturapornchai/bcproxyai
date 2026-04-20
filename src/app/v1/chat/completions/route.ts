@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { getSqlClient } from "@/lib/db/schema";
 import { getNextApiKey, markKeyCooldown, hasProviderKey } from "@/lib/api-keys";
-import { resolveProviderUrl } from "@/lib/provider-resolver";
+import { resolveProviderUrl, resolveProviderAuth } from "@/lib/provider-resolver";
 import { clearCache } from "@/lib/cache";
 import { compressMessages } from "@/lib/prompt-compress";
 import { openAIError, ensureChatCompletionFields } from "@/lib/openai-compat";
@@ -483,7 +483,7 @@ function parseModelField(model: string): {
   if (model === "sml/thai") return { mode: "thai" };
   if (model === "sml/consensus") return { mode: "consensus" };
 
-  const providerMatch = model.match(/^(chinda|thaillm|typhoon|openrouter|kilo|google|groq|cerebras|sambanova|mistral|ollama|github|fireworks|cohere|cloudflare|huggingface|nvidia|chutes|llm7|scaleway|pollinations|ollamacloud|siliconflow|glhf|together|hyperbolic|zai|dashscope|reka)\/(.+)$/);
+  const providerMatch = model.match(/^(thaillm|typhoon|openrouter|kilo|google|groq|cerebras|sambanova|mistral|ollama|github|fireworks|cohere|cloudflare|huggingface|nvidia|chutes|llm7|scaleway|pollinations|ollamacloud|siliconflow|glhf|together|hyperbolic|zai|dashscope|reka)\/(.+)$/);
   if (providerMatch) return { mode: "direct", provider: providerMatch[1], modelId: providerMatch[2] };
 
   return { mode: "match", modelId: model };
@@ -611,10 +611,10 @@ async function forwardToProvider(
   const supportsReasoning = opts.supportsReasoning ?? await lookupReasoning(provider, actualModelId);
 
   const headers: Record<string, string> = { "Content-Type": "application/json" };
-  // Chinda (iApp Technology) uses `apikey:` header instead of Bearer
-  if (provider === "chinda") {
-    headers["apikey"] = apiKey;
-  } else {
+  const auth = resolveProviderAuth(provider);
+  if (auth.scheme === "apikey-header") {
+    headers[auth.headerName] = apiKey;
+  } else if (auth.scheme !== "none") {
     headers["Authorization"] = `Bearer ${apiKey}`;
   }
 

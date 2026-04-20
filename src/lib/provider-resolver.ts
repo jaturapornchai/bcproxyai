@@ -18,6 +18,8 @@ interface CatalogEntry {
   label: string | null;
   status: string;
   source: string;
+  auth_scheme: string | null;
+  auth_header_name: string | null;
 }
 
 let cache: Map<string, CatalogEntry> = new Map();
@@ -29,7 +31,6 @@ const CACHE_TTL_MS = 30_000;
 const HARDCODED_ENV_MAP: Record<string, string> = {
   thaillm: "THAILLM_API_KEY",
   typhoon: "TYPHOON_API_KEY",
-  chinda: "CHINDA_API_KEY",
   openrouter: "OPENROUTER_API_KEY", kilo: "KILO_API_KEY", google: "GOOGLE_AI_API_KEY",
   groq: "GROQ_API_KEY", cerebras: "CEREBRAS_API_KEY", sambanova: "SAMBANOVA_API_KEY",
   mistral: "MISTRAL_API_KEY", ollama: "OLLAMA_API_KEY", github: "GITHUB_MODELS_TOKEN",
@@ -50,7 +51,7 @@ async function refresh(): Promise<void> {
   try {
     const sql = getSqlClient();
     const rows = await sql<CatalogEntry[]>`
-      SELECT name, base_url, env_var, label, status, source
+      SELECT name, base_url, env_var, label, status, source, auth_scheme, auth_header_name
       FROM provider_catalog
       WHERE status = 'active'
     `;
@@ -92,6 +93,19 @@ export function resolveProviderEnvVar(provider: string): string {
   const fromDb = cache.get(provider)?.env_var;
   if (fromDb) return fromDb;
   return HARDCODED_ENV_MAP[provider] ?? `${provider.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_API_KEY`;
+}
+
+/**
+ * Auth scheme for a provider. Defaults to bearer.
+ * Used by forwardToProvider + exam askModel to pick the right header.
+ */
+export type AuthScheme = "bearer" | "apikey-header" | "query-key" | "none";
+export function resolveProviderAuth(provider: string): { scheme: AuthScheme; headerName: string } {
+  maybeRefresh();
+  const row = cache.get(provider);
+  const scheme = (row?.auth_scheme ?? "bearer") as AuthScheme;
+  const headerName = row?.auth_header_name ?? (scheme === "apikey-header" ? "apikey" : "Authorization");
+  return { scheme, headerName };
 }
 
 /**

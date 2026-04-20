@@ -90,7 +90,7 @@ export async function POST(req: NextRequest) {
     // Best-effort — provider might reject model name; we only care about whether
     // auth passes. Most providers return 400 with a clear "invalid model" when
     // the key is good, which we count as "key ok + endpoint alive".
-    model: provider === "chinda" ? "chinda-qwen3-4b" : "__probe__",
+    model: "__probe__",
     messages: [{ role: "user", content: "hi" }],
     max_tokens: 1,
   });

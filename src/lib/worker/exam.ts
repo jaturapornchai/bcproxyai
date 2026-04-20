@@ -10,7 +10,7 @@
  */
 import { getSqlClient } from "@/lib/db/schema";
 import { getNextApiKey } from "@/lib/api-keys";
-import { resolveProviderUrl } from "@/lib/provider-resolver";
+import { resolveProviderUrl, resolveProviderAuth } from "@/lib/provider-resolver";
 import { computeNextExamAt, getLiveSuccessRate } from "@/lib/learning";
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
@@ -816,9 +816,10 @@ async function askModel(
   if (!apiKey) return { answer: "", latency: 0, error: "no api key" };
 
   const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (provider === "chinda") {
-    headers["apikey"] = apiKey;
-  } else {
+  const auth = resolveProviderAuth(provider);
+  if (auth.scheme === "apikey-header") {
+    headers[auth.headerName] = apiKey;
+  } else if (auth.scheme !== "none") {
     headers["Authorization"] = `Bearer ${apiKey}`;
   }
   if (provider === "openrouter") {
@@ -934,7 +935,8 @@ async function examineModel(model: DbModel, level: ExamLevel): Promise<void> {
   `;
   const attemptId = attemptRows[0].id;
 
-  await logWorker("exam", `📝 เริ่มสอบ [${level}]: ${model.model_id} (attempt #${attemptNumber}, ${questions.length} ข้อ)`);
+  const thinkTag = model.supports_reasoning === 1 ? " 🧠 thinking" : "";
+  await logWorker("exam", `📝 เริ่มสอบ [${level}]${thinkTag}: ${model.model_id} (attempt #${attemptNumber}, ${questions.length} ข้อ)`);
 
   let passedCount = 0;
   let skippedCount = 0;

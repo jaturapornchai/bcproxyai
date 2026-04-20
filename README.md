@@ -108,6 +108,15 @@ Restart → `/v1/*` จะเปิดเฉพาะสำหรับ:
 - Bearer `sml_live_*` (admin ออกให้ client ที่ `/admin/keys`)
 - Owner Google login (UI อย่างเดียว)
 
+**เพิ่ม/ลบ admin ภายหลัง:** แก้ `AUTH_OWNER_EMAIL` ใน `.env.production` บน droplet → restart
+```bash
+ssh root@your-droplet
+nano /opt/sml-gateway/.env.production
+bash /opt/sml-gateway/scripts/deploy-droplet.sh
+```
+
+ดูรายละเอียด 3 ระดับสิทธิ์ + วิธีออก API key ให้ client ที่ [/guide#auth](https://your-domain/guide#auth)
+
 **Worker cycles ที่รันอัตโนมัติ:**
 
 | Loop | Interval | ทำอะไร |

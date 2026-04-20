@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { verifyKey as verifyGatewayKey } from "@/lib/gateway-keys";
 import { hasOwners, isOwnerEmail } from "@/lib/admin-emails";
+import { ADMIN_COOKIE_NAME, verifyAdminCookie, adminPasswordEnabled } from "@/lib/admin-cookie";
 import { auth } from "../auth";
 
 // Auth model (kept as simple as possible — no browser OAuth):
@@ -13,7 +14,7 @@ import { auth } from "../auth";
 //   2. sml_live_* from DB    — admin-issued (only /v1/*)
 //   3. (none)                — pages + GET /api/* that aren't /v1/* are open
 const API_KEY = process.env.GATEWAY_API_KEY?.trim() ?? "";
-const AUTH_ENABLED = Boolean(API_KEY || hasOwners());
+const AUTH_ENABLED = Boolean(API_KEY || hasOwners() || adminPasswordEnabled());
 
 const MUTATING_METHODS = new Set(["POST", "PUT", "DELETE", "PATCH"]);
 
@@ -37,8 +38,9 @@ export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
   const method = req.method.toUpperCase();
 
-  // Always open
+  // Always open: health + auth endpoints (NextAuth callbacks, password-login, whoami)
   if (pathname === "/api/health") return NextResponse.next();
+  if (pathname.startsWith("/api/auth/")) return NextResponse.next();
 
   const isV1Route = pathname.startsWith("/v1/");
   const isAdminApi = pathname.startsWith("/api/admin/");
@@ -52,15 +54,16 @@ export async function proxy(req: NextRequest) {
     Boolean(presented && presented.startsWith("sml_live_")) &&
     (await verifyGatewayKey(presented));
 
-  // /api/admin/* → master Bearer OR owner Google session
+  // /api/admin/* → master Bearer OR owner Google session OR password cookie
   if (isAdminApi) {
     if (isMaster) return NextResponse.next();
+    if (verifyAdminCookie(req.cookies.get(ADMIN_COOKIE_NAME)?.value)) return NextResponse.next();
     try {
       const session = (await auth()) as { user?: { email?: string | null } } | null;
       const email = session?.user?.email ?? "";
       if (email && isOwnerEmail(email)) return NextResponse.next();
     } catch { /* fall through */ }
-    return json({ error: { message: "admin: owner login or master key required", type: "auth_error" } }, 401);
+    return json({ error: { message: "admin: login or master key required", type: "auth_error" } }, 401);
   }
 
   // /v1/* → master or sml_live_*
@@ -72,15 +75,16 @@ export async function proxy(req: NextRequest) {
     );
   }
 
-  // Mutating /api/* (setup, etc) → master Bearer OR owner Google session
+  // Mutating /api/* (setup, etc) → master Bearer OR owner Google session OR password cookie
   if (isMutatingApi) {
     if (isMaster) return NextResponse.next();
+    if (verifyAdminCookie(req.cookies.get(ADMIN_COOKIE_NAME)?.value)) return NextResponse.next();
     try {
       const session = (await auth()) as { user?: { email?: string | null } } | null;
       const email = session?.user?.email ?? "";
       if (email && isOwnerEmail(email)) return NextResponse.next();
     } catch { /* fall through */ }
-    return json({ error: { message: "admin: owner login or master key required", type: "auth_error" } }, 401);
+    return json({ error: { message: "admin: login or master key required", type: "auth_error" } }, 401);
   }
 
   // All pages + GET /api/* are open — UI is meant to be viewable.

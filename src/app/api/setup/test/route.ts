@@ -101,9 +101,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: `HTTP ${res.status}: invalid key` });
     }
     if (res.status === 502 || res.status === 503 || res.status === 504) {
+      // Upstream is down but auth layer didn't reject us — the key is almost
+      // certainly valid (401 would have been returned before hitting upstream).
+      // Save the key with a warning so the user doesn't have to wait for the
+      // provider to recover.
       return NextResponse.json({
-        ok: false,
-        error: `HTTP ${res.status}: upstream ${provider} กำลังล่ม (key อาจถูกต้อง — ลองใหม่ในภายหลัง)`,
+        ok: true,
+        models: 0,
+        warn: `upstream ${provider} ล่มชั่วคราว (HTTP ${res.status}) — บันทึก key ไว้ก่อน, worker จะ verify อีกครั้งเมื่อ backend กลับมา`,
       });
     }
     // 400 / 404 / 422 — endpoint reachable; body rejected. Key is almost

@@ -56,7 +56,7 @@ export default function SetupPage() {
   const [saving, setSaving] = useState<Record<string, boolean>>({});
   const [saveResult, setSaveResult] = useState<Record<string, "ok" | "error" | undefined>>({});
   const [testing, setTesting] = useState<Record<string, boolean>>({});
-  const [testResult, setTestResult] = useState<Record<string, { ok?: boolean; models?: number; error?: string } | undefined>>({});
+  const [testResult, setTestResult] = useState<Record<string, { ok?: boolean; models?: number; error?: string; warn?: string } | undefined>>({});
   const [scanning, setScanning] = useState(false);
   const [filter, setFilter] = useState<"all" | "active" | "no_key" | "free" | "thai" | "broken">("all");
 
@@ -426,6 +426,11 @@ export default function SetupPage() {
                       {testRes?.ok === true && result === "ok" && (
                         <div className="text-[11px] text-emerald-300 flex items-center gap-1.5 font-semibold">
                           ✅ ทดสอบผ่าน ({testRes.models ?? 0} model) — บันทึกสำเร็จ
+                        </div>
+                      )}
+                      {testRes?.ok === true && (testRes as { warn?: string }).warn && (
+                        <div className="text-[11px] text-amber-300">
+                          ⚠️ {(testRes as { warn?: string }).warn}
                         </div>
                       )}
                       {testRes?.ok === true && result !== "ok" && isSaving && (

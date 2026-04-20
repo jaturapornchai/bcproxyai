@@ -806,7 +806,8 @@ interface AskResult {
 async function askModel(
   provider: string,
   modelId: string,
-  question: ExamQuestion
+  question: ExamQuestion,
+  supportsReasoning = false,
 ): Promise<AskResult> {
   const url = resolveProviderUrl(provider);
   if (!url) return { answer: "", latency: 0, error: "unknown provider" };
@@ -814,10 +815,12 @@ async function askModel(
   const apiKey = getNextApiKey(provider);
   if (!apiKey) return { answer: "", latency: 0, error: "no api key" };
 
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${apiKey}`,
-  };
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (provider === "chinda") {
+    headers["apikey"] = apiKey;
+  } else {
+    headers["Authorization"] = `Bearer ${apiKey}`;
+  }
   if (provider === "openrouter") {
     headers["HTTP-Referer"] = "https://sml-gateway.app";
     headers["X-Title"] = "SMLGateway Exam";
@@ -846,13 +849,11 @@ async function askModel(
     reqBody.tool_choice = "auto";
   }
 
-  // Enable reasoning/thinking mode for models that support it. Different
-  // providers expose the toggle differently — we set the union of known
-  // parameter names; unsupported ones are harmlessly ignored by providers
-  // that follow the OpenAI spec (extra JSON fields = passthrough).
-  const idLower = modelId.toLowerCase();
-  const isThinking = /(^|[-_/.])(think|thinking|reason|reasoning|r1|o1|o3|o4|qwen3|deepseek-r|magistral)([-_/.]|$)/i.test(idLower);
-  if (isThinking) {
+  // Enable reasoning/thinking mode for models that support it (per DB flag
+  // set at scan time from provider metadata or name regex). Different
+  // providers accept different param names — send both; unsupported fields
+  // are harmlessly ignored per OpenAI spec.
+  if (supportsReasoning) {
     reqBody.reasoning = { effort: "medium" };    // OpenRouter / Anthropic style
     reqBody.enable_thinking = true;                // Qwen3 / DashScope style
     reqBody.max_tokens = 2000;                     // thinking needs room
@@ -911,6 +912,7 @@ interface DbModel {
   model_id: string;
   supports_tools: number | null;
   supports_vision: number | null;
+  supports_reasoning: number | null;
 }
 
 async function examineModel(model: DbModel, level: ExamLevel): Promise<void> {
@@ -961,7 +963,12 @@ async function examineModel(model: DbModel, level: ExamLevel): Promise<void> {
       continue;
     }
 
-    const { answer, latency, error } = await askModel(model.provider, model.model_id, q);
+    const { answer, latency, error } = await askModel(
+      model.provider,
+      model.model_id,
+      q,
+      model.supports_reasoning === 1,
+    );
     totalLatency += latency;
 
     if (error) {
@@ -1079,7 +1086,7 @@ export async function runExams(): Promise<{ examined: number; passed: number; fa
       FROM health_logs
       ORDER BY model_id, id DESC
     )
-    SELECT m.id, m.provider, m.model_id, m.supports_tools, m.supports_vision
+    SELECT m.id, m.provider, m.model_id, m.supports_tools, m.supports_vision, m.supports_reasoning
     FROM models m
     LEFT JOIN latest_attempt la ON la.model_id = m.id
     LEFT JOIN latest_health lh ON lh.model_id = m.id

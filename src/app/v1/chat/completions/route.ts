@@ -572,18 +572,43 @@ async function selectModelsByMode(
   return getAvailableModels(caps, benchmarkCategory, estTokens);
 }
 
+// In-memory cache: (provider:model_id) → supports_reasoning flag (60s TTL).
+// Avoids a DB hit on every chat request while still reflecting re-scans.
+const reasoningCache = new Map<string, { v: boolean; exp: number }>();
+async function lookupReasoning(provider: string, modelId: string): Promise<boolean> {
+  const key = `${provider}:${modelId}`;
+  const now = Date.now();
+  const hit = reasoningCache.get(key);
+  if (hit && hit.exp > now) return hit.v;
+  try {
+    const sql = getSqlClient();
+    const rows = await sql<{ supports_reasoning: number | null }[]>`
+      SELECT supports_reasoning FROM models WHERE provider = ${provider} AND model_id = ${modelId} LIMIT 1
+    `;
+    const v = rows[0]?.supports_reasoning === 1;
+    reasoningCache.set(key, { v, exp: now + 60_000 });
+    return v;
+  } catch {
+    return false;
+  }
+}
+
 async function forwardToProvider(
   provider: string,
   actualModelId: string,
   body: Record<string, unknown>,
   stream: boolean,
-  externalSignal?: AbortSignal
+  externalSignal?: AbortSignal,
+  opts: { supportsReasoning?: boolean } = {},
 ): Promise<Response> {
   const url = resolveProviderUrl(provider);
   if (!url) throw new Error(`Unknown provider: ${provider}`);
 
   const apiKey = getNextApiKey(provider);
   if (!apiKey) throw new Error(`No API key for provider: ${provider}`);
+
+  // Auto-detect reasoning flag if caller didn't supply it
+  const supportsReasoning = opts.supportsReasoning ?? await lookupReasoning(provider, actualModelId);
 
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   // Chinda (iApp Technology) uses `apikey:` header instead of Bearer
@@ -599,6 +624,18 @@ async function forwardToProvider(
   }
 
   const requestBody: Record<string, unknown> = { ...body, model: actualModelId };
+
+  // Auto-enable thinking for reasoning-capable models — unless client already
+  // set reasoning/enable_thinking explicitly (opt-out via header or body).
+  const optOut = requestBody.reasoning === false ||
+                 requestBody.enable_thinking === false ||
+                 requestBody["x-sml-disable-thinking"] === true;
+  const alreadySet = requestBody.reasoning !== undefined || requestBody.enable_thinking !== undefined;
+  if (supportsReasoning && !alreadySet && !optOut) {
+    requestBody.reasoning = { effort: "medium" };
+    requestBody.enable_thinking = true;
+  }
+  delete requestBody["x-sml-disable-thinking"];
 
   delete requestBody.store;
   delete requestBody.stream_options;

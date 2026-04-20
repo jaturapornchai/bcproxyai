@@ -42,9 +42,23 @@ const TOOLS_PATTERNS = [
   /nexusraven/i, /functionary/i, /gemma/i,
 ];
 
+// Models known to support an explicit "thinking / reasoning" mode.
+// Detected by name at scan-time → stored in models.supports_reasoning.
+// The exam worker + forward path use the DB flag (not this regex at runtime),
+// so adding a new pattern here auto-propagates after the next scan cycle.
 const REASONING_PATTERNS = [
-  /deepseek-r1/i, /\bo[13]\b/i, /o1-/i, /o3-/i, /qwq/i, /reasoning/i,
-  /think/i, /magistral/i, /r1-distill/i,
+  /deepseek-r\d/i,           // deepseek-r1, deepseek-r2
+  /r1[-_](distill|preview)/i,
+  /\bo[134]\b/i, /o1-/i, /o3-/i, /o4-/i, // OpenAI reasoning series
+  /qwq/i,                     // Alibaba QwQ
+  /\bqwen3\b/i,               // Qwen3 family (dual-mode thinking by default)
+  /thinking/i, /\bthink\b/i,  // any model with "think" / "thinking"
+  /reasoning/i, /reason-/i,
+  /magistral/i,               // Mistral reasoning variant
+  /gemini.*thinking/i,
+  /\blfm-.*thinking/i,        // Liquid LFM thinking
+  /nemotron-.*reasoning/i,    // NVIDIA Nemotron reasoning
+  /pathumma.*think/i,         // NECTEC Pathumma think
 ];
 
 const CODE_PATTERNS = [
@@ -75,10 +89,21 @@ const JSON_MODE_PATTERNS = [
   /deepseek/i, /gemma/i, /command-r/i,
 ];
 
-function detectCaps(modelId: string, name: string): Partial<ModelRow> {
+function detectCaps(
+  modelId: string,
+  name: string,
+  providerMeta?: { reasoning?: boolean },
+): Partial<ModelRow> {
   const combined = `${modelId} ${name}`;
+  // Reasoning: prefer provider metadata when available (OpenRouter tells us via
+  // `supported_parameters: ["reasoning", ...]`). Fall back to name regex.
+  const reasoning = providerMeta?.reasoning === true
+    ? 1
+    : providerMeta?.reasoning === false
+      ? 0
+      : REASONING_PATTERNS.some(p => p.test(combined)) ? 1 : 0;
   return {
-    supports_reasoning: REASONING_PATTERNS.some(p => p.test(combined)) ? 1 : 0,
+    supports_reasoning: reasoning,
     supports_code: CODE_PATTERNS.some(p => p.test(combined)) ? 1 : 0,
     supports_embedding: EMBEDDING_PATTERNS.some(p => p.test(combined)) ? 1 : 0,
     supports_image_gen: IMAGE_GEN_PATTERNS.some(p => p.test(combined)) ? 1 : 0,
@@ -132,6 +157,8 @@ async function fetchOpenRouterModels(): Promise<ModelRow[]> {
       if (m.pricing?.prompt !== "0") continue;
       const ctx = m.context_length ?? 0;
       const arch = m.architecture ?? {};
+      const sp: string[] = Array.isArray(m.supported_parameters) ? m.supported_parameters : [];
+      const hasReasoning = sp.includes("reasoning") || sp.includes("include_reasoning") || sp.includes("reasoning_effort");
       models.push({
         id: `openrouter:${m.id}`,
         name: m.name ?? m.id,
@@ -142,6 +169,7 @@ async function fetchOpenRouterModels(): Promise<ModelRow[]> {
         description: m.description ?? undefined,
         supports_vision: detectVision(m.id, m.name ?? "", { vision: arch.modality?.includes("image") }),
         supports_tools: detectTools(m.id, m.name ?? "", { tools: arch.tool_use }),
+        supports_reasoning: hasReasoning ? 1 : undefined,
       });
     }
     return models;
@@ -996,7 +1024,12 @@ export async function scanModels(): Promise<{ found: number; new: number; disapp
 
   // Upsert models one at a time (postgres tagged templates don't support batch upsert cleanly)
   for (const m of allModels) {
-    const caps = detectCaps(m.model_id, m.name);
+    // Honor reasoning flag set by the fetcher (e.g. OpenRouter's
+    // `supported_parameters: ["reasoning", ...]`) when present — cap detection
+    // only uses name-regex so metadata beats guesswork.
+    const caps = detectCaps(m.model_id, m.name, {
+      reasoning: m.supports_reasoning === 1 ? true : undefined,
+    });
     try {
       const result = await sql<{ xmax: string }[]>`
         INSERT INTO models (id, name, provider, model_id, context_length, tier, description,

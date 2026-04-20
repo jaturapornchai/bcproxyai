@@ -18,7 +18,7 @@
 - ถ้าไม่ตั้ง `GATEWAY_API_KEY` และ `AUTH_OWNER_EMAIL` → **local mode** (no auth)
 - ถ้าตั้งอย่างน้อย 1 ตัว → **server mode** (Bearer key enforced บน `/v1/*` + `/api/admin/*`)
 
-**ไม่มี Google OAuth ไม่มีหน้า login** — ทุกอย่างเป็น Bearer key. Email ใน `AUTH_OWNER_EMAIL` เป็นแค่ metadata (แสดงใน UI + audit `created_by`).
+**Google OAuth เป็น optional identity layer** — ถ้าตั้ง `GOOGLE_CLIENT_ID/SECRET` + `NEXTAUTH_SECRET` + `NEXTAUTH_URL` จะเห็น session chip มุมขวาล่างของ dashboard บอกว่าใคร login เข้ามา (email + badge admin/guest ตาม `AUTH_OWNER_EMAIL`). **ไม่ได้ gate การใช้งาน** — Bearer key ยังเป็นตัวจริงที่ปกป้อง `/v1/*` และ `/api/admin/*`. ถ้าไม่ต้อง identity chip ให้ว่าง 4 ตัวนั้น → UI เปิดตามปกติไม่มี login chip
 
 ดูรายละเอียดทุกตัวแปรใน [.env.example](.env.example).
 

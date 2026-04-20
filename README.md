@@ -64,7 +64,7 @@ NEXTAUTH_URL=https://your-domain.com
 
 | | |
 |---|---|
-| 🆓 Free-only | 30+ providers (free tier เท่านั้น — paid ถูกกรองออก), 200+ models |
+| 🆓 Free-only | 33 providers (free tier เท่านั้น — paid ถูกกรองออก), 220+ models |
 | 🇹🇭 Thai-native | Typhoon (SCB 10X) เป็น provider ตัวแรก + virtual model `sml/thai` |
 | 🔐 3 auth methods | Local (open) / Password cookie / Google OAuth — เลือกได้ตาม env, ใช้คู่ได้. Per-client key ออกที่ `/admin/keys` |
 | 🔎 Auto-verify | probe homepage + `/v1/models` ของทุก provider ทุก 3 นาที + sync URL ใหม่จาก cheahjs/LiteLLM registry ทุก 6 ชม. |
@@ -85,6 +85,7 @@ NEXTAUTH_URL=https://your-domain.com
 
 ## สารบัญ
 
+- [3 แบบการใช้งาน](#3-แบบการใช้งาน-เลือก-1) — Local / VPS+Password / VPS+OAuth
 - [Quick Start](#quick-start)
 - [Architecture](#architecture)
 - [Virtual Models](#virtual-models)

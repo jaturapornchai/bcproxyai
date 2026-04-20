@@ -801,6 +801,7 @@ interface AskResult {
   answer: string;
   latency: number;
   error?: string;
+  thinkingObserved?: boolean; // true if model returned reasoning trace
 }
 
 async function askModel(
@@ -877,18 +878,38 @@ async function askModel(
 
     const json = await res.json();
     const message = json.choices?.[0]?.message;
-    const content: string = message?.content ?? "";
+    let content: string = message?.content ?? "";
     const toolCalls = message?.tool_calls;
+
+    // Detect whether the model actually emitted a reasoning trace.
+    // Different providers expose reasoning differently:
+    //   • Anthropic / OpenRouter / OpenAI o-series → message.reasoning (string)
+    //   • DeepSeek / Qwen3 / Pathumma-think        → message.reasoning_content
+    //   • vLLM / Qwen3 default                     → <think>...</think> in content
+    const reasoningField =
+      typeof message?.reasoning === "string" && message.reasoning.length > 20
+        ? message.reasoning
+        : typeof message?.reasoning_content === "string" && message.reasoning_content.length > 20
+          ? message.reasoning_content
+          : "";
+    const inlineThink = /<think[^>]*>[\s\S]{20,}/i.test(content);
+    const thinkingObserved = Boolean(reasoningField) || inlineThink;
+
+    // Strip <think>...</think> from content so the answer-checker sees the
+    // final answer only (graders run regex on numeric / format match).
+    if (inlineThink) {
+      content = content.replace(/<think[^>]*>[\s\S]*?<\/think>/gi, "").trim();
+    }
 
     // สำหรับข้อสอบ tool call — คืน JSON ของ tool_calls
     if (question.withTools) {
       if (Array.isArray(toolCalls) && toolCalls.length > 0) {
-        return { answer: JSON.stringify(toolCalls), latency };
+        return { answer: JSON.stringify(toolCalls), latency, thinkingObserved };
       }
-      return { answer: content, latency };
+      return { answer: content, latency, thinkingObserved };
     }
 
-    return { answer: content, latency };
+    return { answer: content, latency, thinkingObserved };
   } catch (err) {
     const latency = Date.now() - start;
     const msg = err instanceof Error ? err.message : String(err);
@@ -941,6 +962,7 @@ async function examineModel(model: DbModel, level: ExamLevel): Promise<void> {
   let passedCount = 0;
   let skippedCount = 0;
   let totalLatency = 0;
+  let thinkingHits = 0;
   let fatalError: string | null = null;
   const catResults = new Map<string, { passed: number; total: number }>();
 
@@ -965,12 +987,13 @@ async function examineModel(model: DbModel, level: ExamLevel): Promise<void> {
       continue;
     }
 
-    const { answer, latency, error } = await askModel(
+    const { answer, latency, error, thinkingObserved } = await askModel(
       model.provider,
       model.model_id,
       q,
       model.supports_reasoning === 1,
     );
+    if (thinkingObserved) thinkingHits++;
     totalLatency += latency;
 
     if (error) {
@@ -1057,9 +1080,21 @@ async function examineModel(model: DbModel, level: ExamLevel): Promise<void> {
   const icon = passed ? "✅" : "❌";
   const status = passed ? "ผ่าน" : "ตก";
   const skipNote = skippedCount > 0 ? ` [skip ${skippedCount}]` : "";
+  // Thinking observability: tell the operator whether the reasoning flag was
+  // set AND whether the model actually emitted a reasoning trace.
+  let thinkNote = "";
+  if (model.supports_reasoning === 1) {
+    if (thinkingHits > 0) {
+      thinkNote = ` 🧠 thinking ${thinkingHits}/${attemptedCount}`;
+    } else {
+      thinkNote = ` ⚠️ flagged thinking but no trace observed`;
+    }
+  } else if (thinkingHits > 0) {
+    thinkNote = ` 💡 unexpected thinking trace ${thinkingHits}/${attemptedCount} (consider flagging supports_reasoning)`;
+  }
   await logWorker(
     "exam",
-    `${icon} ${status}: ${model.model_id} — ${passedCount}/${attemptedCount} (${scorePct.toFixed(0)}%)${skipNote}${fatalError ? ` [${fatalError.slice(0, 80)}]` : ""}`,
+    `${icon} ${status}: ${model.model_id} — ${passedCount}/${attemptedCount} (${scorePct.toFixed(0)}%)${skipNote}${thinkNote}${fatalError ? ` [${fatalError.slice(0, 80)}]` : ""}`,
     passed ? "success" : "warn"
   );
 }

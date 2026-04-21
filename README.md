@@ -615,6 +615,43 @@ bash scripts/reindex.sh
 
 ---
 
+## Deploy to Droplet
+
+Droplet เป็น **Docker host ล้วน** (ไม่ใช่ git repo) — flow คือ copy ไฟล์ที่แก้ขึ้นไป แล้วรัน deploy script ให้ build + restart
+
+```bash
+# 1. copy ไฟล์ที่แก้ขึ้น droplet (เฉพาะที่เปลี่ยน)
+scp <changed-files> root@<droplet>:/opt/sml-gateway/<path>
+
+# 2. ssh เข้า droplet แล้วรัน deploy
+ssh root@<droplet>
+cd /opt/sml-gateway
+bash scripts/deploy-droplet.sh
+```
+
+Script จะทำ:
+1. `docker compose up -d --build` (ใช้ `docker-compose.yml` + `docker-compose.prod.yml`)
+2. รอ `/api/health` ตอบ 200 ภายใน 30s
+3. print container state
+
+**Requirement:** `/opt/sml-gateway/.env.production` ต้องมีอยู่แล้ว (คัดลอกจาก `.env.production.example` ครั้งแรก)
+
+**Caveat — memory:** `next build` กิน RAM 1–2 GB ระหว่าง build droplet 8 GB ที่รัน 10+ container พร้อมกันอาจ OOM ต้องมี swap อย่างน้อย 4 GB:
+```bash
+fallocate -l 4G /swapfile && chmod 600 /swapfile
+mkswap /swapfile && swapon /swapfile
+echo '/swapfile none swap sw 0 0' >> /etc/fstab
+```
+
+**Caddy config:** `caddy-prod.Caddyfile` bind mount เข้า in-compose caddy container ที่ `/etc/caddy/Caddyfile` (read-only) หลังแก้ไฟล์นี้ ต้อง `docker compose restart caddy`
+
+**Verify ผ่าน Cloudflare:**
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" https://<your-domain>/api/health
+```
+
+---
+
 ## Troubleshooting
 
 | อาการ | สาเหตุ/วิธีแก้ |

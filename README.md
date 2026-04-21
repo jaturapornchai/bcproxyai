@@ -74,6 +74,7 @@ NEXTAUTH_URL=https://your-domain.com
 | 🎯 Smart routing | per-category teacher (thai/code/tools/vision/...) + sticky routing (IP+category 30s) |
 | 🔄 Auto-fallback | **per-(provider,model) circuit breaker** + exponential cooldown + auto-demote on 429 storm + adaptive slow-cooldown |
 | 📊 Perf dashboard | `⚡ ประสิทธิภาพ` section — cache HIT/hedge WIN/spec WIN/sticky/demoted/p50/p95/throughput live (refresh 15s) |
+| 🇹🇭 Thai UI | Dashboard + `/guide` + `/setup` ทุกหน้าเป็นภาษาไทย (tooltip อธิบาย technical term เมื่อ hover) — อ่านเข้าใจได้ทันที ไม่ต้องแปล |
 | 🔌 Drop-in | เปลี่ยนแค่ `baseURL` ของ OpenAI SDK → ใช้ได้เลย |
 | 📐 Structured JSON | `/v1/structured` — schema validation + auto-retry |
 | ⚖️ A/B test | `/v1/compare` ยิง prompt ไป N model พร้อมกัน |

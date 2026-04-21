@@ -408,9 +408,9 @@ export default function GuidePage() {
         <div className="max-w-5xl mx-auto px-4 py-3 flex items-center gap-4">
           <a href="/" className="flex items-center gap-2 text-indigo-300 hover:text-white text-sm">
             <span>&larr;</span>
-            <span>Dashboard</span>
+            <span>กลับหน้าหลัก</span>
           </a>
-          <h1 className="text-lg font-bold text-white">คู่มือ SMLGateway</h1>
+          <h1 className="text-lg font-black text-white">คู่มือ SMLGateway</h1>
           <div className="flex-1" />
           <a
             href="https://github.com/jaturapornchai/sml-gateway"

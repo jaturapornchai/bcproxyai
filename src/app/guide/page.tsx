@@ -750,10 +750,17 @@ DELETE /api/admin/keys/:id             → revoke ถาวร
 # Circuit breaker (per-model)
 GET    /api/admin/circuits             → { open[], halfOpen[], warnings[], summary }
 DELETE /api/admin/circuits?provider=X&modelId=Y   → reset 1 คู่
-DELETE /api/admin/circuits             → reset ทั้งหมด (nuclear)`}</Code>
+DELETE /api/admin/circuits             → reset ทั้งหมด (nuclear)
+
+# Performance insights (public — for dashboard widget)
+GET    /api/perf-insights              → {
+  requestsLastHour, p50/p95 latency, errorRate,
+  counts: { cache:hit/miss, hedge:win/loss, spec:fire/win, sticky:hit, demote:rate-limit },
+  rates:  { cacheHitRate, hedgeWinRate, speculativeWinRate, stickyPinRate }
+}`}</Code>
           <p className="text-xs text-gray-400 leading-relaxed">
             <strong>warnings</strong> = (provider, model) ที่มี fail streak ≥ 3 ใน 30 วินาที แต่ยังไม่ trip — early warning ก่อน circuit open.
-            Dashboard จะขึ้นการ์ดแดง <strong>🚨 Circuits open: X</strong> ให้ admin อัตโนมัติ ถ้ามี trip &gt; 0 (ซ่อนตอน healthy)
+            Dashboard section <strong>⚡ ประสิทธิภาพ</strong> แสดง 8 cards real-time (refresh 15s) + การ์ดแดง <strong>🚨 Circuits open: X</strong> เมื่อมี trip &gt; 0
           </p>
         </Section>
 

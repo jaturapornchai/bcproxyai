@@ -167,12 +167,12 @@ async function recordProviderFailureMem(provider: string): Promise<void> {
   }
 }
 
-async function recordProviderSuccessMem(provider: string): Promise<void> {
+async function recordProviderSuccessMem(provider: string, modelId: string): Promise<void> {
   try {
     const redis = getRedis();
     await redis.del(`fs:provider:${provider}`);
-    // Circuit breaker: record success in rolling window
-    const succKey = `cb:succ:${provider}`;
+    // Circuit breaker: record success in rolling window (per provider+model)
+    const succKey = `cb:succ:${provider}:${modelId}`;
     const cur = await redis.get(succKey);
     const newVal = (Number(cur ?? 0) + 1).toString();
     await redis.set(succKey, newVal, "EX", 30);
@@ -180,11 +180,12 @@ async function recordProviderSuccessMem(provider: string): Promise<void> {
   _memFailures.delete(provider);
 }
 
-// P1-3: Circuit breaker — check if provider circuit is open
-async function isCircuitOpen(provider: string): Promise<boolean> {
+// P1-3: Circuit breaker — check if (provider, model) circuit is open
+// Per-model so one broken model doesn't drag the whole provider down.
+async function isCircuitOpen(provider: string, modelId: string): Promise<boolean> {
   try {
     const redis = getRedis();
-    const cbKey = `cb:open:${provider}`;
+    const cbKey = `cb:open:${provider}:${modelId}`;
     const val = await redis.get(cbKey);
     if (val === null) return false;
     if (val === "half-open") return false; // allow probe
@@ -200,33 +201,33 @@ async function isCircuitOpen(provider: string): Promise<boolean> {
   }
 }
 
-// P1-3: Record result of a half-open probe attempt
-async function recordCircuitProbeResult(provider: string, success: boolean): Promise<void> {
+// P1-3: Record result of a half-open probe attempt (per model)
+async function recordCircuitProbeResult(provider: string, modelId: string, success: boolean): Promise<void> {
   try {
     const redis = getRedis();
-    const cbKey = `cb:open:${provider}`;
+    const cbKey = `cb:open:${provider}:${modelId}`;
     const state = await redis.get(cbKey);
     if (state !== "half-open") return; // not currently probing
     if (success) {
       // Probe succeeded → fully close circuit + reset counters
       await redis.del(cbKey);
-      await redis.del(`cb:fail:${provider}`);
-      await redis.del(`cb:succ:${provider}`);
-      console.log(`[CIRCUIT-CLOSE] ${provider} — half-open probe succeeded`);
+      await redis.del(`cb:fail:${provider}:${modelId}`);
+      await redis.del(`cb:succ:${provider}:${modelId}`);
+      console.log(`[CIRCUIT-CLOSE] ${provider}/${modelId} — half-open probe succeeded`);
     } else {
       // Probe failed → re-open for 4 minutes (escalating)
       await redis.set(cbKey, "open", "EX", 240);
-      console.log(`[CIRCUIT-REOPEN] ${provider} — half-open probe failed → 4min`);
+      console.log(`[CIRCUIT-REOPEN] ${provider}/${modelId} — half-open probe failed → 4min`);
     }
   } catch { /* ignore */ }
 }
 
-// P1-3: Record provider failure for circuit breaker rolling window
-async function recordCircuitFailure(provider: string): Promise<void> {
+// P1-3: Record failure for circuit breaker rolling window (per model)
+async function recordCircuitFailure(provider: string, modelId: string): Promise<void> {
   try {
     const redis = getRedis();
-    const failKey = `cb:fail:${provider}`;
-    const succKey = `cb:succ:${provider}`;
+    const failKey = `cb:fail:${provider}:${modelId}`;
+    const succKey = `cb:succ:${provider}:${modelId}`;
     const cur = await redis.get(failKey);
     const newVal = (Number(cur ?? 0) + 1).toString();
     await redis.set(failKey, newVal, "EX", 30);
@@ -238,9 +239,9 @@ async function recordCircuitFailure(provider: string): Promise<void> {
       const successRate = succs / total;
       if (successRate < 0.3) {
         // U2: open circuit for 30s (faster recovery; half-open probe at end)
-        const cbKey = `cb:open:${provider}`;
+        const cbKey = `cb:open:${provider}:${modelId}`;
         await redis.set(cbKey, "open", "EX", 30);
-        console.log(`[CIRCUIT-OPEN] ${provider} — success rate ${(successRate * 100).toFixed(0)}% < 30% → circuit open 30s`);
+        console.log(`[CIRCUIT-OPEN] ${provider}/${modelId} — success rate ${(successRate * 100).toFixed(0)}% < 30% → circuit open 30s`);
       }
     }
   } catch { /* ignore */ }
@@ -1541,7 +1542,7 @@ export async function POST(req: NextRequest) {
         const latency = Date.now() - startTime;
         console.log(`[HEDGE-WIN:${_reqId}] ${winner.provider}/${winner.model_id} vs [${losers.map(l => `${l.provider}/${l.model_id}`).join(", ")}] | ${latency}ms`);
         // Record winner as success, loser as neutral (cancelled)
-        await recordProviderSuccessMem(winner.provider);
+        await recordProviderSuccessMem(winner.provider, winner.model_id);
 
         // Streaming hedge: stitched stream is already a fresh ReadableStream
         // from streamHedgeRace — just decorate with our headers and return.
@@ -1647,7 +1648,7 @@ export async function POST(req: NextRequest) {
         console.log(`[HEDGE-LOSS:${_reqId}] all top-${hedgeCount} failed | ${latency}ms — continuing sequential`);
         hedgeStartIdx = 0;
         await Promise.all(
-          hedgeContenders.flatMap(c => [recordProviderFailureMem(c.provider), recordCircuitFailure(c.provider)])
+          hedgeContenders.flatMap(c => [recordProviderFailureMem(c.provider), recordCircuitFailure(c.provider, c.model_id)])
         );
       }
     }
@@ -1686,7 +1687,7 @@ export async function POST(req: NextRequest) {
         capCheck,
       ] = await Promise.all([
         isProviderCooledDownMem(provider),
-        isCircuitOpen(provider),
+        isCircuitOpen(provider, actualModelId),
         wantOllamaCheck && hasCloudAlt ? isOllamaModelLoaded(actualModelId) : Promise.resolve(true),
         wantUnhealthyCheck ? isModelUnhealthyForCategory(dbModelId, learningCategory) : Promise.resolve({ unhealthy: false, reason: "" }),
         hasTpmHeadroom(provider, actualModelId, estProjected),
@@ -1695,7 +1696,7 @@ export async function POST(req: NextRequest) {
       ]);
 
       if (cooledDown) { skippedCandidates.push(candidate); skipReasons.push(`${provider}/${actualModelId}:provider-cooldown`); continue; }
-      if (circuitOpen) { skippedCandidates.push(candidate); skipReasons.push(`${provider}/${actualModelId}:circuit-open`); console.log(`[CIRCUIT-SKIP] ${provider} circuit open`); continue; }
+      if (circuitOpen) { skippedCandidates.push(candidate); skipReasons.push(`${provider}/${actualModelId}:circuit-open`); console.log(`[CIRCUIT-SKIP] ${provider}/${actualModelId} circuit open`); continue; }
       if (wantOllamaCheck && hasCloudAlt && !ollamaLoaded) {
         skippedCandidates.push(candidate); skipReasons.push(`${provider}/${actualModelId}:cold-ollama`);
         console.log(`[OLLAMA-SKIP] ${actualModelId} not loaded in memory — skipping (cloud alternatives available)`);
@@ -1738,7 +1739,7 @@ export async function POST(req: NextRequest) {
       let wasProbing = false;
       try {
         const redis = getRedis();
-        const cbState = await redis.get(`cb:open:${provider}`);
+        const cbState = await redis.get(`cb:open:${provider}:${actualModelId}`);
         wasProbing = cbState === "half-open";
       } catch { /* ignore */ }
 
@@ -1747,8 +1748,8 @@ export async function POST(req: NextRequest) {
 
         if (response.ok) {
           const latency = Date.now() - startTime;
-          await recordProviderSuccessMem(provider);
-          if (wasProbing) await recordCircuitProbeResult(provider, true);
+          await recordProviderSuccessMem(provider, actualModelId);
+          if (wasProbing) await recordCircuitProbeResult(provider, actualModelId, true);
           // Parse rate limit headers (Groq/OpenAI-style) → learn limit
           const headerLimit = parseLimitHeaders(response.headers);
           if (headerLimit) {
@@ -1908,8 +1909,8 @@ export async function POST(req: NextRequest) {
           failReason: errText.slice(0, 200),
         }).catch(() => {});
         await recordProviderFailureMem(provider);
-        await recordCircuitFailure(provider);
-        if (wasProbing) await recordCircuitProbeResult(provider, false);
+        await recordCircuitFailure(provider, actualModelId);
+        if (wasProbing) await recordCircuitProbeResult(provider, actualModelId, false);
         const st = response.status;
         console.log(`[RETRY:${_reqId}] ${tried}/${MAX_RETRIES} | ${provider}/${actualModelId} → HTTP ${st} | ${errText.slice(0, 200)}`);
 
@@ -2002,8 +2003,8 @@ export async function POST(req: NextRequest) {
           failReason: errStr.slice(0, 200),
         }).catch(() => {});
         await recordProviderFailureMem(provider);
-        await recordCircuitFailure(provider);
-        if (wasProbing) await recordCircuitProbeResult(provider, false);
+        await recordCircuitFailure(provider, actualModelId);
+        if (wasProbing) await recordCircuitProbeResult(provider, actualModelId, false);
         await emitEvent("provider_error", `${provider} เชื่อมต่อไม่ได้`, errStr.slice(0, 200), provider, actualModelId, "warn");
         continue;
       }

@@ -18,10 +18,10 @@ interface WarmupStats {
 function formatRelative(iso: string | null): string {
   if (!iso) return "—";
   const diff = Date.now() - new Date(iso).getTime();
-  if (diff < 60_000) return `${Math.round(diff / 1000)}s ago`;
-  if (diff < 3_600_000) return `${Math.round(diff / 60_000)}m ago`;
-  if (diff < 86_400_000) return `${Math.round(diff / 3_600_000)}h ago`;
-  return `${Math.round(diff / 86_400_000)}d ago`;
+  if (diff < 60_000) return `${Math.round(diff / 1000)} วินาทีที่แล้ว`;
+  if (diff < 3_600_000) return `${Math.round(diff / 60_000)} นาทีที่แล้ว`;
+  if (diff < 86_400_000) return `${Math.round(diff / 3_600_000)} ชม.ที่แล้ว`;
+  return `${Math.round(diff / 86_400_000)} วันที่แล้ว`;
 }
 
 function levelColor(level: string): string {
@@ -66,17 +66,16 @@ export function WarmupPanel() {
         : "text-red-300";
 
   return (
-    <div className="glass rounded-2xl p-4 border border-white/10">
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="text-xl font-bold text-gray-200 flex items-center gap-2">
-          <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-orange-500 to-red-500 text-white text-base">
+    <div className="glass rounded-xl p-3 border border-white/10">
+      <div className="flex items-center justify-between mb-2">
+        <h2 className="text-xl font-black text-white flex items-center gap-2" title="อุ่นเครื่อง model ที่ผ่านสอบ ทุก 2 นาที กัน TCP socket ตาย">
+          <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-orange-500 to-red-500 text-white">
             🔥
           </span>
-          Warmup Worker
+          อุ่นเครื่อง (Warmup)
         </h2>
-        <span className="text-xs text-gray-500">
-          ping ทุก 2 นาที • last run{" "}
-          {formatRelative(stats?.lastRunAt ?? null)}
+        <span className="text-xs text-gray-400">
+          ping ทุก 2 นาที · ครั้งล่าสุด {formatRelative(stats?.lastRunAt ?? null)}
         </span>
       </div>
 
@@ -86,27 +85,27 @@ export function WarmupPanel() {
         <div className="text-sm text-gray-500">ไม่สามารถโหลดข้อมูลได้</div>
       ) : (
         <>
-          <div className="grid grid-cols-2 gap-2 mb-4">
-            <div className="rounded-lg bg-orange-500/10 border border-orange-500/20 p-3">
-              <div className="text-[10px] text-orange-300 uppercase tracking-wide">
-                pings (last 24h)
+          <div className="grid grid-cols-2 gap-2 mb-3">
+            <div className="rounded-lg bg-orange-500/10 border border-orange-500/20 px-3 py-2" title="จำนวน ping ไป model ใน 24 ชม.ล่าสุด">
+              <div className="text-[11px] text-orange-300">
+                ping ใน 24 ชม.
               </div>
-              <div className="text-2xl font-bold text-orange-200">
+              <div className="text-2xl font-black text-orange-200 leading-tight">
                 {stats.totalPings24h.toLocaleString()}
               </div>
             </div>
-            <div className="rounded-lg bg-red-500/10 border border-red-500/20 p-3">
-              <div className="text-[10px] text-red-300 uppercase tracking-wide">
-                success rate
+            <div className="rounded-lg bg-red-500/10 border border-red-500/20 px-3 py-2" title="สัดส่วนที่ ping สำเร็จ = model ยังพร้อมใช้">
+              <div className="text-[11px] text-red-300">
+                สำเร็จ
               </div>
-              <div className={`text-2xl font-bold ${rateColor}`}>
+              <div className={`text-2xl font-black ${rateColor} leading-tight`}>
                 {stats.successRate.toFixed(1)}%
               </div>
             </div>
           </div>
 
-          <div className="text-[11px] text-gray-500 mb-2 uppercase tracking-wide">
-            Recent warmup cycles
+          <div className="text-[11px] text-gray-500 mb-1.5">
+            ประวัติอุ่นเครื่องล่าสุด
           </div>
           {stats.recentLogs.length === 0 ? (
             <div className="text-xs text-gray-500 py-2 text-center">

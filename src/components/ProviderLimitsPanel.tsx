@@ -58,13 +58,13 @@ function formatRelative(ms: number): string {
   if (diff < 0) return "เมื่อกี้";
   const s = Math.floor(diff / 1000);
   if (s < 5) return "เมื่อกี้";
-  if (s < 60) return `${s} วิ ที่แล้ว`;
+  if (s < 60) return `${s} วินาทีที่แล้ว`;
   const m = Math.floor(s / 60);
-  if (m < 60) return `${m} นาที ที่แล้ว`;
+  if (m < 60) return `${m} นาทีที่แล้ว`;
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h} ชม. ที่แล้ว`;
+  if (h < 24) return `${h} ชั่วโมงที่แล้ว`;
   const d = Math.floor(h / 24);
-  return `${d} วัน ที่แล้ว`;
+  return `${d} วันที่แล้ว`;
 }
 
 interface BarProps {

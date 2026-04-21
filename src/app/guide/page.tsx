@@ -184,38 +184,39 @@ print(result.tool_calls)`,
   hermes: {
     label: "Hermes Agent",
     code: `# Hermes Agent (Nous Research) — self-improving open-source AI agent
-# Install: https://github.com/nousresearch/hermes-agent
+# Windows users: ต้องใช้ WSL2 + Ubuntu (native Windows ยังไม่รองรับ)
+#   wsl --install -d Ubuntu-24.04
+# macOS / Linux / WSL2: รัน installer ตรงๆ
+curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash
+source ~/.bashrc && hermes --version   # → Hermes Agent v0.10.0+
 
-# Method 1: Quick switch via CLI (no config edit)
-hermes model add sml-gateway \\
-  --provider custom \\
-  --base-url ${base} \\
-  --api-key ${key} \\
-  --default-model sml/auto
+# ── Point Hermes at SMLGateway (provider = custom) ──
+hermes config set model.provider custom
+hermes config set model.base_url ${base}
+hermes config set model.default mistral/mistral-small-latest  # tool_calls เสถียร
+# (หลีกเลี่ยง sml/auto เพราะ routing อาจเจอ model ที่ output tool-call เป็น text)
 
-hermes model use sml-gateway
-
-# Method 2: Edit ~/.hermes/config.toml directly
-# (Hermes uses base_url precedence — if set, it ignores \`provider\` built-ins)
-cat >> ~/.hermes/config.toml <<'EOF'
-[model]
-provider = "custom"
-base_url = "${base}"
-api_key_env = "SML_GATEWAY_KEY"
-model = "sml/auto"
-
-[model.fallback]
-provider = "custom"
-base_url = "${base}"
-model = "sml/thai"
+# Hermes อ่าน API key จาก OPENAI_API_KEY ใน .env (custom provider)
+cat >> ~/.hermes/.env <<EOF
+OPENAI_BASE_URL=${base}
+OPENAI_API_KEY=${key}
 EOF
 
-# Set the key in ~/.hermes/.env
-echo 'SML_GATEWAY_KEY=${key}' >> ~/.hermes/.env
+# ปิด tool family ที่ยังไม่ได้ config (optional — กัน model ยิง tool แปลกๆ)
+hermes config set tools.disabled "browser,discord,homeassistant,messaging,web,rl,image_gen"
 
-# Run the agent — it will route every call through SMLGateway
-hermes "refactor this repo to use async/await"`,
-    note: "Hermes คือ AI agent ของ Nous Research — base_url override ใช้งานได้เลย",
+# Verify + doctor
+hermes config show | grep Model:
+hermes doctor
+
+# ── Use it ──
+hermes chat -q "run: df -h | head -5"   # one-shot
+hermes chat                               # interactive
+hermes chat --continue                    # ต่อ session ล่าสุด
+
+# gateway auto-patches [system, tool, ...] message order for Mistral —
+# so Hermes' tool flow works out of the box (tested: 13/16 tools pass clean)`,
+    note: "ติดตั้งแล้วใช้ได้เลย — pin model เป็น mistral/mistral-small-latest กัน tool-call เพี้ยน",
   },
   openclaw: {
     label: "OpenClaw",

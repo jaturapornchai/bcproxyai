@@ -170,10 +170,13 @@ async function recordProviderFailureMem(provider: string): Promise<void> {
 async function recordProviderSuccessMem(provider: string, modelId: string): Promise<void> {
   try {
     const redis = getRedis();
-    await redis.del(`fs:provider:${provider}`);
-    // Circuit breaker: record success in rolling window (per provider+model)
     const succKey = `cb:succ:${provider}:${modelId}`;
-    const cur = await redis.get(succKey);
+    // Pipeline: del fail-streak + read current success count in one RTT.
+    const results = await redis.pipeline()
+      .del(`fs:provider:${provider}`)
+      .get(succKey)
+      .exec();
+    const cur = results?.[1]?.[1] as string | null;
     const newVal = (Number(cur ?? 0) + 1).toString();
     await redis.set(succKey, newVal, "EX", 30);
   } catch { /* ignore */ }
@@ -186,11 +189,16 @@ async function isCircuitOpen(provider: string, modelId: string): Promise<boolean
   try {
     const redis = getRedis();
     const cbKey = `cb:open:${provider}:${modelId}`;
-    const val = await redis.get(cbKey);
+    // Pipeline get + ttl in one RTT instead of two
+    const results = await redis.pipeline()
+      .get(cbKey)
+      .ttl(cbKey)
+      .exec();
+    const val = results?.[0]?.[1] as string | null;
+    const ttl = Number(results?.[1]?.[1] ?? -2);
     if (val === null) return false;
     if (val === "half-open") return false; // allow probe
     // val === "open" — U2: shorter 30s total cooldown, promote to half-open in the last 5s
-    const ttl = await redis.ttl(cbKey);
     if (ttl > 0 && ttl <= 5) {
       await redis.set(cbKey, "half-open", "EX", 30);
       return false;
@@ -228,22 +236,20 @@ async function recordCircuitFailure(provider: string, modelId: string): Promise<
     const redis = getRedis();
     const failKey = `cb:fail:${provider}:${modelId}`;
     const succKey = `cb:succ:${provider}:${modelId}`;
-    const cur = await redis.get(failKey);
-    const newVal = (Number(cur ?? 0) + 1).toString();
-    await redis.set(failKey, newVal, "EX", 30);
-
-    const fails = Number(newVal);
-    const succs = Number((await redis.get(succKey)) ?? 0);
+    // Pipeline: read both counters in 1 RTT
+    const reads = await redis.pipeline().get(failKey).get(succKey).exec();
+    const curFail = Number(reads?.[0]?.[1] ?? 0);
+    const succs = Number(reads?.[1]?.[1] ?? 0);
+    const fails = curFail + 1;
     const total = fails + succs;
-    if (total >= 5) {
-      const successRate = succs / total;
-      if (successRate < 0.3) {
-        // U2: open circuit for 30s (faster recovery; half-open probe at end)
-        const cbKey = `cb:open:${provider}:${modelId}`;
-        await redis.set(cbKey, "open", "EX", 30);
-        console.log(`[CIRCUIT-OPEN] ${provider}/${modelId} — success rate ${(successRate * 100).toFixed(0)}% < 30% → circuit open 30s`);
-      }
+    // Build the write pipeline — always set the new fail count, maybe also
+    // trip the circuit if success rate dropped below threshold.
+    const writes = redis.pipeline().set(failKey, String(fails), "EX", 30);
+    if (total >= 5 && succs / total < 0.3) {
+      writes.set(`cb:open:${provider}:${modelId}`, "open", "EX", 30);
+      console.log(`[CIRCUIT-OPEN] ${provider}/${modelId} — success rate ${((succs / total) * 100).toFixed(0)}% < 30% → circuit open 30s`);
     }
+    await writes.exec();
   } catch { /* ignore */ }
 }
 
@@ -318,6 +324,44 @@ function modelListCacheKey(caps: RequestCapabilities): string {
 }
 // Register with the shared hook so health/scan workers can invalidate.
 registerModelListInvalidator(() => modelListCache.clear());
+
+// ─── Sticky routing cache ─────────────────────────────────────────────────
+// (client_ip, category) → last model_id that succeeded < 30s ago.
+// Rationale: consecutive requests from the same client doing the same kind of
+// thing (e.g. code assistant looping through files) tend to be happy with the
+// same model. Bumping that model to position 0 in the candidate list hits
+// warm TCP sockets + upstream KV cache + removes a sort tiebreaker coin-flip.
+//
+// Non-authoritative: still goes through all skip checks (cooldown / circuit /
+// TPM). If the sticky model is dead now, we fall through to normal ranking.
+interface StickyEntry { provider: string; modelId: string; exp: number }
+const stickyRoute = new Map<string, StickyEntry>();
+const STICKY_TTL_MS = 30_000;
+const STICKY_MAX_SIZE = 5_000; // LRU-ish cap to prevent unbounded growth
+
+function stickyKey(clientIp: string, category: string): string {
+  return `${clientIp}:${category}`;
+}
+function getSticky(clientIp: string, category: string): { provider: string; modelId: string } | null {
+  const e = stickyRoute.get(stickyKey(clientIp, category));
+  if (!e) return null;
+  if (e.exp < Date.now()) { stickyRoute.delete(stickyKey(clientIp, category)); return null; }
+  return { provider: e.provider, modelId: e.modelId };
+}
+function setSticky(clientIp: string, category: string, provider: string, modelId: string): void {
+  // Evict oldest entries when map grows past cap — Map iterates in insertion order
+  if (stickyRoute.size >= STICKY_MAX_SIZE) {
+    const firstKey = stickyRoute.keys().next().value;
+    if (firstKey !== undefined) stickyRoute.delete(firstKey);
+  }
+  stickyRoute.set(stickyKey(clientIp, category), { provider, modelId, exp: Date.now() + STICKY_TTL_MS });
+}
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of stickyRoute.entries()) {
+    if (v.exp < now) stickyRoute.delete(k);
+  }
+}, 60_000).unref?.();
 
 async function getAvailableModels(caps: RequestCapabilities, benchmarkCategory?: string, estTokens?: number): Promise<ModelRow[]> {
   const ck = modelListCacheKey(caps);
@@ -427,26 +471,88 @@ function reorderForLatency(rows: ModelRow[], estTokens?: number): ModelRow[] {
   return reorderedRows;
 }
 
-async function logGateway(
+// ─── Batched gateway log writes ───────────────────────────────────────────
+// Under load we insert 1 row per completed request. At 100 req/s that's 100
+// sync INSERTs + 100 WAL syncs. Batching 100ms windows collapses those into
+// one multi-row INSERT, cutting DB round-trips + WAL amplification ~90%+.
+//
+// Fire-and-forget: caller doesn't await. We accept that a process crash could
+// drop up to 100ms of logs — that's cheaper than the latency win for every
+// successful request.
+interface GatewayLogRow {
+  requestModel: string;
+  resolvedModel: string | null;
+  provider: string | null;
+  status: number;
+  latencyMs: number;
+  inputTokens: number;
+  outputTokens: number;
+  error: string | null;
+  userMessage: string | null;
+  assistantMessage: string | null;
+  requestId: string | null;
+  clientIp: string | null;
+}
+
+const LOG_FLUSH_INTERVAL_MS = 100;
+const LOG_FLUSH_MAX_BATCH = 200; // hard cap to avoid giant INSERTs
+let _logBuffer: GatewayLogRow[] = [];
+let _logFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
+async function flushGatewayLogs(): Promise<void> {
+  if (_logBuffer.length === 0) return;
+  const batch = _logBuffer.splice(0, LOG_FLUSH_MAX_BATCH);
+  try {
+    const sql = getSqlClient();
+    // postgres.js multi-row INSERT: sql(rows, col1, col2, ...) expands to
+    // (v1_1, v1_2, ...), (v2_1, v2_2, ...) while keeping each field parameterized
+    const rows = batch.map(r => ({
+      request_model: r.requestModel,
+      resolved_model: r.resolvedModel,
+      provider: r.provider,
+      status: r.status,
+      latency_ms: r.latencyMs,
+      input_tokens: r.inputTokens,
+      output_tokens: r.outputTokens,
+      error: r.error,
+      user_message: r.userMessage?.slice(0, 500) ?? null,
+      assistant_message: r.assistantMessage?.slice(0, 500) ?? null,
+      request_id: r.requestId,
+      client_ip: r.clientIp,
+    }));
+    await sql`
+      INSERT INTO gateway_logs ${sql(rows, "request_model", "resolved_model", "provider",
+        "status", "latency_ms", "input_tokens", "output_tokens", "error",
+        "user_message", "assistant_message", "request_id", "client_ip")}
+    `;
+  } catch {
+    // non-critical — logs are observability, not correctness
+  }
+  // If more accumulated while we were flushing, schedule another pass
+  if (_logBuffer.length > 0 && !_logFlushTimer) {
+    _logFlushTimer = setTimeout(() => { _logFlushTimer = null; void flushGatewayLogs(); }, LOG_FLUSH_INTERVAL_MS);
+  }
+}
+
+function logGateway(
   requestModel: string, resolvedModel: string | null, provider: string | null,
   status: number, latencyMs: number, inputTokens: number, outputTokens: number,
   error: string | null, userMessage: string | null, assistantMessage: string | null,
   requestId: string | null = null, clientIp: string | null = null
-) {
-  try {
-    const sql = getSqlClient();
-    await sql`
-      INSERT INTO gateway_logs (request_model, resolved_model, provider, status, latency_ms,
-        input_tokens, output_tokens, error, user_message, assistant_message, request_id, client_ip)
-      VALUES (
-        ${requestModel}, ${resolvedModel}, ${provider}, ${status}, ${latencyMs},
-        ${inputTokens}, ${outputTokens}, ${error},
-        ${userMessage?.slice(0, 500) ?? null}, ${assistantMessage?.slice(0, 500) ?? null},
-        ${requestId}, ${clientIp}
-      )
-    `;
-  } catch {
-    // non-critical
+): void {
+  _logBuffer.push({
+    requestModel, resolvedModel, provider, status, latencyMs,
+    inputTokens, outputTokens, error, userMessage, assistantMessage,
+    requestId, clientIp,
+  });
+  // Schedule flush if not already pending
+  if (!_logFlushTimer) {
+    _logFlushTimer = setTimeout(() => { _logFlushTimer = null; void flushGatewayLogs(); }, LOG_FLUSH_INTERVAL_MS);
+  }
+  // Immediate flush if buffer is getting huge (avoid memory blow-up under burst)
+  if (_logBuffer.length >= LOG_FLUSH_MAX_BATCH) {
+    if (_logFlushTimer) { clearTimeout(_logFlushTimer); _logFlushTimer = null; }
+    void flushGatewayLogs();
   }
 }
 
@@ -1483,6 +1589,20 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Sticky routing: same (ip, category) tuple that succeeded in last 30s?
+    // Bump that model to position 0 so warm TCP socket + upstream KV cache
+    // give us a head-start. Non-authoritative — still walks skip checks.
+    const stickyHit = ip ? getSticky(ip, promptCategory) : null;
+    if (stickyHit) {
+      const stickyIdx = spreadCandidates.findIndex(c =>
+        c.provider === stickyHit.provider && c.model_id === stickyHit.modelId);
+      if (stickyIdx > 0) {
+        const [pinned] = spreadCandidates.splice(stickyIdx, 1);
+        spreadCandidates.unshift(pinned);
+        if (process.env.LOG_LEVEL === "debug") console.log(`[STICKY:${_reqId}] pinned ${stickyHit.provider}/${stickyHit.modelId} (from idx ${stickyIdx})`);
+      }
+    }
+
     if (process.env.LOG_LEVEL === "debug") console.log(`[DEBUG] spread=${spreadCandidates.length} top5=[${spreadCandidates.slice(0,5).map(c=>c.provider+'/'+c.model_id).join(', ')}]`);
 
     // ถ้าไม่มี candidate เหลือเลยหลังผ่าน filter — ตอบ 503 พร้อม log ที่อ่านออก
@@ -1543,6 +1663,7 @@ export async function POST(req: NextRequest) {
         console.log(`[HEDGE-WIN:${_reqId}] ${winner.provider}/${winner.model_id} vs [${losers.map(l => `${l.provider}/${l.model_id}`).join(", ")}] | ${latency}ms`);
         // Record winner as success, loser as neutral (cancelled)
         await recordProviderSuccessMem(winner.provider, winner.model_id);
+        if (ip) setSticky(ip, promptCategory, winner.provider, winner.model_id);
 
         // Streaming hedge: stitched stream is already a fresh ReadableStream
         // from streamHedgeRace — just decorate with our headers and return.
@@ -1663,7 +1784,9 @@ export async function POST(req: NextRequest) {
         break;
       }
       const candidate = spreadCandidates[i];
-      const { provider, model_id: actualModelId, id: dbModelId } = candidate;
+      // `let` so a speculative-hedge win can swap these to the winner's vars
+      // without threading effective-X names through the entire success path.
+      let { provider, model_id: actualModelId, id: dbModelId } = candidate;
       if (blockedProviders.has(provider)) { skippedCandidates.push(candidate); skipReasons.push(`${provider}/${actualModelId}:blocked`); continue; }
 
       // ── Run independent skip-checks in parallel ─────────────────────
@@ -1743,12 +1866,93 @@ export async function POST(req: NextRequest) {
         wasProbing = cbState === "half-open";
       } catch { /* ignore */ }
 
+      // ── Speculative hedge (first sequential attempt only, non-stream) ──
+      // If the primary upstream hasn't responded in ~1.5s, start a race with
+      // the next viable candidate on a DIFFERENT provider. Whoever responds
+      // first wins — the loser gets aborted via AbortController.
+      //
+      // Only fires when hedge at the top of the handler was skipped (stream
+      // or tools path) or fell through — otherwise top-3 hedge already
+      // covered the speculative case.
+      const SPEC_THRESHOLD_MS = 1_500;
+      const doSpeculative = tried === 1 && !isStream && !caps.hasTools && hedgeStartIdx === 0;
+      let peekCandidate: typeof candidate | null = null;
+      if (doSpeculative) {
+        for (let j = i + 1; j < Math.min(i + 4, spreadCandidates.length); j++) {
+          const c = spreadCandidates[j];
+          if (c.provider === provider) continue;            // same provider → no multiplexing win
+          if (blockedProviders.has(c.provider)) continue;
+          peekCandidate = c;
+          break;
+        }
+      }
+
       try {
-        const response = await forwardToProvider(provider, actualModelId, body, isStream);
+        let response: Response;
+        if (doSpeculative && peekCandidate) {
+          const primaryAc = new AbortController();
+          const backupAc = new AbortController();
+          const primaryP = forwardToProvider(provider, actualModelId, body, isStream, primaryAc.signal);
+
+          const race = await new Promise<{ r: Response; swap: boolean }>((resolve, reject) => {
+            let settled = false;
+            let primaryErr: unknown = null;
+            let backupFired = false;
+            let backupErr: unknown = null;
+
+            primaryP.then(r => {
+              if (settled) return;
+              settled = true;
+              backupAc.abort();
+              resolve({ r, swap: false });
+            }).catch(err => {
+              primaryErr = err;
+              if (backupFired && backupErr) {
+                if (!settled) { settled = true; reject(primaryErr); }
+              } else if (!backupFired && !settled) {
+                // Failed fast, before speculative even fired → stop the timer
+                settled = true;
+                reject(primaryErr);
+              }
+            });
+
+            const timer = setTimeout(() => {
+              if (settled) return;
+              backupFired = true;
+              console.log(`[SPEC-FIRE:${_reqId}] primary ${provider}/${actualModelId} > ${SPEC_THRESHOLD_MS}ms → speculate with ${peekCandidate!.provider}/${peekCandidate!.model_id}`);
+              forwardToProvider(peekCandidate!.provider, peekCandidate!.model_id, body, isStream, backupAc.signal)
+                .then(r => {
+                  if (settled) return;
+                  settled = true;
+                  primaryAc.abort();
+                  resolve({ r, swap: true });
+                })
+                .catch(err => {
+                  backupErr = err;
+                  if (primaryErr && !settled) { settled = true; reject(primaryErr); }
+                });
+            }, SPEC_THRESHOLD_MS);
+            // Let the timer clear if the primary resolves cleanly
+            primaryP.finally(() => clearTimeout(timer)).catch(() => {});
+          });
+
+          response = race.r;
+          if (race.swap && peekCandidate) {
+            // Speculative won — swap accounting vars to the winner
+            console.log(`[SPEC-WIN:${_reqId}] backup ${peekCandidate.provider}/${peekCandidate.model_id} beat ${provider}/${actualModelId}`);
+            provider = peekCandidate.provider;
+            actualModelId = peekCandidate.model_id;
+            dbModelId = peekCandidate.id;
+            triedProviders.add(provider);
+          }
+        } else {
+          response = await forwardToProvider(provider, actualModelId, body, isStream);
+        }
 
         if (response.ok) {
           const latency = Date.now() - startTime;
           await recordProviderSuccessMem(provider, actualModelId);
+          if (ip) setSticky(ip, promptCategory, provider, actualModelId);
           if (wasProbing) await recordCircuitProbeResult(provider, actualModelId, true);
           // Parse rate limit headers (Groq/OpenAI-style) → learn limit
           const headerLimit = parseLimitHeaders(response.headers);

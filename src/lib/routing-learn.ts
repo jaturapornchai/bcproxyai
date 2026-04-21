@@ -1,4 +1,5 @@
 import { getSqlClient } from "@/lib/db/schema";
+import { cachedQuery } from "@/lib/cache";
 
 /**
  * Prompt categories for smart routing
@@ -71,28 +72,33 @@ export async function getRealAvgLatency(modelId: string): Promise<number | null>
 /**
  * Get best models for a given prompt category
  * Returns model IDs sorted by success rate * inverse latency
+ *
+ * Cached 5s in-memory — N concurrent requests in same window share the result
+ * instead of hammering the 7-day aggregate query. Stampede-safe (single flight).
  */
 export async function getBestModelsForCategory(promptCategory: string): Promise<string[]> {
-  try {
-    const sql = getSqlClient();
-    const rows = await sql<{ model_id: string }[]>`
-      SELECT model_id,
-        COUNT(*) as total,
-        SUM(success) as successes,
-        AVG(latency_ms) as avg_lat,
-        CAST(SUM(success) AS REAL) / COUNT(*) as success_rate
-      FROM routing_stats
-      WHERE prompt_category = ${promptCategory}
-        AND created_at >= now() - interval '7 days'
-      GROUP BY model_id
-      HAVING COUNT(*) >= 3
-      ORDER BY success_rate DESC, avg_lat ASC
-      LIMIT 10
-    `;
-    return rows.map(r => r.model_id);
-  } catch {
-    return [];
-  }
+  return cachedQuery(`best-models:${promptCategory}`, 5_000, async () => {
+    try {
+      const sql = getSqlClient();
+      const rows = await sql<{ model_id: string }[]>`
+        SELECT model_id,
+          COUNT(*) as total,
+          SUM(success) as successes,
+          AVG(latency_ms) as avg_lat,
+          CAST(SUM(success) AS REAL) / COUNT(*) as success_rate
+        FROM routing_stats
+        WHERE prompt_category = ${promptCategory}
+          AND created_at >= now() - interval '7 days'
+        GROUP BY model_id
+        HAVING COUNT(*) >= 3
+        ORDER BY success_rate DESC, avg_lat ASC
+        LIMIT 10
+      `;
+      return rows.map(r => r.model_id);
+    } catch {
+      return [];
+    }
+  });
 }
 
 /**
@@ -100,29 +106,31 @@ export async function getBestModelsForCategory(promptCategory: string): Promise<
  * Used to prioritize models that are strong in the requested area
  */
 export async function getBestModelsByBenchmarkCategory(category: string): Promise<string[]> {
-  try {
-    const sql = getSqlClient();
-    // Windowed AVG: only look at the 20 most recent evaluations per model so
-    // a burst of post-gen Thai penalties can demote the model within a few
-    // requests, instead of being drowned by historical high scores.
-    const rows = await sql<{ model_id: string }[]>`
-      SELECT model_id, AVG(score) AS avg_score, COUNT(*) AS q_count
-      FROM (
-        SELECT model_id, score,
-          ROW_NUMBER() OVER (PARTITION BY model_id ORDER BY tested_at DESC) AS rn
-        FROM benchmark_results
-        WHERE category = ${category}
-      ) t
-      WHERE rn <= 20
-      GROUP BY model_id
-      HAVING COUNT(*) >= 1 AND AVG(score) >= 5
-      ORDER BY AVG(score) DESC, COUNT(*) DESC
-      LIMIT 20
-    `;
-    return rows.map(r => r.model_id);
-  } catch {
-    return [];
-  }
+  return cachedQuery(`benchmark-models:${category}`, 5_000, async () => {
+    try {
+      const sql = getSqlClient();
+      // Windowed AVG: only look at the 20 most recent evaluations per model so
+      // a burst of post-gen Thai penalties can demote the model within a few
+      // requests, instead of being drowned by historical high scores.
+      const rows = await sql<{ model_id: string }[]>`
+        SELECT model_id, AVG(score) AS avg_score, COUNT(*) AS q_count
+        FROM (
+          SELECT model_id, score,
+            ROW_NUMBER() OVER (PARTITION BY model_id ORDER BY tested_at DESC) AS rn
+          FROM benchmark_results
+          WHERE category = ${category}
+        ) t
+        WHERE rn <= 20
+        GROUP BY model_id
+        HAVING COUNT(*) >= 1 AND AVG(score) >= 5
+        ORDER BY AVG(score) DESC, COUNT(*) DESC
+        LIMIT 20
+      `;
+      return rows.map(r => r.model_id);
+    } catch {
+      return [];
+    }
+  });
 }
 
 /**

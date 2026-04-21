@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-type ExamLevel = "middle" | "high" | "university";
+type ExamLevel = "primary" | "middle" | "high" | "university";
 
 interface LevelInfo {
   id: ExamLevel;
@@ -31,12 +31,14 @@ interface ExamConfig {
 }
 
 const LEVEL_BORDER: Record<ExamLevel, string> = {
+  primary:    "border-emerald-500/40 bg-emerald-500/5",
   middle:     "border-yellow-500/40 bg-yellow-500/5",
   high:       "border-orange-500/40 bg-orange-500/5",
   university: "border-red-500/40 bg-red-500/5",
 };
 
 const LEVEL_TEXT: Record<ExamLevel, string> = {
+  primary:    "text-emerald-300",
   middle:     "text-yellow-300",
   high:       "text-orange-300",
   university: "text-red-300",

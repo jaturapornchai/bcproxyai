@@ -1145,9 +1145,10 @@ curl ${apiBase}/v1/trace/5m3obi
             model เดียวสามารถเป็น head หลายหมวดได้ (คนเก่งหลายอย่าง)
           </P>
           <ul className="list-none space-y-1 text-sm text-gray-300">
-            <li>&#128993; <strong>มัธยมต้น (middle)</strong> — 9 ข้อ, ผ่าน &ge; 75% <em className="text-gray-500">(default)</em></li>
-            <li>&#128992; <strong>มัธยมปลาย (high)</strong> — 17 ข้อ, ผ่าน &ge; 80%</li>
-            <li>&#128308; <strong>มหาลัย (university)</strong> — 25 ข้อ, ผ่าน &ge; 85%</li>
+            <li>&#128994; <strong>ประถม (primary)</strong> — 5 ข้อ, ผ่าน &ge; 40%</li>
+            <li>&#128993; <strong>มัธยมต้น (middle)</strong> — 14 ข้อ, ผ่าน &ge; 50% <em className="text-gray-500">(default)</em></li>
+            <li>&#128992; <strong>มัธยมปลาย (high)</strong> — 22 ข้อ, ผ่าน &ge; 60%</li>
+            <li>&#128308; <strong>มหาลัย (university)</strong> — 30 ข้อ, ผ่าน &ge; 70%</li>
           </ul>
           <SubTitle>เปลี่ยนระดับ + สั่งสอบใหม่</SubTitle>
           <P>

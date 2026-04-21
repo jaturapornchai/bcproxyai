@@ -24,33 +24,37 @@ const REQUEST_TIMEOUT_MS = 20_000;
 
 // ─── Exam Levels (4 ระดับ — ง่าย → ยาก) ─────────────────────────────────────
 
-// "primary" ถูกถอดออก — ข้อง่ายเกินทำให้ filter language model ไม่ออก
-// (เช่น Arabic model ตอบ math ได้ → routing ผิดภาษา)
-export type ExamLevel = "middle" | "high" | "university";
+// primary = "minimum viable" — ต้องตอบ Thai ได้ + follow simple instruction
+// ออกแบบให้ filter language model ภาษาอื่นออก (เช่น Arabic model ไม่ตอบไทย)
+// โดยให้ข้อสอบไทยล้วนคิดรวม 3/5 ข้อ → ไม่ Thai = ตกแน่นอน
+export type ExamLevel = "primary" | "middle" | "high" | "university";
 
-export const EXAM_LEVELS: ExamLevel[] = ["middle", "high", "university"];
+export const EXAM_LEVELS: ExamLevel[] = ["primary", "middle", "high", "university"];
 
 // เกณฑ์ผ่านแยกตามระดับ (ระดับยากผ่านยากขึ้น)
-// Lowered from 75/80/85 → 50/60/70: rule-based grading is strict (exact match,
-// regex); many 429/timeout attempts also land at 0% and drag aggregate scores
-// down. 50% middle = 5/9 correct = "usable" signal without over-filtering.
+// primary 40% = 2/5 — minimum signal of "working + Thai-capable"
+// rule-based grading is strict (exact match, regex); many 429/timeout attempts
+// also land at 0% — these thresholds reflect that reality.
 const PASS_THRESHOLD_BY_LEVEL: Record<ExamLevel, number> = {
+  primary: 40,
   middle: 50,
   high: 60,
   university: 70,
 };
 
 export const EXAM_LEVEL_META: Record<ExamLevel, { label: string; emoji: string; threshold: number; description: string }> = {
+  primary:    { label: "ประถม",    emoji: "🟢", threshold: 40, description: "ข้อง่าย — ทักทายไทย, เลขเบื้องต้น, ทำตามคำสั่ง 1 บรรทัด" },
   middle:     { label: "มัธยมต้น", emoji: "🟡", threshold: 50, description: "ข้อปานกลาง — JSON extraction, ความปลอดภัยพื้นฐาน, distraction, ภาษาไทยพื้นฐาน" },
   high:       { label: "มัธยมปลาย",emoji: "🟠", threshold: 60, description: "ข้อยากปานกลาง — logic, long context, extraction ซับซ้อน" },
   university: { label: "มหาลัย",   emoji: "🔴", threshold: 70, description: "ข้อยากมาก — tool call, vision, code, multi-step math" },
 };
 
-// ระดับที่ครอบคลุม (cumulative): มหาลัยสอบทุกข้อ, มัธยมต้นสอบเฉพาะข้อ middle
+// ระดับที่ครอบคลุม (cumulative): มหาลัยสอบทุกข้อ, ประถมสอบเฉพาะข้อ primary
 const LEVEL_INCLUDES: Record<ExamLevel, ExamLevel[]> = {
-  middle:     ["middle"],
-  high:       ["middle", "high"],
-  university: ["middle", "high", "university"],
+  primary:    ["primary"],
+  middle:     ["primary", "middle"],
+  high:       ["primary", "middle", "high"],
+  university: ["primary", "middle", "high", "university"],
 };
 
 export function getPassThreshold(level: ExamLevel): number {
@@ -121,6 +125,12 @@ function stripThink(text: string): string {
 type RawQuestion = Omit<ExamQuestion, "difficulty">;
 
 const DIFFICULTY_BY_ID: Record<string, ExamLevel> = {
+  // primary (ง่าย — minimum viable signal + ภาษาไทยบังคับ)
+  primary_thai_greet_v1:  "primary",
+  primary_thai_capital_v1:"primary",
+  primary_thai_color_v1:  "primary",
+  primary_math_add_v1:    "primary",
+  primary_echo_v1:        "primary",
   // middle (ปานกลาง)
   instruction_exact_v2: "middle",
   distraction_v1:       "middle",
@@ -154,6 +164,77 @@ const DIFFICULTY_BY_ID: Record<string, ExamLevel> = {
 // ─── ข้อสอบ 25 ข้อ — เน้นใช้งานจริง + กรอง model คุณภาพสูง ──────────────────
 
 const RAW_EXAM_QUESTIONS: RawQuestion[] = [
+  // ═══════════════════════════════════════════════════════════════════════════
+  //  Section P: Primary (ง่ายสุด — minimum viable + Thai filter)
+  //  3/5 ข้อบังคับภาษาไทย → non-Thai model ตกแน่นอน (แก้ปัญหาเดิมที่ Arabic
+  //  model ผ่าน primary math ได้ → ถูก route ให้ตอบไทย)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // ───── P1: ทักทายไทย ─────
+  {
+    id: "primary_thai_greet_v1",
+    category: "thai",
+    question: "ทักทายภาษาไทยแบบสุภาพ ตอบสั้นๆ คำเดียวก็พอ",
+    expected: "สวัสดี / สวัสดีครับ / สวัสดีค่ะ",
+    check: (answer) => {
+      const clean = stripThink(answer);
+      if (/สวัสดี|ยินดีต้อนรับ/.test(clean)) return { passed: true, reason: "Thai greeting found" };
+      return { passed: false, reason: `no Thai greeting: "${clean.slice(0, 60)}"` };
+    },
+  },
+
+  // ───── P2: เมืองหลวงประเทศไทย ─────
+  {
+    id: "primary_thai_capital_v1",
+    category: "thai",
+    question: "เมืองหลวงของประเทศไทยชื่ออะไร ตอบสั้นๆ ภาษาไทย 1 คำ",
+    expected: "กรุงเทพ / กรุงเทพมหานคร / Bangkok",
+    check: (answer) => {
+      const clean = stripThink(answer);
+      if (/กรุงเทพ|Bangkok/i.test(clean)) return { passed: true, reason: "correct capital" };
+      return { passed: false, reason: `expected กรุงเทพ: "${clean.slice(0, 60)}"` };
+    },
+  },
+
+  // ───── P3: สีท้องฟ้า ─────
+  {
+    id: "primary_thai_color_v1",
+    category: "thai",
+    question: "ท้องฟ้าตอนกลางวันที่ไม่มีเมฆเป็นสีอะไร ตอบภาษาไทย 1 คำ",
+    expected: "ฟ้า / น้ำเงิน",
+    check: (answer) => {
+      const clean = stripThink(answer);
+      if (/สีฟ้า|น้ำเงิน|\bฟ้า\b/.test(clean)) return { passed: true, reason: "correct color" };
+      return { passed: false, reason: `expected สีฟ้า/น้ำเงิน: "${clean.slice(0, 60)}"` };
+    },
+  },
+
+  // ───── P4: เลขบวกง่าย ─────
+  {
+    id: "primary_math_add_v1",
+    category: "math",
+    question: "What is 3 + 4? Reply with ONLY the number.",
+    expected: "7",
+    check: (answer) => {
+      const clean = stripThink(answer).trim();
+      if (/\b7\b|\bเจ็ด\b/.test(clean)) return { passed: true, reason: "correct: 7" };
+      return { passed: false, reason: `expected 7: "${clean.slice(0, 60)}"` };
+    },
+  },
+
+  // ───── P5: echo instruction ─────
+  {
+    id: "primary_echo_v1",
+    category: "instruction",
+    question: 'Reply with exactly the word: OK',
+    expected: "OK",
+    check: (answer) => {
+      const clean = stripThink(answer).trim().replace(/[.。\s"'`:]/g, "").toUpperCase();
+      if (clean === "OK" || clean.startsWith("OK")) return { passed: true, reason: "correct: OK" };
+      return { passed: false, reason: `expected "OK", got "${answer.slice(0, 60)}"` };
+    },
+  },
+
   // ═══════════════════════════════════════════════════════════════════════════
   //  Section A: Instruction Following (ทำตามคำสั่งเป๊ะ)
   // ═══════════════════════════════════════════════════════════════════════════
@@ -770,7 +851,7 @@ export const EXAM_QUESTIONS: ExamQuestion[] = RAW_EXAM_QUESTIONS.map((q) => ({
 // ─── คัดข้อสอบตามระดับ (cumulative) ─────────────────────────────────────────
 
 export function getExamQuestions(level: ExamLevel): ExamQuestion[] {
-  const allowed = new Set<ExamLevel>(LEVEL_INCLUDES[level] ?? ["middle", "high", "university"]);
+  const allowed = new Set<ExamLevel>(LEVEL_INCLUDES[level] ?? ["primary", "middle", "high", "university"]);
   return EXAM_QUESTIONS.filter((q) => allowed.has(q.difficulty));
 }
 

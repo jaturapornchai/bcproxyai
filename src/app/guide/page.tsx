@@ -738,6 +738,22 @@ NEXTAUTH_URL=https://your-domain.com
             <br />
             <span className="text-xs">ssh droplet → <InlineCode>nano /opt/sml-gateway/.env.production</InlineCode> → <InlineCode>bash scripts/deploy-droplet.sh</InlineCode></span>
           </Info>
+
+          <SubTitle>🔌 Admin API (ops / automation)</SubTitle>
+          <P>ทุก endpoint ต้อง auth เหมือนหน้า admin (master Bearer / cookie / Google):</P>
+          <Code>{`# จัดการ gateway keys
+GET    /api/admin/keys                 → รายการ (hash เท่านั้น ไม่มี plaintext)
+POST   /api/admin/keys                 → สร้าง { label, expiresAt?, notes? } — ส่ง token ครั้งเดียว
+PATCH  /api/admin/keys/:id             → { enabled: true|false }
+DELETE /api/admin/keys/:id             → revoke ถาวร
+
+# Circuit breaker (per-model)
+GET    /api/admin/circuits             → { open[], halfOpen[], warnings[], summary }
+DELETE /api/admin/circuits?provider=X&modelId=Y   → reset 1 คู่
+DELETE /api/admin/circuits             → reset ทั้งหมด (nuclear)`}</Code>
+          <p className="text-xs text-gray-400 leading-relaxed">
+            <strong>warnings</strong> = (provider, model) ที่มี fail streak ≥ 3 ใน 30 วินาที แต่ยังไม่ trip — early warning ก่อน circuit open
+          </p>
         </Section>
 
         <Section id="openclaw" icon="&#128187;" title="เชื่อม OpenClaw">

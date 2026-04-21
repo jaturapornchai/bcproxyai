@@ -45,9 +45,9 @@ async function acquireWarmupLeader(): Promise<boolean> {
   }
 }
 
-async function pingOnce(candidate: WarmupCandidate): Promise<void> {
+async function pingOnce(candidate: WarmupCandidate): Promise<boolean> {
   const url = resolveProviderUrl(candidate.provider);
-  if (!url) return;
+  if (!url) return false;
 
   const key = getNextApiKey(candidate.provider);
   const headers: Record<string, string> = {
@@ -77,26 +77,31 @@ async function pingOnce(candidate: WarmupCandidate): Promise<void> {
     });
     const latency = Date.now() - start;
     recordOutcome(candidate.provider, candidate.model_id, res.ok, latency);
+    return res.ok;
   } catch {
     const latency = Date.now() - start;
     recordOutcome(candidate.provider, candidate.model_id, false, latency);
+    return false;
   }
 }
 
 async function runConcurrent<T>(
   items: T[],
   concurrency: number,
-  fn: (item: T) => Promise<void>
-): Promise<void> {
+  fn: (item: T) => Promise<boolean>
+): Promise<number> {
   let idx = 0;
+  let okCount = 0;
   async function worker() {
     while (idx < items.length) {
       const i = idx++;
-      await fn(items[i]);
+      const ok = await fn(items[i]);
+      if (ok) okCount++;
     }
   }
   const workers = Array.from({ length: Math.min(concurrency, items.length) }, worker);
   await Promise.all(workers);
+  return okCount;
 }
 
 async function runWarmupTick(): Promise<void> {
@@ -133,8 +138,14 @@ async function runWarmupTick(): Promise<void> {
 
     console.log(`[WARMUP] ping ${candidates.length} models เพื่อ keep-alive`);
     const start = Date.now();
-    await runConcurrent(candidates, WARMUP_CONCURRENCY, pingOnce);
-    console.log(`[WARMUP] done ${candidates.length} models in ${Date.now() - start}ms`);
+    const okCount = await runConcurrent(candidates, WARMUP_CONCURRENCY, pingOnce);
+    const durMs = Date.now() - start;
+    const failCount = candidates.length - okCount;
+    const msg = `🔥 Pinged ${candidates.length} models — ${okCount} ok, ${failCount} failed (${durMs}ms)`;
+    console.log(`[WARMUP] done ${candidates.length} models in ${durMs}ms`);
+    try {
+      await sql`INSERT INTO worker_logs (step, message, level) VALUES ('warmup', ${msg}, 'info')`;
+    } catch { /* non-critical */ }
   } catch (err) {
     console.log(`[WARMUP] tick error: ${err instanceof Error ? err.message : String(err)}`);
   }

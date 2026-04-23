@@ -20,6 +20,7 @@ import { isProviderEnabledSync } from "@/lib/provider-toggle";
 import { canFitRequest, parseLimitHeaders, parseLimitError, recordLimit } from "@/lib/provider-limits";
 import { recordOutcomeLearning, recordFailStreak, canHandleTokens, getCategoryWinners, detectCategory, isModelUnhealthyForCategory } from "@/lib/learning";
 import { upstreamAgent } from "@/lib/upstream-agent";
+import { repairToolCallArguments, hasStructurallyBrokenToolCalls } from "@/lib/tool-repair";
 
 // ── Category mapping: routing category → exam question category ──
 const ROUTING_TO_EXAM_CAT: Record<string, string> = {
@@ -844,7 +845,66 @@ async function forwardToProvider(
     headers["X-Title"] = "SMLGateway Gateway";
   }
 
-  const requestBody: Record<string, unknown> = { ...body, model: actualModelId };
+  // Whitelist: only pass known OpenAI-compatible fields to upstream providers
+  // Fixes: Google rejects unknown fields like "store" (OpenClaw memory feature)
+  const ALLOWED_FIELDS = new Set([
+    "messages", "temperature", "top_p", "max_tokens", "stream",
+    "tools", "tool_choice", "response_format", "stop", "n", "seed", "user",
+    "presence_penalty", "frequency_penalty", "logprobs", "top_logprobs",
+    "parallel_tool_calls", "service_tier", "metadata",
+  ]);
+  const requestBody: Record<string, unknown> = { model: actualModelId };
+  for (const [key, value] of Object.entries(body)) {
+    if (ALLOWED_FIELDS.has(key)) {
+      requestBody[key] = value;
+    }
+  }
+
+  // Strip unsupported message fields (reasoning, refusal, etc.)
+  // Groq/others reject messages with "reasoning" field from thinking models
+  if (Array.isArray(requestBody.messages)) {
+    for (const msg of requestBody.messages as Array<Record<string, unknown>>) {
+      delete msg.reasoning;
+      delete msg.refusal;
+    }
+  }
+
+  // Google: sanitize conversation — strip tool_calls and tool role messages
+  // Google's Gemini API requires strict ordering: user→assistant(tool_call)→tool→assistant
+  // OpenClaw conversations have complex tool call patterns that don't match this
+  if (provider === "google" && Array.isArray(requestBody.messages)) {
+    const msgs = requestBody.messages as Array<Record<string, unknown>>;
+    const sanitized: Array<Record<string, unknown>> = [];
+    for (const msg of msgs) {
+      // Skip tool role messages entirely
+      if (msg.role === "tool") continue;
+      // For assistant messages with tool_calls, convert to plain text
+      if (msg.role === "assistant" && msg.tool_calls) {
+        const textContent = (msg.content as string) || "";
+        if (textContent) {
+          sanitized.push({ role: "assistant", content: textContent });
+        }
+        continue;
+      }
+      // Pass through everything else
+      sanitized.push(msg);
+    }
+    // Ensure conversation doesn't have consecutive same-role messages
+    const merged: Array<Record<string, unknown>> = [];
+    for (const msg of sanitized) {
+      if (merged.length > 0 && merged[merged.length - 1].role === msg.role) {
+        // Merge consecutive same-role messages
+        const prev = merged[merged.length - 1];
+        const prevContent = String(prev.content || "");
+        const currContent = String(msg.content || "");
+        prev.content = prevContent + "\n" + currContent;
+      } else {
+        merged.push({ ...msg });
+      }
+    }
+    requestBody.messages = merged;
+    // Keep tools/tool_choice so model can make proper function calls
+  }
 
   // Auto-enable thinking for reasoning-capable models — unless client already
   // set reasoning/enable_thinking explicitly (opt-out via header or body).
@@ -1154,6 +1214,33 @@ async function isOllamaModelLoaded(modelId: string): Promise<boolean> {
     return loaded;
   } catch {
     return false; // probe failed → skip to be safe
+  }
+}
+
+// ── Pattern B+: Retry with a tools-capable model ──
+interface ToolRetryResult { response: Response; provider: string; modelId: string; dbModelId: string; }
+
+async function retryWithToolsModel(
+  body: Record<string, unknown>,
+  caps: RequestCapabilities,
+  excludeModelId: string,
+  isStream: boolean
+): Promise<ToolRetryResult | null> {
+  const candidates = await getAvailableModels({ ...caps, hasTools: true });
+  const filtered = candidates.filter(c => c.model_id !== excludeModelId);
+  if (!filtered.length) {
+    console.log("[ToolRepair] No tools-capable models available for retry");
+    return null;
+  }
+  const pick = filtered[0];
+  console.log(`[ToolRepair] Retry with ${pick.provider}/${pick.model_id}`);
+
+  try {
+    const resp = await forwardToProvider(pick.provider, pick.model_id, body, isStream, AbortSignal.timeout(15_000));
+    return { response: resp, provider: pick.provider, modelId: pick.model_id, dbModelId: pick.id };
+  } catch (err) {
+    console.log(`[ToolRepair] Retry failed: ${String(err)}`);
+    return null;
   }
 }
 
@@ -2115,6 +2202,45 @@ export async function POST(req: NextRequest) {
 
               const hasToolCalls = Array.isArray(firstMsg?.tool_calls) && (firstMsg!.tool_calls!.length > 0);
 
+              // ── Pattern B+: repair malformed tool_call arguments ──
+              if (hasToolCalls) {
+                const wasRepaired = repairToolCallArguments(json);
+                if (wasRepaired) {
+                  console.log(`[PatternB+] Repaired tool_call arguments for ${provider}/${actualModelId}`);
+                }
+              }
+
+              // ── Pattern B+: detect structurally broken tool_calls → retry with another model ──
+              if (hasToolCalls) {
+                const structCheck = hasStructurallyBrokenToolCalls(json);
+                if (structCheck.broken) {
+                  console.log(`[PatternB+] Structurally broken: ${structCheck.reason} — retrying`);
+                  const retryResult = await retryWithToolsModel(body, caps, actualModelId, false);
+                  if (retryResult && retryResult.response.ok) {
+                    try {
+                      const retryJson = await retryResult.response.json() as Record<string, unknown>;
+                      repairToolCallArguments(retryJson);
+                      const retryCheck = hasStructurallyBrokenToolCalls(retryJson);
+                      if (!retryCheck.broken) {
+                        console.log(`[PatternB+] Retry succeeded with ${retryResult.provider}/${retryResult.modelId}`);
+                        ensureChatCompletionFields(retryJson, retryResult.provider, retryResult.modelId);
+                        const retryHeaders = new Headers();
+                        retryHeaders.set("Content-Type", "application/json");
+                        retryHeaders.set("X-SMLGateway-Provider", retryResult.provider);
+                        retryHeaders.set("X-SMLGateway-Model", retryResult.modelId);
+                        retryHeaders.set("X-SMLGateway-ToolRepair", "retried");
+                        retryHeaders.set("Access-Control-Allow-Origin", "*");
+                        await logGateway(modelField, retryResult.modelId, retryResult.provider, 200, Date.now() - startTime,
+                          0, 0, null, userMsg, `[tool-repair-retry from ${provider}/${actualModelId}]`);
+                        return new Response(JSON.stringify(retryJson), { status: 200, headers: retryHeaders });
+                      }
+                    } catch { /* retry parse failed, continue with original */ }
+                  }
+                  console.log(`[PatternB+] Retry did not fix structural issue — returning original`);
+                }
+              }
+
+
               const badReason = isResponseBad(content, caps.hasTools, hasToolCalls);
               if (badReason) {
                 console.log(`[BAD-RESPONSE] ${provider}/${actualModelId} — ${badReason}: "${content.slice(0, 100)}"`);
@@ -2221,6 +2347,7 @@ export async function POST(req: NextRequest) {
         }
 
         const errText = await response.text().catch(() => "");
+        console.error(`[Gateway] ${provider}/${actualModelId} HTTP ${response.status}: ${errText.slice(0, 500)}`);
         lastError = `${provider}/${actualModelId}: HTTP ${response.status}`;
         lastProvider = provider;
         lastModelId = actualModelId;
@@ -2502,19 +2629,45 @@ async function buildProxiedResponse(
       }
     }
 
+    // Pattern B+: repair tool_call arguments before numeric coercion
+    repairToolCallArguments(json);
+
     if (json.choices) {
       for (const choice of json.choices) {
         const toolCalls = choice.message?.tool_calls;
         if (Array.isArray(toolCalls)) {
           for (const tc of toolCalls) {
-            if (tc.function?.arguments && typeof tc.function.arguments === "string") {
+            // Fix missing id/type
+            if (!tc.id) tc.id = uuidv4();
+            if (!tc.type) tc.type = "function";
+            
+            // Fix arguments
+            if (tc.function?.arguments) {
+              let argsStr = typeof tc.function.arguments === "object" 
+                ? JSON.stringify(tc.function.arguments) 
+                : String(tc.function.arguments);
+              
+              // Strip markdown fences if present
+              argsStr = argsStr.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?\s*```\s*$/i, "");
+              
               try {
                 const args = JSON.parse(tc.function.arguments);
                 for (const [key, val] of Object.entries(args)) {
                   if (typeof val === "string" && /^\d+$/.test(val)) args[key] = Number(val);
                 }
                 tc.function.arguments = JSON.stringify(args);
-              } catch { /* keep original */ }
+              } catch {
+                // JSON.parse failed → try jsonrepair
+                try {
+                  const repaired = jsonrepair(argsStr);
+                  JSON.parse(repaired); // verify it's valid
+                  tc.function.arguments = repaired;
+                  console.log(`[ToolRepair] Repaired tool_call arguments for ${tc.function?.name}`);
+                } catch {
+                  // jsonrepair also failed — keep original, client will handle
+                  console.log(`[ToolRepair] Could not repair arguments for ${tc.function?.name}`);
+                }
+              }
             }
           }
         }

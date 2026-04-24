@@ -9,7 +9,12 @@
  * เป้าหมาย: discovered provider = ใช้งานได้ทันที โดยไม่ต้องแก้ code
  */
 import { getSqlClient } from "@/lib/db/schema";
-import { PROVIDER_URLS as HARDCODED_URLS, PROVIDER_LABELS as HARDCODED_LABELS } from "@/lib/providers";
+import {
+  PROVIDER_URLS as HARDCODED_URLS,
+  PROVIDER_LABELS as HARDCODED_LABELS,
+  PROVIDER_EMBEDDING_URLS as HARDCODED_EMBED_URLS,
+  PROVIDER_COMPLETIONS_URLS as HARDCODED_COMPL_URLS,
+} from "@/lib/providers";
 
 interface CatalogEntry {
   name: string;
@@ -82,6 +87,50 @@ export function resolveProviderUrl(provider: string): string {
   const fromDb = cache.get(provider)?.base_url;
   if (fromDb) return fromDb;
   return HARDCODED_URLS[provider] ?? "";
+}
+
+/**
+ * Derive embedding URL from a chat completions URL by replacing the path.
+ * Works for OpenAI-compatible providers (Ollama, Mistral, OpenRouter, etc).
+ */
+function deriveEmbedFromChat(chatUrl: string): string | null {
+  if (!chatUrl) return null;
+  if (chatUrl.includes("/chat/completions")) return chatUrl.replace("/chat/completions", "/embeddings");
+  return null;
+}
+
+function deriveCompletionsFromChat(chatUrl: string): string | null {
+  if (!chatUrl) return null;
+  if (chatUrl.includes("/chat/completions")) return chatUrl.replace("/chat/completions", "/completions");
+  return null;
+}
+
+/**
+ * Resolve provider embeddings URL.
+ * Priority: derive from DB chat URL > hardcoded PROVIDER_EMBEDDING_URLS > ""
+ */
+export function resolveProviderEmbeddingUrl(provider: string): string {
+  maybeRefresh();
+  const dbChat = cache.get(provider)?.base_url;
+  if (dbChat) {
+    const derived = deriveEmbedFromChat(dbChat);
+    if (derived) return derived;
+  }
+  return HARDCODED_EMBED_URLS[provider] ?? "";
+}
+
+/**
+ * Resolve provider legacy completions URL.
+ * Priority: derive from DB chat URL > hardcoded PROVIDER_COMPLETIONS_URLS > ""
+ */
+export function resolveProviderCompletionsUrl(provider: string): string {
+  maybeRefresh();
+  const dbChat = cache.get(provider)?.base_url;
+  if (dbChat) {
+    const derived = deriveCompletionsFromChat(dbChat);
+    if (derived) return derived;
+  }
+  return HARDCODED_COMPL_URLS[provider] ?? "";
 }
 
 /**

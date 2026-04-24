@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { getNextApiKey } from "@/lib/api-keys";
-import { PROVIDER_EMBEDDING_URLS } from "@/lib/providers";
+import { resolveProviderEmbeddingUrl } from "@/lib/provider-resolver";
 import { openAIError } from "@/lib/openai-compat";
 
 export const dynamic = "force-dynamic";
@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
     const providerOrder = ["ollama", "mistral", "openrouter"];
 
     for (const provider of providerOrder) {
-      const url = PROVIDER_EMBEDDING_URLS[provider];
+      const url = resolveProviderEmbeddingUrl(provider);
       if (!url) continue;
 
       const apiKey = getNextApiKey(provider);

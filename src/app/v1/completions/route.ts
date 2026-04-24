@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { getSqlClient } from "@/lib/db/schema";
 import { getNextApiKey } from "@/lib/api-keys";
 import { PROVIDER_COMPLETIONS_URLS } from "@/lib/providers";
+import { resolveProviderCompletionsUrl } from "@/lib/provider-resolver";
 import { openAIError } from "@/lib/openai-compat";
 import crypto from "crypto";
 
@@ -63,7 +64,7 @@ export async function POST(req: NextRequest) {
 
     // Try each model
     for (const model of modelList) {
-      const url = PROVIDER_COMPLETIONS_URLS[model.provider];
+      const url = resolveProviderCompletionsUrl(model.provider);
       if (!url) continue;
 
       const apiKey = getNextApiKey(model.provider);

@@ -27,13 +27,7 @@ export async function GET(req: NextRequest) {
             b.avg_score as "avgScore", b.max_score as "maxScore",
             b.questions_answered as "questionsAnswered", b.total_questions as "totalQuestions"
           FROM models m
-          LEFT JOIN (
-            SELECT hl.model_id, hl.status, hl.latency_ms, hl.checked_at, hl.cooldown_until
-            FROM health_logs hl
-            INNER JOIN (
-              SELECT model_id, MAX(id) as max_id FROM health_logs GROUP BY model_id
-            ) latest ON hl.model_id = latest.model_id AND hl.id = latest.max_id
-          ) h ON m.id = h.model_id
+          LEFT JOIN latest_model_health h ON m.id = h.model_id
           LEFT JOIN (
             SELECT model_id, AVG(score) as avg_score, MAX(max_score) as max_score,
               COUNT(*) as questions_answered, COUNT(*) as total_questions
@@ -55,13 +49,7 @@ export async function GET(req: NextRequest) {
             b.avg_score as "avgScore", b.max_score as "maxScore",
             b.questions_answered as "questionsAnswered", b.total_questions as "totalQuestions"
           FROM models m
-          LEFT JOIN (
-            SELECT hl.model_id, hl.status, hl.latency_ms, hl.checked_at, hl.cooldown_until
-            FROM health_logs hl
-            INNER JOIN (
-              SELECT model_id, MAX(id) as max_id FROM health_logs GROUP BY model_id
-            ) latest ON hl.model_id = latest.model_id AND hl.id = latest.max_id
-          ) h ON m.id = h.model_id
+          LEFT JOIN latest_model_health h ON m.id = h.model_id
           LEFT JOIN (
             SELECT model_id, AVG(score) as avg_score, MAX(max_score) as max_score,
               COUNT(*) as questions_answered, COUNT(*) as total_questions

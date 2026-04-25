@@ -527,7 +527,7 @@ export async function runMigrations(): Promise<void> {
       await sql`
         CREATE TABLE IF NOT EXISTS semantic_cache (
           id BIGSERIAL PRIMARY KEY,
-          query_hash TEXT UNIQUE NOT NULL,
+          query_hash TEXT NOT NULL,
           query TEXT NOT NULL,
           embedding vector(768),
           response JSONB NOT NULL,
@@ -543,6 +543,12 @@ export async function runMigrations(): Promise<void> {
       // Forward-compat ALTER for tables that pre-date this column.
       await sql`ALTER TABLE semantic_cache ADD COLUMN IF NOT EXISTS tenant_ns TEXT NOT NULL DEFAULT '_anon'`;
       await sql`CREATE INDEX IF NOT EXISTS idx_semantic_cache_tenant ON semantic_cache(tenant_ns)`;
+      // Drop the standalone UNIQUE on query_hash (would let tenant A's first
+      // INSERT block tenant B's identical question via ON CONFLICT). Keep a
+      // composite unique on (tenant_ns, query_hash) so identical questions
+      // from the same tenant still merge into one row.
+      await sql`ALTER TABLE semantic_cache DROP CONSTRAINT IF EXISTS semantic_cache_query_hash_key`;
+      await sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_semantic_cache_tenant_hash ON semantic_cache(tenant_ns, query_hash)`;
       console.log("[migrate] pgvector semantic_cache ready");
     } catch (e) {
       console.warn("[migrate] pgvector unavailable — semantic_cache skipped:", (e as Error).message);

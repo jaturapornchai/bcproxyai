@@ -1274,7 +1274,7 @@ export async function POST(req: NextRequest) {
     const cachedHit = await getCachedResponse(body, _inboundBearer, _cacheOptOut);
     if (cachedHit) {
       bumpPerf("cache:hit");
-      console.log(`[CACHE-HIT] ${cachedHit.provider}/${cachedHit.model}`);
+      log.info(`[CACHE-HIT] ${cachedHit.provider}/${cachedHit.model}`);
       const cacheHeaders = new Headers();
       cacheHeaders.set("Content-Type", "application/json");
       cacheHeaders.set("X-SMLGateway-Provider", cachedHit.provider);
@@ -1302,7 +1302,7 @@ export async function POST(req: NextRequest) {
 
     const estInputTokens = estimateTokens(body);
     const promptCategory = detectPromptCategory(extractUserMessage(body) ?? "");
-    console.log(`[CAT:${_reqId}] ${promptCategory}`);
+    log.info(`[CAT:${_reqId}] ${promptCategory}`);
 
     // ---- Consensus mode ----
     if (parsed.mode === "consensus") {
@@ -1387,7 +1387,7 @@ export async function POST(req: NextRequest) {
         }
         return openAIError(response.status, { message: errText || `Provider ${provider} returned ${response.status}` });
       }
-      console.log(`[RES:${_reqId}] ${response.status} | ${provider}/${modelId} | ${Date.now() - _reqTime}ms | direct`);
+      log.info(`[RES:${_reqId}] ${response.status} | ${provider}/${modelId} | ${Date.now() - _reqTime}ms | direct`);
       return buildProxiedResponse(response, provider!, modelId!, isStream, estInputTokens, softBackoff, _reqId);
     }
 
@@ -1408,7 +1408,7 @@ export async function POST(req: NextRequest) {
         const errText = await response.text();
         return openAIError(response.status, { message: errText || `Provider ${row.provider} returned ${response.status}` });
       }
-      console.log(`[RES:${_reqId}] ${response.status} | ${row.provider}/${row.model_id} | ${Date.now() - _reqTime}ms | match`);
+      log.info(`[RES:${_reqId}] ${response.status} | ${row.provider}/${row.model_id} | ${Date.now() - _reqTime}ms | match`);
       return buildProxiedResponse(response, row.provider, row.model_id, isStream, estInputTokens, softBackoff, _reqId);
     }
 
@@ -1418,7 +1418,7 @@ export async function POST(req: NextRequest) {
     if (process.env.LOG_LEVEL === "debug") {
       const candByProv: Record<string, number> = {};
       candidates.forEach(c => candByProv[c.provider] = (candByProv[c.provider] || 0) + 1);
-      console.log(`[DEBUG] mode=${parsed.mode} candidates=${candidates.length} providers=${JSON.stringify(candByProv)}`);
+      log.debug(`[DEBUG] mode=${parsed.mode} candidates=${candidates.length} providers=${JSON.stringify(candByProv)}`);
     }
 
     if (!caps.hasTools) {
@@ -1439,7 +1439,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (process.env.LOG_LEVEL === "debug") {
-      console.log(`[DEBUG] after boost: candidates=${candidates.length} top3=[${candidates.slice(0,3).map(c=>c.provider+'/'+c.model_id).join(', ')}]`);
+      log.debug(`[DEBUG] after boost: candidates=${candidates.length} top3=[${candidates.slice(0,3).map(c=>c.provider+'/'+c.model_id).join(', ')}]`);
     }
 
     let finalCandidates = candidates;
@@ -1450,13 +1450,13 @@ export async function POST(req: NextRequest) {
       // 503 through that window. Fall back to a permissive list (no exam
       // filter) so the request still gets served; the per-request retry loop
       // below will weed out actually-broken models.
-      console.log(`[FALLBACK:${_reqId}] selectModelsByMode returned 0 — using getAllModelsIncludingCooldown`);
+      log.warn(`[FALLBACK:${_reqId}] selectModelsByMode returned 0 — using getAllModelsIncludingCooldown`);
       finalCandidates = await getAllModelsIncludingCooldown(caps);
     }
     if (finalCandidates.length === 0) {
       const reason = "ไม่มี model ที่ผ่านสอบ — รอ worker exam cycle";
       await logGateway(modelField, null, null, 503, Date.now() - _reqTime, 0, 0, reason, extractUserMessage(body), null, _reqId, ip);
-      console.log(`[RES:${_reqId}] 503 | no passed models | ${reason}`);
+      log.warn(`[RES:${_reqId}] 503 | no passed models | ${reason}`);
       return openAIError(503, { message: reason });
     }
 
@@ -1488,7 +1488,7 @@ export async function POST(req: NextRequest) {
       const others = finalCandidates.filter(c => !winnerSet.has(c.id));
       finalCandidates = [...winners, ...others];
       if (winners.length > 0) {
-        console.log(`[CATEGORY-BOOST:${_reqId}] "${learningCategory}" → ${winners.length} winners: ${winners.slice(0,3).map(w => w.provider+'/'+w.model_id).join(', ')}`);
+        log.info(`[CATEGORY-BOOST:${_reqId}] "${learningCategory}" → ${winners.length} winners: ${winners.slice(0,3).map(w => w.provider+'/'+w.model_id).join(', ')}`);
       }
     }
 
@@ -1505,11 +1505,11 @@ export async function POST(req: NextRequest) {
         const catFiltered = finalCandidates.filter(c => catScoreMap.has(String(c.id)));
         if (catFiltered.length >= 2) {
           const dropped = finalCandidates.length - catFiltered.length;
-          if (dropped > 0) console.log(`[CAT-FILTER:${_reqId}] ${learningCategory}→${examCat}: kept ${catFiltered.length}, dropped ${dropped} models with <60% in ${examCat}`);
+          if (dropped > 0) log.debug(`[CAT-FILTER:${_reqId}] ${learningCategory}→${examCat}: kept ${catFiltered.length}, dropped ${dropped} models with <60% in ${examCat}`);
           finalCandidates = catFiltered;
         }
       } catch (e) {
-        console.log(`[CAT-FILTER:${_reqId}] error: ${e}`);
+        log.warn(`[CAT-FILTER:${_reqId}] error: ${e}`);
       }
     }
 
@@ -1530,11 +1530,11 @@ export async function POST(req: NextRequest) {
     const sizeFiltered = finalCandidates.filter(c => {
       // context_length = 0 หรือ null → ไม่รู้ขนาด ถือว่าไม่ปลอดภัย ข้าม
       if (!c.context_length || c.context_length === 0) {
-        console.log(`[SIZE-SKIP] ${c.provider}/${c.model_id} unknown context (0) — required ${requiredContext}`);
+        log.debug(`[SIZE-SKIP] ${c.provider}/${c.model_id} unknown context (0) — required ${requiredContext}`);
         return false;
       }
       if (c.context_length >= requiredContext) return true;
-      console.log(`[SIZE-SKIP] ${c.provider}/${c.model_id} context ${c.context_length} < required ${requiredContext}`);
+      log.debug(`[SIZE-SKIP] ${c.provider}/${c.model_id} context ${c.context_length} < required ${requiredContext}`);
       return false;
     });
     // Fall back to full list if everything was filtered (better to try than immediately 503)
@@ -1542,7 +1542,7 @@ export async function POST(req: NextRequest) {
       finalCandidates = sizeFiltered;
       if (process.env.LOG_LEVEL === "debug") console.log(`[DEBUG] after size filter: ${finalCandidates.length} candidates (required ctx ${requiredContext})`);
     } else {
-      console.log(`[SIZE-SKIP] All candidates too small for ${requiredContext} tokens — using full list as fallback`);
+      log.warn(`[SIZE-SKIP] All candidates too small for ${requiredContext} tokens — using full list as fallback`);
     }
 
     // U2: Context-aware provider filter for large requests
@@ -1560,7 +1560,7 @@ export async function POST(req: NextRequest) {
     const ctxMinFiltered = finalCandidates.filter(c => (c.context_length ?? 0) >= MIN_CTX);
     if (ctxMinFiltered.length > 0) {
       const dropped = finalCandidates.length - ctxMinFiltered.length;
-      if (dropped > 0) console.log(`[MIN-CTX:${_reqId}] dropped ${dropped} models with ctx<${MIN_CTX}`);
+      if (dropped > 0) log.debug(`[MIN-CTX:${_reqId}] dropped ${dropped} models with ctx<${MIN_CTX}`);
       finalCandidates = ctxMinFiltered;
     }
 
@@ -1579,7 +1579,7 @@ export async function POST(req: NextRequest) {
       const noVision = finalCandidates.filter(c => !/-vision[-\d]/i.test(c.model_id));
       if (noVision.length >= 3) {
         const dropped = finalCandidates.length - noVision.length;
-        if (dropped > 0) console.log(`[VISION-FILTER:${_reqId}] dropped ${dropped} vision-only models (no image in request)`);
+        if (dropped > 0) log.debug(`[VISION-FILTER:${_reqId}] dropped ${dropped} vision-only models (no image in request)`);
         finalCandidates = noVision;
       }
     }
@@ -1687,8 +1687,8 @@ export async function POST(req: NextRequest) {
       const rankLog = providerRanking.slice(0, 5).map(r =>
         `${r.prov}(${(r.liveScore.successRate * 100).toFixed(0)}%/${Math.round(r.liveScore.avgLatency)}ms/n=${r.liveScore.samples})`
       ).join(" > ");
-      console.log(`[PROVIDER-RANK:${_reqId}] ${rankLog}`);
-      console.log(`[CANDIDATES:${_reqId}] ${finalCandidates.length} candidates | top5: ${finalCandidates.slice(0,5).map(c => `${c.provider}/${c.model_id}(ctx=${c.context_length})`).join(", ")}`);
+      log.info(`[PROVIDER-RANK:${_reqId}] ${rankLog}`);
+      log.info(`[CANDIDATES:${_reqId}] ${finalCandidates.length} candidates | top5: ${finalCandidates.slice(0,5).map(c => `${c.provider}/${c.model_id}(ctx=${c.context_length})`).join(", ")}`);
     }
 
     // ภายในแต่ละ provider เรียง model ตาม live-score + benchmark
@@ -1733,7 +1733,7 @@ export async function POST(req: NextRequest) {
           : "ทุก model ติด cooldown หรือขาด API key";
       const latency = Date.now() - startTime;
       await logGateway(modelField, null, null, 503, latency, 0, 0, reason, userMsg, null, _reqId, ip);
-      console.log(`[RES:${_reqId}] 503 | no candidates | ${reason}`);
+      log.warn(`[RES:${_reqId}] 503 | no candidates | ${reason}`);
       return openAIError(503, { message: reason });
     }
 
@@ -1779,7 +1779,7 @@ export async function POST(req: NextRequest) {
         const { response: hedgeResp, winner, winnerIdx } = hedgeResult;
         const losers = hedgeContenders.filter((_, i) => i !== winnerIdx);
         const latency = Date.now() - startTime;
-        console.log(`[HEDGE-WIN:${_reqId}] ${winner.provider}/${winner.model_id} vs [${losers.map(l => `${l.provider}/${l.model_id}`).join(", ")}] | ${latency}ms`);
+        log.info(`[HEDGE-WIN:${_reqId}] ${winner.provider}/${winner.model_id} vs [${losers.map(l => `${l.provider}/${l.model_id}`).join(", ")}] | ${latency}ms`);
         // Record winner as success, loser as neutral (cancelled)
         await recordProviderSuccessMem(winner.provider, winner.model_id);
         if (ip) setSticky(ip, promptCategory, winner.provider, winner.model_id);
@@ -1803,7 +1803,7 @@ export async function POST(req: NextRequest) {
           await recordRoutingResult(winner.id, winner.provider, promptCategory, true, latency);
           recordOutcome(winner.provider, winner.model_id, true, latency);
           recordBattleEvent(outcomeFromLatency(latency, true)).catch(() => {});
-          console.log(`[RES:${_reqId}] 200 | ${winner.provider}/${winner.model_id} | ${latency}ms | hedge-stream`);
+          log.info(`[RES:${_reqId}] 200 | ${winner.provider}/${winner.model_id} | ${latency}ms | hedge-stream`);
           return new Response(hedgeResp.body, { status: 200, headers: streamHeaders });
         }
 
@@ -1825,7 +1825,7 @@ export async function POST(req: NextRequest) {
           const hasToolCalls = Array.isArray(firstMsg?.tool_calls) && (firstMsg!.tool_calls!.length > 0);
           const badReason = isResponseBad(content, caps.hasTools, hasToolCalls);
           if (badReason) {
-            console.log(`[HEDGE-BAD] ${winner.provider}/${winner.model_id} — ${badReason}`);
+            log.warn(`[HEDGE-BAD] ${winner.provider}/${winner.model_id} — ${badReason}`);
             // Reset to 0 so sequential retry doesn't skip intermediate same-provider candidates
             // (hedge picks 1-per-provider across spread indices, leaving gaps)
             hedgeStartIdx = 0;
@@ -1878,7 +1878,7 @@ export async function POST(req: NextRequest) {
             const _hpt = usage?.prompt_tokens ?? 0; const _hct = usage?.completion_tokens ?? 0;
             const _htc = Array.isArray(json.choices?.[0]?.message?.tool_calls) ? json.choices[0].message.tool_calls.length : 0;
             const _hans = content ? redactForLog(content) : (_htc > 0 ? `[tool_call×${_htc}]` : "-");
-            console.log(`[RES:${_reqId}] 200 | ${winner.provider}/${winner.model_id} | ${latency}ms | hedge | pt=${_hpt} ct=${_hct} tc=${_htc} | Q:"${_reqMsg}" A:"${_hans}"`);
+            log.info(`[RES:${_reqId}] 200 | ${winner.provider}/${winner.model_id} | ${latency}ms | hedge | pt=${_hpt} ct=${_hct} tc=${_htc} | Q:"${_reqMsg}" A:"${_hans}"`);
             return new Response(JSON.stringify(json), { status: 200, headers: hedgeHeaders });
           }
         } catch {
@@ -1887,7 +1887,7 @@ export async function POST(req: NextRequest) {
         }
       } catch {
         const latency = Date.now() - startTime;
-        console.log(`[HEDGE-LOSS:${_reqId}] all top-${hedgeCount} failed | ${latency}ms — continuing sequential`);
+        log.warn(`[HEDGE-LOSS:${_reqId}] all top-${hedgeCount} failed | ${latency}ms — continuing sequential`);
         bumpPerf("hedge:loss");
         hedgeStartIdx = 0;
         await Promise.all(
@@ -1902,7 +1902,7 @@ export async function POST(req: NextRequest) {
 
     for (let i = hedgeStartIdx, tried = 0; i < spreadCandidates.length && tried < MAX_RETRIES; i++) {
       if (Date.now() - startTime > TOTAL_TIMEOUT_MS) {
-        console.log(`[TIMEOUT] Total retry time exceeded ${TOTAL_TIMEOUT_MS}ms — stopping`);
+        log.warn(`[TIMEOUT] Total retry time exceeded ${TOTAL_TIMEOUT_MS}ms — stopping`);
         break;
       }
       const candidate = spreadCandidates[i];
@@ -1944,12 +1944,12 @@ export async function POST(req: NextRequest) {
       if (circuitOpen) { skippedCandidates.push(candidate); skipReasons.push(`${provider}/${actualModelId}:circuit-open`); console.log(`[CIRCUIT-SKIP] ${provider}/${actualModelId} circuit open`); continue; }
       if (wantOllamaCheck && hasCloudAlt && !ollamaLoaded) {
         skippedCandidates.push(candidate); skipReasons.push(`${provider}/${actualModelId}:cold-ollama`);
-        console.log(`[OLLAMA-SKIP] ${actualModelId} not loaded in memory — skipping (cloud alternatives available)`);
+        log.debug(`[OLLAMA-SKIP] ${actualModelId} not loaded in memory — skipping (cloud alternatives available)`);
         continue;
       }
       if (hasCloudLeft) {
         skippedCandidates.push(candidate); skipReasons.push(`${provider}/${actualModelId}:ollama-no-tools`);
-        console.log(`[OLLAMA-SKIP-TOOLS] ${actualModelId} — tools requested, cloud alternatives exist`);
+        log.debug(`[OLLAMA-SKIP-TOOLS] ${actualModelId} — tools requested, cloud alternatives exist`);
         continue;
       }
       if (wantUnhealthyCheck && unhealthyCheck.unhealthy) {
@@ -1971,7 +1971,7 @@ export async function POST(req: NextRequest) {
       }
       if (!capCheck.ok) {
         skippedCandidates.push(candidate); skipReasons.push(`${provider}/${actualModelId}:capacity`);
-        console.log(`[CAPACITY-SKIP:${_reqId}] ${provider}/${actualModelId} — ${capCheck.reason}`);
+        log.debug(`[CAPACITY-SKIP:${_reqId}] ${provider}/${actualModelId} — ${capCheck.reason}`);
         continue;
       }
 
@@ -2203,7 +2203,7 @@ export async function POST(req: NextRequest) {
               const _pt = usage?.prompt_tokens ?? 0; const _ct = usage?.completion_tokens ?? 0;
               const _tc = hasToolCalls ? (firstMsg!.tool_calls!.length) : 0;
               const _ans = content ? redactForLog(content) : (hasToolCalls ? `[tool_call×${_tc}]` : "-");
-              console.log(`[RES:${_reqId}] 200 | ${provider}/${actualModelId} | ${latency}ms | pt=${_pt} ct=${_ct} tc=${_tc} | Q:"${_reqMsg}" A:"${_ans}"`);
+              log.info(`[RES:${_reqId}] 200 | ${provider}/${actualModelId} | ${latency}ms | pt=${_pt} ct=${_ct} tc=${_tc} | Q:"${_reqMsg}" A:"${_ans}"`);
               return new Response(JSON.stringify(json), { status: 200, headers });
             } catch {
               // JSON parse failed — fall through
@@ -2222,7 +2222,7 @@ export async function POST(req: NextRequest) {
           }
           await logGateway(modelField, actualModelId, provider, 200, streamLatency, 0, 0, null, userMsg, "[stream]", _reqId, ip);
           recordBattleEvent(outcomeFromLatency(streamLatency, true)).catch(() => { /* cosmetic */ });
-          console.log(`[RES:${_reqId}] 200 | ${provider}/${actualModelId} | ${streamLatency}ms | stream | Q:"${_reqMsg}"`);
+          log.info(`[RES:${_reqId}] 200 | ${provider}/${actualModelId} | ${streamLatency}ms | stream | Q:"${_reqMsg}"`);
           return proxied;
         }
 
@@ -2244,7 +2244,7 @@ export async function POST(req: NextRequest) {
         await recordCircuitFailure(provider, actualModelId);
         if (wasProbing) await recordCircuitProbeResult(provider, actualModelId, false);
         const st = response.status;
-        console.log(`[RETRY:${_reqId}] ${tried}/${MAX_RETRIES} | ${provider}/${actualModelId} → HTTP ${st} | ${errText.slice(0, 200)}`);
+        log.warn(`[RETRY:${_reqId}] ${tried}/${MAX_RETRIES} | ${provider}/${actualModelId} → HTTP ${st} | ${errText.slice(0, 200)}`);
 
         // Learn limit จาก 429 error message + track sustained rate for auto-demote
         if (st === 429) {
@@ -2365,7 +2365,7 @@ export async function POST(req: NextRequest) {
         const streakCd = await recordFailStreak(dbModelId);
         const streakMin = Math.max(1, Math.round(streakCd / 60_000));
         if (isTimeout) {
-          console.log(`[TIMEOUT-ATTEMPT:${_reqId}] ${provider}/${actualModelId} timeout → ${streakMin}min`);
+          log.warn(`[TIMEOUT-ATTEMPT:${_reqId}] ${provider}/${actualModelId} timeout → ${streakMin}min`);
           await logCooldown(dbModelId, `timeout: ${errStr.slice(0, 100)}`, 0, streakMin);
         } else {
           await logCooldown(dbModelId, lastError, 0, streakMin);
@@ -2415,7 +2415,7 @@ export async function POST(req: NextRequest) {
             const streamLatency = Date.now() - startTime;
             recordOutcome(provider, actualModelId, true, streamLatency);
             await logGateway(modelField, actualModelId, provider, 200, streamLatency, 0, 0, null, userMsg, "[relaxed-retry]", _reqId, ip);
-            console.log(`[RES:${_reqId}] 200 | ${provider}/${actualModelId} | ${streamLatency}ms | relaxed-retry stream | Q:"${_reqMsg}"`);
+            log.info(`[RES:${_reqId}] 200 | ${provider}/${actualModelId} | ${streamLatency}ms | relaxed-retry stream | Q:"${_reqMsg}"`);
             return buildProxiedResponse(response, provider, actualModelId, isStream, estInputTokens, softBackoff, _reqId);
           }
           const errText = await response.text().catch(() => "");
@@ -2449,7 +2449,7 @@ export async function POST(req: NextRequest) {
     }
     await logGateway(modelField, lastModelId, lastProvider, 503, latency, 0, 0, lastError.slice(0, 300), userMsg, null, _reqId, ip);
     recordBattleEvent("fail").catch(() => { /* cosmetic */ });
-    console.log(`[RES:${_reqId}] 503 | ${triedProviders.size} tried ${blockedProviders.size} blocked ${skippedCandidates.length} skipped | ${latency}ms | Q:"${_reqMsg}" | ${lastError.slice(0, 150)}`);
+    log.warn(`[RES:${_reqId}] 503 | ${triedProviders.size} tried ${blockedProviders.size} blocked ${skippedCandidates.length} skipped | ${latency}ms | Q:"${_reqMsg}" | ${lastError.slice(0, 150)}`);
     return openAIError(503, {
       message: `All ${Math.min(MAX_RETRIES, spreadCandidates.length)} models from ${triedProviders.size} providers failed: ${lastError}`,
     });

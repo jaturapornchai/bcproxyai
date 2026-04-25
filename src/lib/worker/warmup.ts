@@ -20,6 +20,15 @@ const WARMUP_LEADER_TTL_SEC = 115; // slightly shorter than the 2-min interval
 const WARMUP_TIMEOUT_MS = 8_000;
 const WARMUP_CONCURRENCY = 8;
 
+// Cap how many models we ping per tick. With 200+ exam-passed models the
+// 2-minute fan-out can burn through small per-provider quotas. Default 30
+// is enough to keep TLS keep-alive warm without flooding rate limits.
+const WARMUP_MAX_MODELS = (() => {
+  const raw = Number(process.env.WARMUP_MAX_MODELS);
+  if (!Number.isFinite(raw) || raw <= 0) return 30;
+  return Math.min(Math.max(Math.floor(raw), 1), 500);
+})();
+
 let warmupTimer: ReturnType<typeof setInterval> | null = null;
 
 interface WarmupCandidate {
@@ -32,6 +41,14 @@ function workerId(): string {
   return process.env.HOSTNAME || process.env.COMPUTERNAME || "local";
 }
 
+function leaderFailOpen(): boolean {
+  // Same policy as src/lib/worker/leader.ts — fail-closed in production by
+  // default so a Redis outage doesn't trigger every replica to ping every
+  // model at once and eat upstream rate limits.
+  if (process.env.WORKER_LEADER_FAIL_OPEN === "1") return true;
+  return process.env.NODE_ENV !== "production";
+}
+
 async function acquireWarmupLeader(): Promise<boolean> {
   try {
     const redis = getRedis();
@@ -41,7 +58,7 @@ async function acquireWarmupLeader(): Promise<boolean> {
     const holder = await redis.get(WARMUP_LEADER_KEY);
     return holder === me;
   } catch {
-    return true;
+    return leaderFailOpen();
   }
 }
 
@@ -111,10 +128,17 @@ async function runWarmupTick(): Promise<void> {
   try {
     const sql = getSqlClient();
     // Models that passed their most-recent exam AND have no active cooldown
-    // in health_logs. Mirrors the filter used by the gateway's candidate picker.
+    // in health_logs. Order by recent latency (NULLs last) — fastest models
+    // first, so the cap below preserves the ones that matter for warm sockets.
     const candidates = await sql<WarmupCandidate[]>`
+      WITH latest_health AS (
+        SELECT DISTINCT ON (model_id) model_id, latency_ms, cooldown_until
+        FROM health_logs
+        ORDER BY model_id, id DESC
+      )
       SELECT m.id, m.provider, m.model_id
       FROM models m
+      LEFT JOIN latest_health h ON h.model_id = m.id
       WHERE EXISTS (
         SELECT 1 FROM exam_attempts e
         WHERE e.model_id = m.id
@@ -123,12 +147,9 @@ async function runWarmupTick(): Promise<void> {
             SELECT MAX(started_at) FROM exam_attempts WHERE model_id = m.id
           )
       )
-      AND NOT EXISTS (
-        SELECT 1 FROM health_logs h
-        WHERE h.model_id = m.id
-          AND h.cooldown_until IS NOT NULL
-          AND h.cooldown_until > now()
-      )
+      AND (h.cooldown_until IS NULL OR h.cooldown_until <= now())
+      ORDER BY h.latency_ms ASC NULLS LAST
+      LIMIT ${WARMUP_MAX_MODELS}
     `;
 
     if (candidates.length === 0) {
@@ -136,7 +157,7 @@ async function runWarmupTick(): Promise<void> {
       return;
     }
 
-    console.log(`[WARMUP] ping ${candidates.length} models เพื่อ keep-alive`);
+    console.log(`[WARMUP] ping ${candidates.length} models เพื่อ keep-alive (cap=${WARMUP_MAX_MODELS})`);
     const start = Date.now();
     const okCount = await runConcurrent(candidates, WARMUP_CONCURRENCY, pingOnce);
     const durMs = Date.now() - start;

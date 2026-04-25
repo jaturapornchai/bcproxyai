@@ -139,7 +139,7 @@ export async function storeSemanticResponse(
     await sql`
       INSERT INTO semantic_cache (query_hash, query, embedding, response, provider, model, tenant_ns)
       VALUES (${hash}, ${userMsg}, ${lit}::vector, ${JSON.stringify(response)}::jsonb, ${provider}, ${model}, ${ns})
-      ON CONFLICT (query_hash) DO UPDATE
+      ON CONFLICT (tenant_ns, query_hash) DO UPDATE
       SET hit_count = semantic_cache.hit_count + 1,
           last_used_at = now()
     `;

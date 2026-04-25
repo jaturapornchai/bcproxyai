@@ -88,23 +88,14 @@ export async function GET() {
       sql<{ count: number }[]>`
         SELECT COUNT(DISTINCT m.id) as count
         FROM models m
-        LEFT JOIN (
-          SELECT hl.model_id, hl.status, hl.cooldown_until
-          FROM health_logs hl
-          INNER JOIN (
-            SELECT model_id, MAX(id) as max_id FROM health_logs GROUP BY model_id
-          ) latest ON hl.model_id = latest.model_id AND hl.id = latest.max_id
-        ) h ON m.id = h.model_id
+        LEFT JOIN latest_model_health h ON m.id = h.model_id
         WHERE (h.status IS NULL OR h.status = 'available' OR h.status = 'error')
           AND (h.cooldown_until IS NULL OR h.cooldown_until <= now())
       `,
       sql<{ count: number }[]>`
-        SELECT COUNT(DISTINCT h.model_id) as count
-        FROM health_logs h
-        INNER JOIN (
-          SELECT model_id, MAX(id) as max_id FROM health_logs GROUP BY model_id
-        ) latest ON h.model_id = latest.model_id AND h.id = latest.max_id
-        WHERE h.cooldown_until > now()
+        SELECT COUNT(*) as count
+        FROM latest_model_health
+        WHERE cooldown_until > now()
       `,
       sql<{ key: string; value: string }[]>`
         SELECT key, value FROM worker_state WHERE key IN ('status', 'last_run')
@@ -128,12 +119,10 @@ export async function GET() {
             AND e.started_at > now() - interval '7 days'
         )
         AND NOT EXISTS (
-          SELECT 1 FROM health_logs hl
-          INNER JOIN (SELECT model_id, MAX(id) as max_id FROM health_logs GROUP BY model_id) latest
-            ON hl.model_id = latest.model_id AND hl.id = latest.max_id
-          WHERE hl.model_id = m.id
-            AND hl.cooldown_until IS NOT NULL
-            AND hl.cooldown_until > now()
+          SELECT 1 FROM latest_model_health h
+          WHERE h.model_id = m.id
+            AND h.cooldown_until IS NOT NULL
+            AND h.cooldown_until > now()
         )
       `,
     ]);

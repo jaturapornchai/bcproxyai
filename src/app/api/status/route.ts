@@ -26,14 +26,12 @@ export async function GET() {
     const totalRows = await sql<{ count: number }[]>`SELECT COUNT(*)::int as count FROM models`;
     const totalCount = Number(totalRows[0]?.count ?? 0);
 
-    // Available = total - cooldown
+    // Available = total - models in active cooldown (uses latest_model_health view)
     const availableRows = await sql<{ count: number }[]>`
       SELECT COUNT(*)::int as count FROM models
       WHERE id NOT IN (
-        SELECT h.model_id FROM health_logs h
-        INNER JOIN (SELECT model_id, MAX(id) as max_id FROM health_logs GROUP BY model_id) l
-          ON h.model_id = l.model_id AND h.id = l.max_id
-        WHERE h.cooldown_until > now()
+        SELECT model_id FROM latest_model_health
+        WHERE cooldown_until > now()
       )
     `;
     const availableCount = Number(availableRows[0]?.count ?? 0);

@@ -263,6 +263,14 @@ export default function Dashboard() {
                 API Keys
               </a>
               <a
+                href="/admin/providers"
+                className="px-3 py-1.5 rounded-lg text-cyan-300 hover:text-cyan-200 hover:bg-cyan-500/10 border border-cyan-500/30 transition-colors text-xs"
+                title="แก้ base URL ของ provider — เปลี่ยน Ollama port หรือชี้ไป LLM ตัวอื่น"
+              >
+                <span className="mr-1">🔌</span>
+                Providers
+              </a>
+              <a
                 href="/setup"
                 className="px-3 py-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 transition-colors text-xs"
                 title="ตั้งค่า API Key"

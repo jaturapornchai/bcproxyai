@@ -207,20 +207,27 @@ Trigger manual: `curl -X POST http://localhost:3334/api/worker`
 
 ---
 
-## Provider Management — แก้ base URL ผ่าน UI
+## Provider Management — Local AI (Ollama) ผ่าน UI
 
-หน้า `/admin/providers` ให้ admin แก้ `base_url` ของ provider ได้ทันทีโดยไม่ต้อง redeploy — ใช้สำหรับ:
+หน้า `/admin/providers` (เข้าผ่านปุ่ม **🔌 Providers** บน navbar dashboard) ออกแบบให้เน้น **Local AI** เป็นหลัก:
+- แสดงเฉพาะ provider ที่ host เป็น `localhost` / `127.0.0.1` / `host.docker.internal` / `0.0.0.0`
+- Cloud provider (Groq, OpenRouter, Mistral, ฯลฯ) ระบบจัดการอัตโนมัติ — ซ่อนอยู่ใต้ปุ่ม "▼ แสดง Cloud providers" (read-only summary)
+
+**ใช้สำหรับ:**
 - เปลี่ยน Ollama port (เช่น `11434` → `8888`)
-- ชี้ไป LLM ตัวอื่นที่ OpenAI-compatible (vLLM, LM Studio, llama.cpp, LocalAI)
-- ปิด provider ชั่วคราว (status `paused`)
+- ชี้ไป LLM local ตัวอื่นที่ OpenAI-compatible (vLLM, LM Studio, llama.cpp, LocalAI)
+- ย้าย host (Docker → host machine, หรือ remote IP)
+- ปิด provider ชั่วคราว (`active` ↔ `paused`)
 
 **Flow:**
 1. เข้า `/admin/providers` (auth ผ่าน Google OAuth / password / Bearer)
-2. แก้ `base_url` ใน input — ใส่ chat completions URL เต็ม (เช่น `http://host.docker.internal:8888/v1/chat/completions`)
-3. กด **Test** — probe `/v1/models` ของ URL ใหม่ → แสดง HTTP status + จำนวน model + latency
-4. กด **Save** — `provider_catalog.base_url` update + cache 30s flush ทันที
+2. แก้ฟิลด์ **Host** หรือ **Port** แยกกัน — URL เต็มอัปเดตอัตโนมัติ (preview ด้านล่าง เปลี่ยนเป็นสีส้มเมื่อ dirty)
+3. กด **🧪 ทดสอบเชื่อมต่อ** — probe `/v1/models` → แสดง HTTP status + จำนวน model + latency
+4. กด **💾 บันทึก** — `provider_catalog.base_url` update ใน DB + cache 30s flush ทันที
 
-Embeddings + completions URL จะ **derive อัตโนมัติ** จาก chat URL (แทน path `/chat/completions` ด้วย `/embeddings` หรือ `/completions`) — ไม่ต้องตั้งแยก
+**ฟีเจอร์อื่น:**
+- **Theme toggle** ☀️/🌙 — เก็บใน `localStorage`
+- Embeddings + completions URL จะ **derive อัตโนมัติ** จาก chat URL (แทน `/chat/completions` ด้วย `/embeddings` หรือ `/completions`) — ไม่ต้องตั้งแยก
 
 **Resolver priority** ([src/lib/provider-resolver.ts](src/lib/provider-resolver.ts)):
 1. `provider_catalog.base_url` (DB) — แก้จาก UI ได้

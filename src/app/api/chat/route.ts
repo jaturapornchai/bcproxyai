@@ -4,7 +4,17 @@ import { resolveProviderUrl } from "@/lib/provider-resolver";
 
 export const dynamic = "force-dynamic";
 
+// Hoisted so we don't allocate a TextEncoder per chunk in the hot path.
+const ENCODER = new TextEncoder();
+
 export async function POST(req: NextRequest) {
+  // Propagate client disconnect → upstream so we stop billing tokens the moment
+  // the browser tab closes. Without this, the upstream LLM keeps generating
+  // (sometimes seconds of paid output) after the user is already gone.
+  const upstreamCtrl = new AbortController();
+  const onClientAbort = () => upstreamCtrl.abort();
+  req.signal.addEventListener("abort", onClientAbort, { once: true });
+
   try {
     const body = await req.json();
     const { modelId, provider, messages } = body as {
@@ -44,17 +54,19 @@ export async function POST(req: NextRequest) {
         stream: true,
         max_tokens: 2048,
       }),
+      signal: upstreamCtrl.signal,
     });
 
     if (!res.ok) {
       const errText = await res.text().catch(() => "");
       console.error("[chat] API error:", res.status, errText.slice(0, 300));
+      req.signal.removeEventListener("abort", onClientAbort);
       return new Response(JSON.stringify({ error: `API ${res.status}: ${errText.slice(0, 200)}` }), { status: 502 });
     }
 
-    // Forward SSE stream as plain text stream
     const reader = res.body?.getReader();
     if (!reader) {
+      req.signal.removeEventListener("abort", onClientAbort);
       return new Response(JSON.stringify({ error: "No stream" }), { status: 502 });
     }
 
@@ -79,16 +91,25 @@ export async function POST(req: NextRequest) {
                 const json = JSON.parse(data);
                 const content = json.choices?.[0]?.delta?.content;
                 if (content) {
-                  controller.enqueue(new TextEncoder().encode(content));
+                  controller.enqueue(ENCODER.encode(content));
                 }
               } catch { /* skip */ }
             }
           }
         } catch (err) {
-          console.error("[chat] stream error:", err);
+          // AbortError on client disconnect is expected — don't log as error
+          if ((err as { name?: string })?.name !== "AbortError") {
+            console.error("[chat] stream error:", err);
+          }
         } finally {
+          try { reader.releaseLock(); } catch { /* ignore */ }
           controller.close();
         }
+      },
+      cancel(reason) {
+        // Browser closed the response stream → cancel upstream too
+        upstreamCtrl.abort(reason);
+        try { reader.cancel(reason); } catch { /* ignore */ }
       },
     });
 
@@ -96,6 +117,10 @@ export async function POST(req: NextRequest) {
       headers: { "Content-Type": "text/plain; charset=utf-8" },
     });
   } catch (err) {
+    req.signal.removeEventListener("abort", onClientAbort);
+    if ((err as { name?: string })?.name === "AbortError") {
+      return new Response(JSON.stringify({ error: "client aborted" }), { status: 499 });
+    }
     console.error("[chat] error:", err);
     return new Response(JSON.stringify({ error: String(err) }), { status: 500 });
   }

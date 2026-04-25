@@ -181,4 +181,12 @@ export function startWarmup(): void {
       console.log(`[WARMUP] scheduled tick error: ${err instanceof Error ? err.message : String(err)}`);
     });
   }, WARMUP_INTERVAL_MS);
+  if (typeof warmupTimer.unref === "function") warmupTimer.unref();
+}
+
+export function stopWarmup(): void {
+  if (warmupTimer) {
+    clearInterval(warmupTimer);
+    warmupTimer = null;
+  }
 }

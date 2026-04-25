@@ -373,7 +373,8 @@ Response: `{ ok, attempts, data, model, provider, latency_ms, request_ids }`
 GET /v1/trace/:reqId
 ```
 
-ดู log ละเอียดของ request เดิม (ใช้ `X-SMLGateway-Request-Id` header ที่ได้จาก response)
+ดู log ละเอียดของ request เดิม (ใช้ `X-SMLGateway-Request-Id` header ที่ได้จาก response).
+Response รวม `routing_explain` JSONB ที่บันทึก decision trail (mode, candidates, selected, fallbackUsed) — no prompt content.
 
 ### 12. My Stats
 
@@ -417,6 +418,34 @@ X-SMLGateway-Model        model ที่ตอบจริง
 X-SMLGateway-Hedge        true ถ้าชนะจาก hedge
 X-SMLGateway-Cache        HIT ถ้าดึงจาก semantic cache
 X-Resceo-Backoff          true ถ้ายิงถี่เกิน soft limit (ไม่บล็อก, hint เท่านั้น)
+```
+
+### 15. Ops endpoints (owner/master only — auth chain เดียวกับ /api/admin/*)
+
+```
+GET  /api/control-room?windowMin=60      single-call dashboard snapshot
+GET  /api/routing-explain?limit=30       recent routing decisions trail
+                          ?fallback=1    เฉพาะ request ที่เข้า fallback path
+                          ?error=1       เฉพาะ status >= 400
+GET  /api/autopilot                       rule-based ops recommendation cards
+POST /api/replay                          owner-only request replay
+                                          body: { reqId, candidates: [{provider, model}], confirm? }
+```
+
+**Replay guard:** prompt ที่มีคำอย่าง `password`, `api_key`, `secret`, `token`, `bearer`, `credit-card`, `ssn` จะถูก block — ส่ง `confirm: true` ใน body เพื่อ override (เฉพาะตอน debug จำเป็น).
+
+**Routing explain shape** (`gateway_logs.routing_explain` JSONB):
+```json
+{
+  "mode": "auto",
+  "category": "thai",
+  "fallbackUsed": false,
+  "candidates": [
+    { "provider": "groq", "model": "llama-3.1-8b", "accepted": true,  "reason": "selected:fastest" },
+    { "provider": "cerebras", "model": "llama-3.1-8b", "accepted": false, "reason": "rejected:other" }
+  ],
+  "selected": { "provider": "groq", "model": "llama-3.1-8b", "reason": "selected:fastest" }
+}
 ```
 
 ---

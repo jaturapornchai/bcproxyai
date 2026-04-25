@@ -3,6 +3,7 @@ import { getSqlClient } from "@/lib/db/schema";
 import { setProviderEnabled, getAllProviderToggles } from "@/lib/provider-toggle";
 import { triggerExamForProvider } from "@/lib/worker/exam";
 import { runWorkerCycle } from "@/lib/worker";
+import { seal as sealSecret, open as openSecret } from "@/lib/secret-vault";
 
 export const dynamic = "force-dynamic";
 
@@ -27,12 +28,15 @@ export async function GET() {
       SELECT provider, api_key, updated_at FROM api_keys
     `;
 
-    const result = rows.map((r) => ({
-      provider: r.provider,
-      hasDbKey: r.api_key.length > 0,
-      maskedKey: maskKey(r.api_key),
-      updatedAt: r.updated_at,
-    }));
+    const result = rows.map((r) => {
+      const plaintext = openSecret(r.api_key);
+      return {
+        provider: r.provider,
+        hasDbKey: plaintext.length > 0,
+        maskedKey: maskKey(plaintext),
+        updatedAt: r.updated_at,
+      };
+    });
 
     return NextResponse.json(result);
   } catch (err) {
@@ -63,9 +67,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, action: "deleted" });
     }
 
+    // sealSecret is a no-op when APP_ENCRYPTION_KEY is unset — we still
+    // store plaintext in dev. Once the operator sets the env, every save
+    // writes ciphertext while existing plaintext rows continue to work.
+    const stored = sealSecret(apiKey.trim());
     await sql`
       INSERT INTO api_keys (provider, api_key, updated_at)
-      VALUES (${provider}, ${apiKey.trim()}, now())
+      VALUES (${provider}, ${stored}, now())
       ON CONFLICT (provider) DO UPDATE SET api_key = EXCLUDED.api_key, updated_at = now()
     `;
 

@@ -21,20 +21,30 @@ export async function checkRateLimit(
     const windowMs = windowSec * 1000;
     const windowStart = now - windowMs;
 
-    // Remove expired entries, add current request, count
+    // Sliding window:
+    //   1. Trim entries older than window
+    //   2. Count what's left BEFORE adding our own request
+    //   3. If under the cap, add our entry
+    // Doing it in this order means `count` reflects the requests already in
+    // the window (excluding the current one) and the cap test is `count < limit`,
+    // which is the common-sense reading of "limit = max requests per window".
     const pipe = redis.pipeline();
     pipe.zremrangebyscore(redisKey, "-inf", windowStart);
-    pipe.zadd(redisKey, now, `${now}-${Math.random()}`);
     pipe.zcard(redisKey);
-    pipe.pexpire(redisKey, windowMs);
+    const trimResults = await pipe.exec();
+    if (!trimResults) throw new Error("pipeline failed");
 
-    const results = await pipe.exec();
-    if (!results) throw new Error("pipeline failed");
+    const priorCount = (trimResults[1]?.[1] as number) ?? 0;
+    const allowed = priorCount < limit;
 
-    const count = results[2]?.[1] as number;
+    if (allowed) {
+      const writePipe = redis.pipeline();
+      writePipe.zadd(redisKey, now, `${now}-${Math.random()}`);
+      writePipe.pexpire(redisKey, windowMs);
+      await writePipe.exec();
+    }
 
-    const allowed = count <= limit;
-    const remaining = Math.max(0, limit - count);
+    const remaining = Math.max(0, limit - priorCount - (allowed ? 1 : 0));
     const resetIn = windowSec;
 
     return { allowed, remaining, resetIn };

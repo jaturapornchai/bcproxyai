@@ -10,6 +10,7 @@
  */
 import { getSqlClient } from "@/lib/db/schema";
 import { getAllProviderNames } from "@/lib/provider-resolver";
+import { open as openSealed } from "@/lib/secret-vault";
 
 const NO_KEY_REQUIRED = new Set(["ollama", "pollinations"]);
 
@@ -31,7 +32,11 @@ async function refreshDbKeys(): Promise<void> {
       SELECT provider, api_key FROM api_keys
     `;
     const next: Record<string, string> = {};
-    for (const r of rows) next[r.provider] = r.api_key;
+    for (const r of rows) {
+      // openSealed is a no-op for legacy plaintext rows + decrypts the
+      // enc:v1:* blobs written by /api/setup once APP_ENCRYPTION_KEY is set.
+      next[r.provider] = openSealed(r.api_key);
+    }
     dbKeysCache = next;
     dbKeysCacheTime = Date.now();
   } catch {

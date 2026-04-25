@@ -21,6 +21,7 @@ import { isProviderEnabledSync } from "@/lib/provider-toggle";
 import { canFitRequest, parseLimitHeaders, parseLimitError, recordLimit } from "@/lib/provider-limits";
 import { recordOutcomeLearning, recordFailStreak, canHandleTokens, getCategoryWinners, detectCategory, isModelUnhealthyForCategory } from "@/lib/learning";
 import { upstreamAgent } from "@/lib/upstream-agent";
+import { emptyExplain, recordCandidate, stashExplain, consumeExplain, markWinner, type RoutingExplain } from "@/lib/routing-explain";
 
 // ── Category mapping: routing category → exam question category ──
 const ROUTING_TO_EXAM_CAT: Record<string, string> = {
@@ -571,6 +572,7 @@ interface GatewayLogRow {
   assistantMessage: string | null;
   requestId: string | null;
   clientIp: string | null;
+  routingExplain: unknown | null;
 }
 
 const LOG_FLUSH_INTERVAL_MS = 100;
@@ -598,11 +600,12 @@ async function flushGatewayLogs(): Promise<void> {
       assistant_message: r.assistantMessage?.slice(0, 500) ?? null,
       request_id: r.requestId,
       client_ip: r.clientIp,
+      routing_explain: r.routingExplain == null ? null : JSON.stringify(r.routingExplain),
     }));
     await sql`
       INSERT INTO gateway_logs ${sql(rows, "request_model", "resolved_model", "provider",
         "status", "latency_ms", "input_tokens", "output_tokens", "error",
-        "user_message", "assistant_message", "request_id", "client_ip")}
+        "user_message", "assistant_message", "request_id", "client_ip", "routing_explain")}
     `;
   } catch {
     // non-critical — logs are observability, not correctness
@@ -617,12 +620,20 @@ function logGateway(
   requestModel: string, resolvedModel: string | null, provider: string | null,
   status: number, latencyMs: number, inputTokens: number, outputTokens: number,
   error: string | null, userMessage: string | null, assistantMessage: string | null,
-  requestId: string | null = null, clientIp: string | null = null
+  requestId: string | null = null, clientIp: string | null = null,
+  routingExplain: unknown | null = null,
 ): void {
+  // Pull any routing_explain stashed for this request, then drop it. Keeps
+  // the in-memory map bounded — explains never outlive the gateway_logs row.
+  let explainAttached = routingExplain;
+  if (!explainAttached && requestId) {
+    explainAttached = consumeExplain(requestId);
+  }
   _logBuffer.push({
     requestModel, resolvedModel, provider, status, latencyMs,
     inputTokens, outputTokens, error, userMessage, assistantMessage,
     requestId, clientIp,
+    routingExplain: explainAttached ?? null,
   });
   // Schedule flush if not already pending
   if (!_logFlushTimer) {
@@ -1431,6 +1442,7 @@ export async function POST(req: NextRequest) {
     }
 
     let finalCandidates = candidates;
+    let usedFallback = false;
     if (finalCandidates.length === 0) {
       // Fallback: the exam worker is running in parallel, and DISTINCT ON picks
       // the latest attempt per model. A single bad worker round can flip all
@@ -1440,7 +1452,18 @@ export async function POST(req: NextRequest) {
       // below will weed out actually-broken models.
       log.warn(`[FALLBACK:${_reqId}] selectModelsByMode returned 0 — using getAllModelsIncludingCooldown`);
       finalCandidates = await getAllModelsIncludingCooldown(caps);
+      usedFallback = true;
     }
+
+    // Build the routing-explain trail. Up to 20 candidates kept; each row gets
+    // a `accepted=false` placeholder until the per-attempt loop confirms a
+    // winner via setRoutingDecision(...). No prompt content stored.
+    const _explain: RoutingExplain = emptyExplain(parsed.mode, promptCategory);
+    _explain.fallbackUsed = usedFallback;
+    for (const c of finalCandidates.slice(0, 20)) {
+      recordCandidate(_explain, c.provider, c.model_id, false, "rejected:other");
+    }
+    stashExplain(_reqId, _explain);
     if (finalCandidates.length === 0) {
       const reason = "ไม่มี model ที่ผ่านสอบ — รอ worker exam cycle";
       await logGateway(modelField, null, null, 503, Date.now() - _reqTime, 0, 0, reason, extractUserMessage(body), null, _reqId, ip);
@@ -1787,6 +1810,7 @@ export async function POST(req: NextRequest) {
           streamHeaders.set("X-SMLGateway-Request-Id", _reqId);
           if (softBackoff) streamHeaders.set("X-Resceo-Backoff", "true");
           streamHeaders.set("Access-Control-Allow-Origin", "*");
+          markWinner(_reqId, winner.provider, winner.model_id, "selected:fastest");
           await logGateway(modelField, winner.model_id, winner.provider, 200, latency, 0, 0, null, userMsg, null, _reqId, ip);
           await recordRoutingResult(winner.id, winner.provider, promptCategory, true, latency);
           recordOutcome(winner.provider, winner.model_id, true, latency);
@@ -2127,6 +2151,7 @@ export async function POST(req: NextRequest) {
               }
 
               const usage = json.usage;
+              markWinner(_reqId, provider, actualModelId, "selected:healthy");
               await logGateway(modelField, actualModelId, provider, 200, latency,
                 usage?.prompt_tokens ?? 0, usage?.completion_tokens ?? 0, null, userMsg, content?.slice(0, 500) ?? null,
                 _reqId, ip);
@@ -2206,6 +2231,7 @@ export async function POST(req: NextRequest) {
             recordOutcome(provider, actualModelId, false, streamLatency);
             log.warn(`[SLOW-COOLDOWN] ${provider}/${actualModelId} ${streamLatency}ms > ${slowThrStream}ms → 2min cooldown`);
           }
+          markWinner(_reqId, provider, actualModelId, "selected:healthy");
           await logGateway(modelField, actualModelId, provider, 200, streamLatency, 0, 0, null, userMsg, "[stream]", _reqId, ip);
           recordBattleEvent(outcomeFromLatency(streamLatency, true)).catch(() => { /* cosmetic */ });
           log.info(`[RES:${_reqId}] 200 | ${provider}/${actualModelId} | ${streamLatency}ms | stream | Q:"${_reqMsg}"`);

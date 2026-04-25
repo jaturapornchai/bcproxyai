@@ -2,9 +2,16 @@
  * Admin cookie — alternative to Google OAuth for granting admin sessions.
  *
  * The cookie contains a signed `<timestamp>.<hmac>` pair so we can verify
- * it without DB / Redis lookups. The HMAC secret is the `ADMIN_PASSWORD`
- * env var itself (never sent to the browser), so if the env rotates,
- * every existing cookie is invalidated automatically.
+ * it without DB / Redis lookups.
+ *
+ * HMAC key precedence:
+ *   1. ADMIN_COOKIE_SECRET — preferred (≥32 random bytes, set per deploy)
+ *   2. ADMIN_PASSWORD       — fallback (legacy: same secret as the login pw)
+ *
+ * Using the password as the signing key means a leaked cookie can be
+ * brute-forced offline to recover the password (SHA-256 HMAC is GPU-cheap).
+ * Set ADMIN_COOKIE_SECRET separately so password rotation and signing-key
+ * rotation can be independent decisions.
  */
 import { createHmac, timingSafeEqual } from "node:crypto";
 
@@ -12,13 +19,20 @@ export const ADMIN_COOKIE_NAME = "sml_admin";
 const VERSION = "v1";
 const MAX_AGE_S = 7 * 24 * 60 * 60; // 7 days
 
-function secret(): string | null {
+function signingSecret(): string | null {
+  const dedicated = process.env.ADMIN_COOKIE_SECRET?.trim() ?? "";
+  if (dedicated.length >= 16) return dedicated;
+  const pw = process.env.ADMIN_PASSWORD?.trim() ?? "";
+  return pw.length >= 4 ? pw : null;
+}
+
+function passwordSecret(): string | null {
   const pw = process.env.ADMIN_PASSWORD?.trim() ?? "";
   return pw.length >= 4 ? pw : null;
 }
 
 export function adminPasswordEnabled(): boolean {
-  return secret() !== null;
+  return passwordSecret() !== null;
 }
 
 function sign(data: string, key: string): string {
@@ -26,7 +40,7 @@ function sign(data: string, key: string): string {
 }
 
 export function mintAdminCookie(): string | null {
-  const k = secret();
+  const k = signingSecret();
   if (!k) return null;
   const ts = Date.now().toString();
   const sig = sign(`${VERSION}.${ts}`, k);
@@ -34,7 +48,7 @@ export function mintAdminCookie(): string | null {
 }
 
 export function verifyAdminCookie(value: string | undefined | null): boolean {
-  const k = secret();
+  const k = signingSecret();
   if (!k || !value) return false;
   const parts = value.split(".");
   if (parts.length !== 3) return false;
@@ -53,7 +67,7 @@ export function verifyAdminCookie(value: string | undefined | null): boolean {
 }
 
 export function checkAdminPassword(submitted: string): boolean {
-  const k = secret();
+  const k = passwordSecret();
   if (!k || !submitted) return false;
   const a = Buffer.from(k);
   const b = Buffer.from(submitted);

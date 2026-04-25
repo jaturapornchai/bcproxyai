@@ -55,6 +55,10 @@ import { CodegenPanel } from "../components/CodegenPanel";
 import { DevSuggestionsPanel } from "../components/DevSuggestionsPanel";
 import { ExamLevelPanel } from "../components/ExamLevelPanel";
 import { ProviderCatalogPanel } from "../components/ProviderCatalogPanel";
+import { ControlRoomPanel } from "../components/ControlRoomPanel";
+import { AutopilotPanel } from "../components/AutopilotPanel";
+import { RoutingExplainPanel } from "../components/RoutingExplainPanel";
+import { ReplayPanel } from "../components/ReplayPanel";
 
 // ─── Main Dashboard ────────────────────────────────────────────────────────────
 
@@ -434,6 +438,26 @@ export default function Dashboard() {
         {/* ── Performance insights (1h rolling) ───────────────────────── */}
         <section id="perf" className="animate-fade-in-up">
           <PerfInsightsPanel />
+        </section>
+
+        {/* ── Live Gateway Control Room (single-call snapshot) ───────────── */}
+        <section id="control-room" className="animate-fade-in-up">
+          <ControlRoomPanel />
+        </section>
+
+        {/* ── AI Ops Autopilot — rule-based recommendation cards ────────── */}
+        <section id="autopilot" className="animate-fade-in-up">
+          <AutopilotPanel />
+        </section>
+
+        {/* ── Smart Routing Explain — recent decisions trail ────────────── */}
+        <section id="routing-explain" className="animate-fade-in-up">
+          <RoutingExplainPanel />
+        </section>
+
+        {/* ── Replay & Compare ─────────────────────────────────────────── */}
+        <section id="replay" className="animate-fade-in-up">
+          <ReplayPanel />
         </section>
 
         {/* ── Live Mascot Theater (data-driven from gateway logs) ───────── */}

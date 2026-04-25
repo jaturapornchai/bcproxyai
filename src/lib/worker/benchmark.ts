@@ -282,7 +282,10 @@ export async function runBenchmarks(): Promise<{
   await logWorker("benchmark", "เริ่มรัน benchmark (8 หมวด, 10 ข้อ)");
   const sql = getSqlClient();
 
-  // Get available models with fewer than TOTAL_QUESTIONS benchmark results
+  // Get available models with fewer than TOTAL_QUESTIONS benchmark results.
+  // Uses latest_model_health view (one row per model) instead of the old
+  // correlated MAX() subquery — pgvector planner picks an index scan vs the
+  // previous nested seq scan.
   const models = await sql<DbModel[]>`
     SELECT
       m.id,
@@ -291,12 +294,9 @@ export async function runBenchmarks(): Promise<{
       m.supports_vision,
       COUNT(b.id) AS benchmark_count
     FROM models m
-    INNER JOIN health_logs hl ON hl.model_id = m.id
+    INNER JOIN latest_model_health hl ON hl.model_id = m.id
     LEFT JOIN benchmark_results b ON b.model_id = m.id
     WHERE hl.status = 'available'
-      AND hl.checked_at = (
-        SELECT MAX(h2.checked_at) FROM health_logs h2 WHERE h2.model_id = m.id
-      )
     GROUP BY m.id, m.provider, m.model_id, m.supports_vision
     HAVING COUNT(b.id) < ${TOTAL_QUESTIONS}
     LIMIT ${MAX_MODELS_PER_RUN}
@@ -312,7 +312,16 @@ export async function runBenchmarks(): Promise<{
   let testedModels = 0;
   let lastJudgeModel = getNextApiKey("deepseek") ? DEEPSEEK_MODEL : FALLBACK_JUDGE_MODELS[0];
 
-  const CONCURRENCY = 20;
+  // CONCURRENCY=8 keeps benchmark from hogging the 20-conn PG pool while
+  // /v1/chat/completions traffic is still flowing. Each worker takes 2-3
+  // connections briefly per model (summary + answered + insert), so 8*3=24
+  // peak still leaves headroom over PG_POOL_MAX=20 because the spans don't
+  // perfectly overlap. Override with BENCHMARK_CONCURRENCY env if needed.
+  const CONCURRENCY = (() => {
+    const raw = Number(process.env.BENCHMARK_CONCURRENCY);
+    if (!Number.isFinite(raw) || raw <= 0) return 8;
+    return Math.min(Math.max(Math.floor(raw), 1), 32);
+  })();
   let idx = 0;
 
   async function benchmarkWorker() {

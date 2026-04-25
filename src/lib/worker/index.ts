@@ -7,7 +7,7 @@ import { verifyAllProviders } from "./provider-verify";
 import { syncProviderRegistry } from "./provider-registry-sync";
 import { appointTeachers } from "@/lib/teacher";
 import { acquireLeader, renewLeader, releaseLeader } from "./leader";
-import { startWarmup } from "./warmup";
+import { startWarmup, stopWarmup } from "./warmup";
 
 export { scanModels } from "./scanner";
 export { checkHealth } from "./health";
@@ -99,105 +99,106 @@ export async function runWorkerCycle(): Promise<void> {
   }
 
   isRunning = true;
-  await setState("status", "running");
-  await setState("last_run", new Date().toISOString());
+  // Background lock renewal — refresh TTL every ~2 min so steps that take
+  // longer than expected don't lose the lock to another replica.
+  const renewTimer = setInterval(() => {
+    void renewLeader().catch(() => {});
+  }, 2 * 60 * 1000);
+  if (typeof renewTimer.unref === "function") renewTimer.unref();
 
-  const next = new Date(Date.now() + 15 * 60 * 1000).toISOString();
-  await setState("next_run", next);
-
-  await logWorker("worker", "Worker cycle started");
-
-  // Clean old logs before scanning
-  await cleanOldLogs();
-
-  let scanResult = { found: 0, new: 0 };
-  let healthResult = { checked: 0, available: 0, cooldown: 0 };
-  let examResult: { examined: number; passed: number; failed: number; level: string } = { examined: 0, passed: 0, failed: 0, level: "middle" };
-
-  // Step 0: Provider auto-discovery — ค้นหา provider ใหม่จาก internet ก่อน scan models
   try {
-    await logWorker("worker", "Step 0: Discovering providers");
-    const disc = await discoverProviders();
-    if (disc.newFound > 0) {
-      await logWorker("worker", `🆕 พบ provider ใหม่ ${disc.newFound}: ${disc.newProviders.join(", ")}`, "success");
+    await setState("status", "running");
+    await setState("last_run", new Date().toISOString());
+
+    const next = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+    await setState("next_run", next);
+
+    await logWorker("worker", "Worker cycle started");
+
+    // Clean old logs before scanning
+    await cleanOldLogs();
+
+    let scanResult = { found: 0, new: 0 };
+    let healthResult = { checked: 0, available: 0, cooldown: 0 };
+    let examResult: { examined: number; passed: number; failed: number; level: string } = { examined: 0, passed: 0, failed: 0, level: "middle" };
+
+    // Step 0: Provider auto-discovery — ค้นหา provider ใหม่จาก internet ก่อน scan models
+    try {
+      await logWorker("worker", "Step 0: Discovering providers");
+      const disc = await discoverProviders();
+      if (disc.newFound > 0) {
+        await logWorker("worker", `🆕 พบ provider ใหม่ ${disc.newFound}: ${disc.newProviders.join(", ")}`, "success");
+      }
+    } catch (err) {
+      await logWorker("worker", `Step 0 (discovery) failed: ${err}`, "error");
     }
-  } catch (err) {
-    await logWorker("worker", `Step 0 (discovery) failed: ${err}`, "error");
-  }
 
-  await renewLeader();
-
-  // Step 0.5: Verify — ตรวจ homepage + models URL ของทุก provider (no hardcode — อ่านจาก DB)
-  try {
-    await logWorker("worker", "Step 0.5: Verifying provider homepages + models URLs");
-    await verifyAllProviders();
-  } catch (err) {
-    await logWorker("worker", `Step 0.5 (verify) failed: ${err}`, "error");
-  }
-
-  await renewLeader();
-
-  try {
-    // Step 1: Scan
-    await logWorker("worker", "Step 1: Scanning models");
-    scanResult = await scanModels();
-  } catch (err) {
-    await logWorker("worker", `Step 1 (scan) failed: ${err}`, "error");
-  }
-
-  // Extend leader lock before the potentially long health check
-  await renewLeader();
-
-  try {
-    // Step 2: Health check
-    await logWorker("worker", "Step 2: Health check");
-    healthResult = await checkHealth();
-  } catch (err) {
-    await logWorker("worker", `Step 2 (health) failed: ${err}`, "error");
-  }
-
-  await renewLeader();
-
-  try {
-    // Step 3: สอบคัดเลือก — model ต้องผ่านสอบถึงจะได้ทำงาน
-    await logWorker("worker", "Step 3: Exam");
-    examResult = await runExams();
-  } catch (err) {
-    await logWorker("worker", `Step 3 (exam) failed: ${err}`, "error");
-  }
-
-  // Step 4: Appoint teachers — principal, heads, proctors จาก performance จริง
-  try {
-    await logWorker("worker", "Step 4: Appointing teachers");
-    const appointed = await appointTeachers();
-    if (appointed.principal) {
-      await logWorker(
-        "worker",
-        `👑 Teacher hierarchy: principal=${appointed.principal} | heads=${appointed.heads} | proctors=${appointed.proctors}`,
-        "success"
-      );
-    } else {
-      await logWorker("worker", "ยังไม่มี model พอที่จะแต่งตั้งเป็นครู", "warn");
+    // Step 0.5: Verify — ตรวจ homepage + models URL ของทุก provider (no hardcode — อ่านจาก DB)
+    try {
+      await logWorker("worker", "Step 0.5: Verifying provider homepages + models URLs");
+      await verifyAllProviders();
+    } catch (err) {
+      await logWorker("worker", `Step 0.5 (verify) failed: ${err}`, "error");
     }
-  } catch (err) {
-    await logWorker("worker", `Step 4 (teachers) failed: ${err}`, "error");
+
+    try {
+      // Step 1: Scan
+      await logWorker("worker", "Step 1: Scanning models");
+      scanResult = await scanModels();
+    } catch (err) {
+      await logWorker("worker", `Step 1 (scan) failed: ${err}`, "error");
+    }
+
+    try {
+      // Step 2: Health check
+      await logWorker("worker", "Step 2: Health check");
+      healthResult = await checkHealth();
+    } catch (err) {
+      await logWorker("worker", `Step 2 (health) failed: ${err}`, "error");
+    }
+
+    try {
+      // Step 3: สอบคัดเลือก — model ต้องผ่านสอบถึงจะได้ทำงาน
+      await logWorker("worker", "Step 3: Exam");
+      examResult = await runExams();
+    } catch (err) {
+      await logWorker("worker", `Step 3 (exam) failed: ${err}`, "error");
+    }
+
+    // Step 4: Appoint teachers — principal, heads, proctors จาก performance จริง
+    try {
+      await logWorker("worker", "Step 4: Appointing teachers");
+      const appointed = await appointTeachers();
+      if (appointed.principal) {
+        await logWorker(
+          "worker",
+          `👑 Teacher hierarchy: principal=${appointed.principal} | heads=${appointed.heads} | proctors=${appointed.proctors}`,
+          "success"
+        );
+      } else {
+        await logWorker("worker", "ยังไม่มี model พอที่จะแต่งตั้งเป็นครู", "warn");
+      }
+    } catch (err) {
+      await logWorker("worker", `Step 4 (teachers) failed: ${err}`, "error");
+    }
+
+    await setState(
+      "last_stats",
+      JSON.stringify({ scan: scanResult, health: healthResult, exam: examResult })
+    );
+
+    await logWorker(
+      "worker",
+      `Cycle complete — scan:${scanResult.found}/${scanResult.new} health:${healthResult.available}/${healthResult.checked} exam:${examResult.passed}✅/${examResult.failed}❌`
+    );
+  } finally {
+    clearInterval(renewTimer);
+    // Always reset state — even if a step threw — so the next cycle can run.
+    await setState("status", "idle").catch(() => {});
+    // Release leader lock at end of cycle so it naturally rotates between replicas
+    await releaseLeader().catch(() => {});
+    isRunning = false;
   }
-
-  await setState("status", "idle");
-  await setState(
-    "last_stats",
-    JSON.stringify({ scan: scanResult, health: healthResult, exam: examResult })
-  );
-
-  await logWorker(
-    "worker",
-    `Cycle complete — scan:${scanResult.found}/${scanResult.new} health:${healthResult.available}/${healthResult.checked} exam:${examResult.passed}✅/${examResult.failed}❌`
-  );
-
-  // Release leader lock at end of cycle so it naturally rotates between replicas
-  await releaseLeader();
-
-  isRunning = false;
 }
 
 export function startWorker(): void {
@@ -208,7 +209,6 @@ export function startWorker(): void {
   // Run once immediately (async, don't block)
   runWorkerCycle().catch((err) => {
     logWorker("worker", `Initial cycle error: ${err}`, "error");
-    isRunning = false;
     setState("status", "error");
   });
 
@@ -216,10 +216,10 @@ export function startWorker(): void {
   workerTimer = setInterval(() => {
     runWorkerCycle().catch((err) => {
       logWorker("worker", `Scheduled cycle error: ${err}`, "error");
-      isRunning = false;
       setState("status", "error");
     });
   }, 15 * 60 * 1000);
+  if (typeof workerTimer.unref === "function") workerTimer.unref();
 
   // Dedicated verify loop every 3 minutes — lightweight probe so the dashboard
   // always shows fresh homepage / endpoint reachability without waiting for the
@@ -227,9 +227,9 @@ export function startWorker(): void {
   verifyTimer = setInterval(() => {
     runStandaloneVerify().catch((err) => {
       logWorker("verify", `Standalone verify error: ${err}`, "error");
-      verifyRunning = false;
     });
   }, 3 * 60 * 1000);
+  if (typeof verifyTimer.unref === "function") verifyTimer.unref();
 
   // Registry sync — pulls cheahjs/free-llm-api-resources + LiteLLM registry
   // every 6 hours. Only patches rows where the probe marked the homepage dead,
@@ -238,21 +238,38 @@ export function startWorker(): void {
   registryTimer = setInterval(() => {
     runStandaloneRegistrySync().catch((err) => {
       logWorker("registry-sync", `Sync error: ${err}`, "error");
-      registryRunning = false;
     });
   }, 6 * 60 * 60 * 1000);
+  if (typeof registryTimer.unref === "function") registryTimer.unref();
 
   // Exam loop every 5 minutes — clears the exam backlog faster than the main
   // 15-minute cycle alone. Leader-locked + skipped if main cycle running.
   examTimer = setInterval(() => {
     runStandaloneExam().catch((err) => {
       logWorker("exam", `Standalone exam error: ${err}`, "error");
-      examRunning = false;
     });
   }, 5 * 60 * 1000);
+  if (typeof examTimer.unref === "function") examTimer.unref();
 
   // Warmup pinger — keeps upstream sockets hot between cycles
   startWarmup();
+}
+
+/**
+ * Stop all scheduled timers + release the Redis leader lock + flush the
+ * worker_state status row. Called from the SIGTERM handler so a graceful
+ * restart doesn't leave a 14-minute stale lock pointing at the dead replica.
+ */
+export async function stopWorker(): Promise<void> {
+  if (workerTimer) { clearInterval(workerTimer); workerTimer = null; }
+  if (verifyTimer) { clearInterval(verifyTimer); verifyTimer = null; }
+  if (registryTimer) { clearInterval(registryTimer); registryTimer = null; }
+  if (examTimer) { clearInterval(examTimer); examTimer = null; }
+  try { stopWarmup(); } catch { /* ignore */ }
+  // Best-effort flag flip — if isRunning is true we still release the lock
+  // so the next replica can pick up immediately.
+  await setState("status", "idle").catch(() => {});
+  await releaseLeader().catch(() => {});
 }
 
 async function runStandaloneRegistrySync(): Promise<void> {

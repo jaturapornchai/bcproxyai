@@ -3,13 +3,14 @@ import { getRedis } from "@/lib/redis";
 import { auth } from "../../../../../auth";
 import { isOwnerEmail, hasOwners } from "@/lib/admin-emails";
 import { ADMIN_COOKIE_NAME, adminPasswordEnabled, verifyAdminCookie } from "@/lib/admin-cookie";
+import { timingSafeStringEqual } from "@/lib/secret-compare";
 
 export const dynamic = "force-dynamic";
 
 async function whoami(req: NextRequest): Promise<boolean> {
   const bearer = (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
   const master = (process.env.GATEWAY_API_KEY ?? "").trim();
-  if (bearer && master && bearer === master) return true;
+  if (bearer && master && timingSafeStringEqual(bearer, master)) return true;
   if (verifyAdminCookie(req.cookies.get(ADMIN_COOKIE_NAME)?.value)) return true;
   try {
     const session = (await auth()) as { user?: { email?: string | null } } | null;

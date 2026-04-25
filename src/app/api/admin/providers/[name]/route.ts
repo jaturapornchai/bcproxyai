@@ -3,6 +3,7 @@ import { getSqlClient } from "@/lib/db/schema";
 import { auth } from "../../../../../../auth";
 import { isOwnerEmail, hasOwners } from "@/lib/admin-emails";
 import { ADMIN_COOKIE_NAME, adminPasswordEnabled, verifyAdminCookie } from "@/lib/admin-cookie";
+import { timingSafeStringEqual } from "@/lib/secret-compare";
 import { forceRefresh } from "@/lib/provider-resolver";
 
 export const dynamic = "force-dynamic";
@@ -10,7 +11,7 @@ export const dynamic = "force-dynamic";
 async function whoami(req: NextRequest): Promise<{ ok: true; label: string } | { ok: false }> {
   const bearer = (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
   const master = (process.env.GATEWAY_API_KEY ?? "").trim();
-  if (bearer && master && bearer === master) return { ok: true, label: "master" };
+  if (bearer && master && timingSafeStringEqual(bearer, master)) return { ok: true, label: "master" };
   if (verifyAdminCookie(req.cookies.get(ADMIN_COOKIE_NAME)?.value)) return { ok: true, label: "password-cookie" };
   try {
     const session = (await auth()) as { user?: { email?: string | null } } | null;

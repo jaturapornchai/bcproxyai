@@ -12,6 +12,25 @@ import { getRedis } from "@/lib/redis";
 const LEADER_KEY = "worker:leader";
 const LEADER_TTL_SEC = 14 * 60; // 14 minutes — shorter than the 15min cycle
 
+// Lua scripts run atomically inside Redis — prevents the classic
+// GET → compare → DEL race window where another replica could acquire
+// the lock between our read and our write.
+const RENEW_SCRIPT = `
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  return redis.call('EXPIRE', KEYS[1], ARGV[2])
+else
+  return 0
+end
+`;
+
+const RELEASE_SCRIPT = `
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  return redis.call('DEL', KEYS[1])
+else
+  return 0
+end
+`;
+
 function workerId(): string {
   // HOSTNAME is set by Docker to the container ID
   return process.env.HOSTNAME || process.env.COMPUTERNAME || "local";
@@ -47,29 +66,30 @@ export async function acquireLeader(): Promise<boolean> {
 /**
  * Extend the leader lock during a long-running cycle so another replica
  * doesn't jump in if the current one is mid-work when the TTL expires.
+ * Fenced via Lua — only renews if we're still the holder.
+ * Returns true if renewed, false if we lost the lock.
  */
-export async function renewLeader(): Promise<void> {
+export async function renewLeader(): Promise<boolean> {
   try {
     const redis = getRedis();
-    await redis.expire(LEADER_KEY, LEADER_TTL_SEC);
+    const me = workerId();
+    const result = await redis.eval(RENEW_SCRIPT, 1, LEADER_KEY, me, String(LEADER_TTL_SEC));
+    return result === 1;
   } catch {
-    // silent
+    return false;
   }
 }
 
 /**
- * Release the leader lock early (e.g. on clean shutdown). The lock will
- * expire on its own if the process crashes — this is just courtesy.
+ * Release the leader lock early (e.g. on clean shutdown). Lua-fenced:
+ * only deletes if we still hold it (avoids stealing a freshly-acquired
+ * lock from another replica when our TTL expired mid-cycle).
  */
 export async function releaseLeader(): Promise<void> {
   try {
     const redis = getRedis();
     const me = workerId();
-    // Only delete if we still hold it (avoid stealing from another leader)
-    const holder = await redis.get(LEADER_KEY);
-    if (holder === me) {
-      await redis.del(LEADER_KEY);
-    }
+    await redis.eval(RELEASE_SCRIPT, 1, LEADER_KEY, me);
   } catch {
     // silent
   }

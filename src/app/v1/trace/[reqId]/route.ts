@@ -39,7 +39,7 @@ export async function GET(
     const rows = await sql<Array<Record<string, unknown>>>`
       SELECT id, request_model, resolved_model, provider, status, latency_ms,
              input_tokens, output_tokens, error, user_message, assistant_message,
-             client_ip, created_at
+             client_ip, created_at, routing_explain
       FROM gateway_logs
       WHERE request_id = ${reqId}
       ORDER BY id DESC

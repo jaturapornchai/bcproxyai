@@ -287,6 +287,12 @@ export async function runMigrations(): Promise<void> {
     // Add request_id + client_ip for /v1/trace/:reqId + /api/my-stats endpoints
     await sql`ALTER TABLE gateway_logs ADD COLUMN IF NOT EXISTS request_id TEXT`;
     await sql`ALTER TABLE gateway_logs ADD COLUMN IF NOT EXISTS client_ip TEXT`;
+    // Smart Routing Explain: per-request decision trail
+    //   { selected: { provider, model, reason },
+    //     candidates: [{ provider, model, accepted, reason }],
+    //     mode, category, fallbackUsed }
+    // No prompt content stored — only decision metadata.
+    await sql`ALTER TABLE gateway_logs ADD COLUMN IF NOT EXISTS routing_explain JSONB`;
 
     // Prompt library — reusable system prompts
     await sql`
@@ -513,6 +519,11 @@ export async function runMigrations(): Promise<void> {
     await sql`CREATE INDEX IF NOT EXISTS idx_health_cooldown_active ON health_logs(model_id, cooldown_until DESC) WHERE cooldown_until IS NOT NULL`.catch(
       (e) => console.warn("[migrate] idx_health_cooldown_active skipped:", (e as Error).message),
     );
+    // Speeds up the per-model "latest entry" lookup pattern used by
+    // latest_model_health view + benchmark eligibility query.
+    await sql`CREATE INDEX IF NOT EXISTS idx_health_model_checked_desc ON health_logs(model_id, checked_at DESC)`.catch(
+      (e) => console.warn("[migrate] idx_health_model_checked_desc skipped:", (e as Error).message),
+    );
     await sql`CREATE INDEX IF NOT EXISTS idx_gateway_recent ON gateway_logs(created_at DESC, status)`.catch(
       (e) => console.warn("[migrate] idx_gateway_recent skipped:", (e as Error).message),
     );
@@ -538,7 +549,16 @@ export async function runMigrations(): Promise<void> {
           last_used_at TIMESTAMPTZ DEFAULT now()
         )
       `;
-      await sql`CREATE INDEX IF NOT EXISTS idx_semantic_cache_embedding ON semantic_cache USING ivfflat (embedding vector_cosine_ops)`;
+      // Prefer HNSW (better recall + works without ANALYZE). Falls back to
+      // IVFFlat for older pgvector versions that don't have HNSW. Both indexes
+      // can coexist briefly during pgvector upgrades — the planner picks the
+      // cheaper one.
+      try {
+        await sql`CREATE INDEX IF NOT EXISTS idx_semantic_cache_hnsw ON semantic_cache USING hnsw (embedding vector_cosine_ops)`;
+      } catch (e) {
+        console.warn("[migrate] hnsw index unavailable — falling back to ivfflat:", (e as Error).message);
+        await sql`CREATE INDEX IF NOT EXISTS idx_semantic_cache_embedding ON semantic_cache USING ivfflat (embedding vector_cosine_ops)`;
+      }
       // Tenant namespace — '_anon' for unauth/master, prefix of sml_live_* otherwise.
       // Forward-compat ALTER for tables that pre-date this column.
       await sql`ALTER TABLE semantic_cache ADD COLUMN IF NOT EXISTS tenant_ns TEXT NOT NULL DEFAULT '_anon'`;

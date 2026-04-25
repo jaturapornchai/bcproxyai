@@ -38,11 +38,9 @@ export async function GET() {
 
     // Cooldown models
     const cooldownRows = await sql<{ count: number }[]>`
-      SELECT COUNT(DISTINCT h.model_id)::int as count
-      FROM health_logs h
-      INNER JOIN (SELECT model_id, MAX(id) as max_id FROM health_logs GROUP BY model_id) l
-        ON h.model_id = l.model_id AND h.id = l.max_id
-      WHERE h.cooldown_until > now()
+      SELECT COUNT(*)::int as count
+      FROM latest_model_health
+      WHERE cooldown_until > now()
     `;
     const cooldownCount = Number(cooldownRows[0]?.count ?? 0);
 

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { getRedis } from "./redis";
 
 // Response cache — TTL 1h. Keyed by (apiKey, body-hash) so tenants don't see
@@ -16,14 +17,10 @@ function tenantNamespace(apiKey: string | null | undefined): string {
   // Use the prefix for sml_live_ keys (avoid hashing the full secret) and a
   // short hash for everything else.
   if (apiKey.startsWith("sml_live_")) return apiKey.slice(0, 18);
-  // crypto sync hash to keep key building cheap
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { createHash } = require("crypto") as typeof import("crypto");
   return createHash("sha256").update(apiKey).digest("hex").slice(0, 12);
 }
 
-async function cacheKey(body: Record<string, unknown>, apiKey: string | null): Promise<string> {
-  const { createHash } = await import("crypto");
+function cacheKey(body: Record<string, unknown>, apiKey: string | null): string {
   const messages = body.messages;
   const model = body.model ?? "auto";
   const temperature = body.temperature ?? 0;
@@ -50,7 +47,7 @@ export async function getCachedResponse(
   if (shouldSkip(body, optOut)) return null;
   try {
     const redis = getRedis();
-    const raw = await redis.get(await cacheKey(body, apiKey));
+    const raw = await redis.get(cacheKey(body, apiKey));
     if (!raw) return null;
     return JSON.parse(raw) as { content: string; provider: string; model: string };
   } catch {
@@ -67,7 +64,7 @@ export async function setCachedResponse(
   if (shouldSkip(body, optOut)) return;
   try {
     const redis = getRedis();
-    await redis.set(await cacheKey(body, apiKey), JSON.stringify(response), "EX", CACHE_TTL_SEC);
+    await redis.set(cacheKey(body, apiKey), JSON.stringify(response), "EX", CACHE_TTL_SEC);
   } catch {
     // silent — cache is optional
   }

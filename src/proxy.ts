@@ -36,6 +36,9 @@ const SENSITIVE_GET_PREFIXES = [
   "/api/provider-limits",  // upstream rate-limit headroom
   "/api/live-score",       // per-model live success rate
   "/api/learning",         // routing-learning state
+  "/api/control-room",     // ops snapshot — provider/model breakdown + circuits
+  "/api/routing-explain",  // routing decisions trail
+  "/api/autopilot",        // ops recommendations from gateway state
 ];
 
 function isSensitiveGet(pathname: string, method: string): boolean {

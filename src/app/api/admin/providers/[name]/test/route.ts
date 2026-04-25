@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "../../../../../../../auth";
 import { isOwnerEmail, hasOwners } from "@/lib/admin-emails";
 import { ADMIN_COOKIE_NAME, adminPasswordEnabled, verifyAdminCookie } from "@/lib/admin-cookie";
+import { timingSafeStringEqual } from "@/lib/secret-compare";
+import { checkSsrfSafe } from "@/lib/ssrf-guard";
 import { getNextApiKey } from "@/lib/api-keys";
 import { resolveProviderUrl } from "@/lib/provider-resolver";
 
@@ -10,7 +12,7 @@ export const dynamic = "force-dynamic";
 async function whoami(req: NextRequest): Promise<{ ok: true; label: string } | { ok: false }> {
   const bearer = (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
   const master = (process.env.GATEWAY_API_KEY ?? "").trim();
-  if (bearer && master && bearer === master) return { ok: true, label: "master" };
+  if (bearer && master && timingSafeStringEqual(bearer, master)) return { ok: true, label: "master" };
   if (verifyAdminCookie(req.cookies.get(ADMIN_COOKIE_NAME)?.value)) return { ok: true, label: "password-cookie" };
   try {
     const session = (await auth()) as { user?: { email?: string | null } } | null;
@@ -39,6 +41,18 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ name: stri
 
     // Derive /v1/models URL from chat URL (works for OpenAI-compatible)
     const modelsUrl = chatUrl.replace(/\/chat\/completions$/, "/models");
+
+    // SSRF guard — refuse if the URL resolves to private/loopback/link-local
+    // space or uses a non-web port. Without this an admin (or compromised
+    // session) could pivot through this endpoint to hit internal Redis,
+    // Postgres, or cloud metadata at 169.254.169.254.
+    const ssrf = await checkSsrfSafe(modelsUrl);
+    if (!ssrf.ok) {
+      return NextResponse.json(
+        { ok: false, error: `URL blocked by SSRF guard: ${ssrf.reason}`, chatUrl, modelsUrl },
+        { status: 400 },
+      );
+    }
     const apiKey = getNextApiKey(name);
 
     const headers: Record<string, string> = { "Accept": "application/json" };

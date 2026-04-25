@@ -8,6 +8,10 @@ export function getRedis(): Redis {
     _redis = new Redis(url, {
       maxRetriesPerRequest: 1,
       connectTimeout: 3000,
+      // Hard ceiling on a single command. Without this, an unhealthy Redis
+      // (network blip, paused container, OOM) can wedge any hot-path call
+      // for tens of seconds because ioredis will keep waiting.
+      commandTimeout: 1500,
       lazyConnect: true,
       enableOfflineQueue: false,
     });

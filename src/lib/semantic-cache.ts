@@ -84,6 +84,11 @@ export async function getCachedBySimilarity(
     const sql = getSqlClient();
     const lit = toVectorLiteral(vec);
     const ns = opts.tenantNs ?? tenantNamespace(opts.apiKey);
+    // Cosine distance ranges 0..2; similarity = 1 - distance, so the threshold
+    // 0.92 maps to max distance 0.08. Filtering here lets pgvector use the
+    // HNSW/IVFFlat index for ANN ordering AND prune unrelated vectors instead
+    // of scanning the whole tenant partition just to discard them client-side.
+    const maxDistance = 1 - threshold;
     const rows = await sql<
       {
         response: unknown;
@@ -97,6 +102,7 @@ export async function getCachedBySimilarity(
       FROM semantic_cache
       WHERE embedding IS NOT NULL
         AND tenant_ns = ${ns}
+        AND (embedding <=> ${lit}::vector) < ${maxDistance}
       ORDER BY embedding <=> ${lit}::vector
       LIMIT 1
     `;

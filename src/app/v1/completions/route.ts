@@ -34,13 +34,7 @@ export async function POST(req: NextRequest) {
     const models = await sql<{ id: string; provider: string; model_id: string }[]>`
       SELECT m.id, m.provider, m.model_id
       FROM models m
-      LEFT JOIN (
-        SELECT hl.model_id, hl.status, hl.cooldown_until
-        FROM health_logs hl
-        INNER JOIN (
-          SELECT model_id, MAX(id) as max_id FROM health_logs GROUP BY model_id
-        ) latest ON hl.model_id = latest.model_id AND hl.id = latest.max_id
-      ) h ON m.id = h.model_id
+      LEFT JOIN latest_model_health h ON m.id = h.model_id
       WHERE (h.status IS NULL OR h.status = 'available')
         AND (h.cooldown_until IS NULL OR h.cooldown_until < ${now}::timestamptz)
         AND m.provider = ANY(${providersWithCompletions})

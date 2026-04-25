@@ -127,18 +127,14 @@ async function runWarmupTick(): Promise<void> {
 
   try {
     const sql = getSqlClient();
-    // Models that passed their most-recent exam AND have no active cooldown
-    // in health_logs. Order by recent latency (NULLs last) — fastest models
-    // first, so the cap below preserves the ones that matter for warm sockets.
+    // Models that passed their most-recent exam AND have no active cooldown.
+    // Uses the latest_model_health view so latest-row logic stays in one place.
+    // Ordered by recent latency (NULLs last) — fastest first, so the cap
+    // preserves the ones that matter for warm sockets.
     const candidates = await sql<WarmupCandidate[]>`
-      WITH latest_health AS (
-        SELECT DISTINCT ON (model_id) model_id, latency_ms, cooldown_until
-        FROM health_logs
-        ORDER BY model_id, id DESC
-      )
       SELECT m.id, m.provider, m.model_id
       FROM models m
-      LEFT JOIN latest_health h ON h.model_id = m.id
+      LEFT JOIN latest_model_health h ON h.model_id = m.id
       WHERE EXISTS (
         SELECT 1 FROM exam_attempts e
         WHERE e.model_id = m.id

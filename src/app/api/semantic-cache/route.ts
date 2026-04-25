@@ -3,9 +3,22 @@ import { getSqlClient } from "@/lib/db/schema";
 
 export const dynamic = "force-dynamic";
 
-interface CacheEntry {
+interface CacheEntryRaw {
   id: number;
   query: string;
+  query_hash: string;
+  provider: string | null;
+  model: string | null;
+  hitCount: number;
+  createdAt: string;
+  lastUsedAt: string;
+}
+
+interface CacheEntry {
+  id: number;
+  queryHash: string;
+  queryPreview: string;
+  queryLength: number;
   provider: string | null;
   model: string | null;
   hitCount: number;
@@ -51,10 +64,11 @@ export async function GET() {
       FROM semantic_cache
     `;
 
-    const topRows = await sql<CacheEntry[]>`
+    const topRowsRaw = await sql<CacheEntryRaw[]>`
       SELECT
         id,
         query,
+        query_hash,
         provider,
         model,
         hit_count AS "hitCount",
@@ -65,6 +79,22 @@ export async function GET() {
       LIMIT 20
     `;
 
+    // Don't ship full user prompts back to the dashboard — keep a short preview
+    // and the length so admins can still see what's cached without the text
+    // leaking into screenshots / browser history / log scrapers.
+    const PREVIEW_LEN = 40;
+    const topRows: CacheEntry[] = topRowsRaw.map((r) => ({
+      id: r.id,
+      queryHash: r.query_hash.slice(0, 12),
+      queryPreview: r.query.length > PREVIEW_LEN ? r.query.slice(0, PREVIEW_LEN) + "…" : r.query,
+      queryLength: r.query.length,
+      provider: r.provider,
+      model: r.model,
+      hitCount: r.hitCount,
+      createdAt: r.createdAt,
+      lastUsedAt: r.lastUsedAt,
+    }));
+
     const s = statsRows[0];
     return NextResponse.json<CacheStats>({
       total: s?.total ?? 0,
@@ -74,6 +104,7 @@ export async function GET() {
       enabled: true,
     });
   } catch (err) {
+    console.warn("[semantic-cache] error:", err);
     return NextResponse.json<CacheStats>({
       total: 0,
       totalHits: 0,

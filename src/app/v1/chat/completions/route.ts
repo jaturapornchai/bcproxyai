@@ -495,13 +495,7 @@ async function getAvailableModels(caps: RequestCapabilities, benchmarkCategory?:
       GROUP BY model_id
       HAVING COUNT(*) >= 3
     ) rs ON m.id = rs.model_id
-    LEFT JOIN (
-      SELECT hl.model_id, hl.status, hl.cooldown_until
-      FROM health_logs hl
-      INNER JOIN (
-        SELECT model_id, MAX(id) as max_id FROM health_logs GROUP BY model_id
-      ) latest ON hl.model_id = latest.model_id AND hl.id = latest.max_id
-    ) h ON m.id = h.model_id
+    LEFT JOIN latest_model_health h ON m.id = h.model_id
     WHERE (h.cooldown_until IS NULL OR h.cooldown_until < now())
       AND COALESCE(m.supports_embedding, 0) != 1
       AND COALESCE(m.supports_audio_output, 0) != 1
@@ -767,13 +761,7 @@ async function selectModelsByMode(
         GROUP BY model_id
         HAVING COUNT(*) >= 3
       ) rs ON m.id = rs.model_id
-      LEFT JOIN (
-        SELECT hl.model_id, hl.status, hl.cooldown_until
-        FROM health_logs hl
-        INNER JOIN (
-          SELECT model_id, MAX(id) as max_id FROM health_logs GROUP BY model_id
-        ) latest ON hl.model_id = latest.model_id AND hl.id = latest.max_id
-      ) h ON m.id = h.model_id
+      LEFT JOIN latest_model_health h ON m.id = h.model_id
       WHERE (h.cooldown_until IS NULL OR h.cooldown_until < now())
         AND COALESCE(m.supports_embedding, 0) != 1
         AND COALESCE(m.supports_audio_output, 0) != 1
@@ -1190,7 +1178,7 @@ export async function POST(req: NextRequest) {
       const debugKeys = Object.keys(body);
       const toolCount = Array.isArray(body.tools) ? (body.tools as unknown[]).length : 0;
       const msgCount = Array.isArray(body.messages) ? (body.messages as unknown[]).length : 0;
-      console.log(`[DEBUG] keys=[${debugKeys}] msgs=${msgCount} tools=${toolCount} stream=${body.stream}`);
+      log.debug(`[DEBUG] keys=[${debugKeys}] msgs=${msgCount} tools=${toolCount} stream=${body.stream}`);
     }
 
     if (!body.messages || !Array.isArray(body.messages) || body.messages.length === 0) {
@@ -1518,7 +1506,7 @@ export async function POST(req: NextRequest) {
     const activeCandidates = finalCandidates.filter((_, i) => !cooldownChecks[i]);
     if (activeCandidates.length > 0) {
       finalCandidates = activeCandidates;
-      if (process.env.LOG_LEVEL === "debug") console.log(`[DEBUG] after provider-cooldown filter: ${finalCandidates.length} candidates`);
+      log.debug(`[DEBUG] after provider-cooldown filter: ${finalCandidates.length} candidates`);
     }
 
     // P1: Pre-flight size check — skip models whose context_length is too small for this request
@@ -1540,7 +1528,7 @@ export async function POST(req: NextRequest) {
     // Fall back to full list if everything was filtered (better to try than immediately 503)
     if (sizeFiltered.length > 0) {
       finalCandidates = sizeFiltered;
-      if (process.env.LOG_LEVEL === "debug") console.log(`[DEBUG] after size filter: ${finalCandidates.length} candidates (required ctx ${requiredContext})`);
+      log.debug(`[DEBUG] after size filter: ${finalCandidates.length} candidates (required ctx ${requiredContext})`);
     } else {
       log.warn(`[SIZE-SKIP] All candidates too small for ${requiredContext} tokens — using full list as fallback`);
     }
@@ -1552,7 +1540,7 @@ export async function POST(req: NextRequest) {
       if (ctxFiltered.length > 0) {
         finalCandidates = ctxFiltered;
       }
-      console.log(`[CTX-FILTER:${_reqId}] kept=${finalCandidates.length} for ${estTokens}tok`);
+      log.debug(`[CTX-FILTER:${_reqId}] kept=${finalCandidates.length} for ${estTokens}tok`);
     }
 
     // Minimum context filter — model ที่ ctx < 16K ไม่เหมาะกับ conversation ที่มี history
@@ -1569,7 +1557,7 @@ export async function POST(req: NextRequest) {
     const latFiltered = finalCandidates.filter(c => (c.avg_latency ?? 0) <= MAX_EXAM_LATENCY || (c.avg_latency ?? 0) === 0);
     if (latFiltered.length > 0) {
       const dropped = finalCandidates.length - latFiltered.length;
-      if (dropped > 0) console.log(`[LAT-CAP:${_reqId}] dropped ${dropped} models with exam latency>${MAX_EXAM_LATENCY}ms`);
+      if (dropped > 0) log.debug(`[LAT-CAP:${_reqId}] dropped ${dropped} models with exam latency>${MAX_EXAM_LATENCY}ms`);
       finalCandidates = latFiltered;
     }
 
@@ -1602,14 +1590,14 @@ export async function POST(req: NextRequest) {
     if (exclude.length > 0) {
       const before = finalCandidates.length;
       finalCandidates = finalCandidates.filter(c => !exclude.includes(c.provider.toLowerCase()));
-      console.log(`[DEV-EXCLUDE:${_reqId}] dropped ${before - finalCandidates.length} models from [${exclude.join(",")}]`);
+      log.debug(`[DEV-EXCLUDE:${_reqId}] dropped ${before - finalCandidates.length} models from [${exclude.join(",")}]`);
     }
 
     if (maxLatencyMs > 0) {
       const before = finalCandidates.length;
       finalCandidates = finalCandidates.filter(c => (c.avg_latency ?? 0) === 0 || (c.avg_latency ?? 0) <= maxLatencyMs);
       if (before - finalCandidates.length > 0) {
-        console.log(`[DEV-LAT:${_reqId}] dropped ${before - finalCandidates.length} models with avg_latency>${maxLatencyMs}ms`);
+        log.debug(`[DEV-LAT:${_reqId}] dropped ${before - finalCandidates.length} models with avg_latency>${maxLatencyMs}ms`);
       }
     }
 
@@ -1617,7 +1605,7 @@ export async function POST(req: NextRequest) {
       const preferred = finalCandidates.filter(c => prefer.includes(c.provider.toLowerCase()));
       const rest = finalCandidates.filter(c => !prefer.includes(c.provider.toLowerCase()));
       finalCandidates = [...preferred, ...rest];
-      console.log(`[DEV-PREFER:${_reqId}] ranked ${preferred.length} preferred models first: [${prefer.join(",")}]`);
+      log.debug(`[DEV-PREFER:${_reqId}] ranked ${preferred.length} preferred models first: [${prefer.join(",")}]`);
     }
 
     if (strategy === "fastest") {
@@ -1627,7 +1615,7 @@ export async function POST(req: NextRequest) {
         const bl = b.avg_latency ?? Number.MAX_SAFE_INTEGER;
         return al - bl;
       });
-      console.log(`[DEV-STRATEGY:${_reqId}] fastest — top: ${finalCandidates.slice(0,3).map(c => `${c.provider}/${c.model_id}(${c.avg_latency ?? "?"}ms)`).join(", ")}`);
+      log.debug(`[DEV-STRATEGY:${_reqId}] fastest — top: ${finalCandidates.slice(0,3).map(c => `${c.provider}/${c.model_id}(${c.avg_latency ?? "?"}ms)`).join(", ")}`);
     } else if (strategy === "strongest") {
       // prefer larger tier + bigger context
       const tierRank: Record<string, number> = { xlarge: 4, large: 3, medium: 2, small: 1 };
@@ -1637,7 +1625,7 @@ export async function POST(req: NextRequest) {
         if (bt !== at) return bt - at;
         return (b.context_length ?? 0) - (a.context_length ?? 0);
       });
-      console.log(`[DEV-STRATEGY:${_reqId}] strongest — top: ${finalCandidates.slice(0,3).map(c => `${c.provider}/${c.model_id}(${c.tier}/${c.context_length})`).join(", ")}`);
+      log.debug(`[DEV-STRATEGY:${_reqId}] strongest — top: ${finalCandidates.slice(0,3).map(c => `${c.provider}/${c.model_id}(${c.tier}/${c.context_length})`).join(", ")}`);
     }
 
     // ─── Provider-first selection ─────────────────────────────────────────
@@ -1718,11 +1706,11 @@ export async function POST(req: NextRequest) {
         const [pinned] = spreadCandidates.splice(stickyIdx, 1);
         spreadCandidates.unshift(pinned);
         bumpPerf("sticky:hit");
-        if (process.env.LOG_LEVEL === "debug") console.log(`[STICKY:${_reqId}] pinned ${stickyHit.provider}/${stickyHit.modelId} (from idx ${stickyIdx})`);
+        log.debug(`[STICKY:${_reqId}] pinned ${stickyHit.provider}/${stickyHit.modelId} (from idx ${stickyIdx})`);
       }
     }
 
-    if (process.env.LOG_LEVEL === "debug") console.log(`[DEBUG] spread=${spreadCandidates.length} top5=[${spreadCandidates.slice(0,5).map(c=>c.provider+'/'+c.model_id).join(', ')}]`);
+    log.debug(`[DEBUG] spread=${spreadCandidates.length} top5=[${spreadCandidates.slice(0,5).map(c=>c.provider+'/'+c.model_id).join(', ')}]`);
 
     // ถ้าไม่มี candidate เหลือเลยหลังผ่าน filter — ตอบ 503 พร้อม log ที่อ่านออก
     if (spreadCandidates.length === 0) {
@@ -1819,7 +1807,7 @@ export async function POST(req: NextRequest) {
             if (fallback) {
               content = fallback;
               firstMsg.content = fallback;
-              console.log(`[HEDGE-REASONING-FALLBACK] ${winner.provider}/${winner.model_id} — moved ${fallback.length} chars`);
+              log.info(`[HEDGE-REASONING-FALLBACK] ${winner.provider}/${winner.model_id} — moved ${fallback.length} chars`);
             }
           }
           const hasToolCalls = Array.isArray(firstMsg?.tool_calls) && (firstMsg!.tool_calls!.length > 0);
@@ -1849,7 +1837,7 @@ export async function POST(req: NextRequest) {
             if (promptCategory === "thai" && content) {
               recordThaiQualityPenalty(winner.id, winner.provider, extractUserMessage(body) ?? "", content)
                 .then((demoted) => {
-                  if (demoted) console.log(`[THAI-DEMOTE] ${winner.provider}/${winner.model_id} failed post-gen Thai check`);
+                  if (demoted) log.warn(`[THAI-DEMOTE] ${winner.provider}/${winner.model_id} failed post-gen Thai check`);
                 })
                 .catch(() => {});
             }
@@ -1857,7 +1845,7 @@ export async function POST(req: NextRequest) {
             if (latency > slowThr) {
               await logCooldown(winner.id, `slow hedge winner: ${latency}ms > ${slowThr}ms threshold`, 0, 2);
               recordOutcome(winner.provider, winner.model_id, false, latency);
-              console.log(`[SLOW-COOLDOWN] ${winner.provider}/${winner.model_id} ${latency}ms > ${slowThr}ms → 2min cooldown`);
+              log.warn(`[SLOW-COOLDOWN] ${winner.provider}/${winner.model_id} ${latency}ms > ${slowThr}ms → 2min cooldown`);
             }
             await trackTokenUsage(winner.provider, winner.model_id, usage?.prompt_tokens ?? 0, usage?.completion_tokens ?? 0);
             // P4: record token consumption for TPM tracking
@@ -1941,7 +1929,7 @@ export async function POST(req: NextRequest) {
       ]);
 
       if (cooledDown) { skippedCandidates.push(candidate); skipReasons.push(`${provider}/${actualModelId}:provider-cooldown`); continue; }
-      if (circuitOpen) { skippedCandidates.push(candidate); skipReasons.push(`${provider}/${actualModelId}:circuit-open`); console.log(`[CIRCUIT-SKIP] ${provider}/${actualModelId} circuit open`); continue; }
+      if (circuitOpen) { skippedCandidates.push(candidate); skipReasons.push(`${provider}/${actualModelId}:circuit-open`); log.debug(`[CIRCUIT-SKIP] ${provider}/${actualModelId} circuit open`); continue; }
       if (wantOllamaCheck && hasCloudAlt && !ollamaLoaded) {
         skippedCandidates.push(candidate); skipReasons.push(`${provider}/${actualModelId}:cold-ollama`);
         log.debug(`[OLLAMA-SKIP] ${actualModelId} not loaded in memory — skipping (cloud alternatives available)`);
@@ -1954,19 +1942,19 @@ export async function POST(req: NextRequest) {
       }
       if (wantUnhealthyCheck && unhealthyCheck.unhealthy) {
         skippedCandidates.push(candidate); skipReasons.push(`${provider}/${actualModelId}:unhealthy-${learningCategory}`);
-        console.log(`[UNHEALTHY-SKIP:${_reqId}] ${provider}/${actualModelId} ${learningCategory} — ${unhealthyCheck.reason}`);
+        log.debug(`[UNHEALTHY-SKIP:${_reqId}] ${provider}/${actualModelId} ${learningCategory} — ${unhealthyCheck.reason}`);
         continue;
       }
       if (!tpmHeadroom) {
         skippedCandidates.push(candidate); skipReasons.push(`${provider}/${actualModelId}:tpm-exhausted`);
-        console.log(`[TPM-EXHAUST-SKIP:${_reqId}] ${provider}/${actualModelId} — est ${estProjected} tok`);
+        log.debug(`[TPM-EXHAUST-SKIP:${_reqId}] ${provider}/${actualModelId} — est ${estProjected} tok`);
         continue;
       }
       if (!fitCheck.ok) {
         skippedCandidates.push(candidate);
         const tag = fitCheck.reason?.startsWith("TPM hard") || fitCheck.reason?.startsWith("TPD hard") ? "limit-hard" : "limit-exhausted";
         skipReasons.push(`${provider}/${actualModelId}:${tag}`);
-        console.log(`[LIMIT-SKIP:${_reqId}] ${provider}/${actualModelId} — ${fitCheck.reason}`);
+        log.debug(`[LIMIT-SKIP:${_reqId}] ${provider}/${actualModelId} — ${fitCheck.reason}`);
         continue;
       }
       if (!capCheck.ok) {
@@ -2042,7 +2030,7 @@ export async function POST(req: NextRequest) {
               if (settled) return;
               backupFired = true;
               bumpPerf("spec:fire");
-              console.log(`[SPEC-FIRE:${_reqId}] primary ${provider}/${actualModelId} > ${SPEC_THRESHOLD_MS}ms → speculate with ${peekCandidate!.provider}/${peekCandidate!.model_id}`);
+              log.info(`[SPEC-FIRE:${_reqId}] primary ${provider}/${actualModelId} > ${SPEC_THRESHOLD_MS}ms → speculate with ${peekCandidate!.provider}/${peekCandidate!.model_id}`);
               forwardToProvider(peekCandidate!.provider, peekCandidate!.model_id, body, isStream, backupAc.signal)
                 .then(r => {
                   if (settled) return;
@@ -2063,7 +2051,7 @@ export async function POST(req: NextRequest) {
           if (race.swap && peekCandidate) {
             // Speculative won — swap accounting vars to the winner
             bumpPerf("spec:win");
-            console.log(`[SPEC-WIN:${_reqId}] backup ${peekCandidate.provider}/${peekCandidate.model_id} beat ${provider}/${actualModelId}`);
+            log.info(`[SPEC-WIN:${_reqId}] backup ${peekCandidate.provider}/${peekCandidate.model_id} beat ${provider}/${actualModelId}`);
             provider = peekCandidate.provider;
             actualModelId = peekCandidate.model_id;
             dbModelId = peekCandidate.id;
@@ -2115,7 +2103,7 @@ export async function POST(req: NextRequest) {
                 if (fallback) {
                   content = fallback;
                   firstMsg.content = fallback;
-                  console.log(`[REASONING-FALLBACK] ${provider}/${actualModelId} — moved ${fallback.length} chars from reasoning→content`);
+                  log.info(`[REASONING-FALLBACK] ${provider}/${actualModelId} — moved ${fallback.length} chars from reasoning→content`);
                 }
               }
 
@@ -2123,7 +2111,7 @@ export async function POST(req: NextRequest) {
 
               const badReason = isResponseBad(content, caps.hasTools, hasToolCalls);
               if (badReason) {
-                console.log(`[BAD-RESPONSE] ${provider}/${actualModelId} — ${badReason}: "${content.slice(0, 100)}"`);
+                log.warn(`[BAD-RESPONSE] ${provider}/${actualModelId} — ${badReason}: "${content.slice(0, 100)}"`);
                 await logCooldown(dbModelId, badReason, 0, 5);
                 await recordRoutingResult(dbModelId, provider, promptCategory, false, latency);
                 recordOutcome(provider, actualModelId, false, latency);
@@ -2159,9 +2147,7 @@ export async function POST(req: NextRequest) {
                 )
                   .then((demoted) => {
                     if (demoted) {
-                      console.log(
-                        `[THAI-DEMOTE] ${provider}/${actualModelId} failed post-gen Thai check — benchmark score reset`,
-                      );
+                      log.warn(`[THAI-DEMOTE] ${provider}/${actualModelId} failed post-gen Thai check — benchmark score reset`);
                     }
                   })
                   .catch(() => {});
@@ -2171,7 +2157,7 @@ export async function POST(req: NextRequest) {
               if (latency > slowThrNon) {
                 await logCooldown(dbModelId, `slow response: ${latency}ms > ${slowThrNon}ms threshold`, 0, 2);
                 recordOutcome(provider, actualModelId, false, latency);
-                console.log(`[SLOW-COOLDOWN] ${provider}/${actualModelId} ${latency}ms > ${slowThrNon}ms → 2min cooldown`);
+                log.warn(`[SLOW-COOLDOWN] ${provider}/${actualModelId} ${latency}ms > ${slowThrNon}ms → 2min cooldown`);
               }
 
               const headers = new Headers();
@@ -2218,7 +2204,7 @@ export async function POST(req: NextRequest) {
           if (streamLatency > slowThrStream) {
             await logCooldown(dbModelId, `slow stream: ${streamLatency}ms > ${slowThrStream}ms threshold`, 0, 2);
             recordOutcome(provider, actualModelId, false, streamLatency);
-            console.log(`[SLOW-COOLDOWN] ${provider}/${actualModelId} ${streamLatency}ms > ${slowThrStream}ms → 2min cooldown`);
+            log.warn(`[SLOW-COOLDOWN] ${provider}/${actualModelId} ${streamLatency}ms > ${slowThrStream}ms → 2min cooldown`);
           }
           await logGateway(modelField, actualModelId, provider, 200, streamLatency, 0, 0, null, userMsg, "[stream]", _reqId, ip);
           recordBattleEvent(outcomeFromLatency(streamLatency, true)).catch(() => { /* cosmetic */ });
@@ -2273,7 +2259,7 @@ export async function POST(req: NextRequest) {
           errText.includes("message_order")
         );
         if (isClientShapeError) {
-          console.log(`[CLIENT-400:${_reqId}] ${provider}/${actualModelId} — request shape invalid, not retrying other models`);
+          log.warn(`[CLIENT-400:${_reqId}] ${provider}/${actualModelId} — request shape invalid, not retrying other models`);
           lastError = `invalid request shape: ${errText.slice(0, 200)}`;
           lastProvider = provider;
           lastModelId = actualModelId;
@@ -2303,7 +2289,7 @@ export async function POST(req: NextRequest) {
           const isDailyLimit = st === 429 && /tokens per day|TPD|daily limit|quota exceeded for today/i.test(errText);
           if (isDailyLimit) {
             await logCooldown(dbModelId, `TPD exhausted: ${errText.slice(0, 150)}`, 429, 24 * 60);
-            console.log(`[TPD-EXHAUST] ${provider}/${actualModelId} → 24h cooldown`);
+            log.warn(`[TPD-EXHAUST] ${provider}/${actualModelId} → 24h cooldown`);
           } else if (/context_length|context window|too long for/i.test(errText)) {
             // ตรง context overflow จริงๆ → cooldown 30 นาที (request นี้ใหญ่จริง model นี้ไม่รับ)
             await logCooldown(dbModelId, `Context overflow: ${errText.slice(0, 150)}`, st, 30);
@@ -2318,13 +2304,13 @@ export async function POST(req: NextRequest) {
               const practicalCeiling = Math.floor(estTokens * 0.9); // below the size that just failed
               await redis.set(`ctx-hint:${dbModelId}`, String(practicalCeiling), "EX", 600);
             } catch { /* non-critical */ }
-            console.log(`[413:${_reqId}] ${provider}/${actualModelId} — estTokens=${estTokens} too big, cooldown 10min + ctx hint`);
+            log.warn(`[413:${_reqId}] ${provider}/${actualModelId} — estTokens=${estTokens} too big, cooldown 10min + ctx hint`);
           } else {
             // Exponential cooldown: 1m → 2 → 4 → 8 → 16 → 60 min
             const streakCooldownMs = await recordFailStreak(dbModelId);
             const streakMin = Math.round(streakCooldownMs / 60_000);
             await logCooldown(dbModelId, `HTTP ${st}: ${errText}`, st, streakMin);
-            console.log(`[EXPO-COOLDOWN:${_reqId}] ${provider}/${actualModelId} → ${streakMin}min (exponential)`);
+            log.warn(`[EXPO-COOLDOWN:${_reqId}] ${provider}/${actualModelId} → ${streakMin}min (exponential)`);
           }
           // ระบบใช้ free model หลายตัวต่อ provider — cooldown ที่ model เท่านั้น
           // ยกเว้น 401/403 (auth key พัง → กระทบทุก model ใน provider เดียวกัน)
@@ -2345,7 +2331,7 @@ export async function POST(req: NextRequest) {
                   VALUES (${dbModelId}, 'available', 'auto-deactivated: 3x consecutive 404', now() + interval '30 days', now())
                   ON CONFLICT DO NOTHING
                 `;
-                console.log(`[AUTO-DEACTIVATE] ${provider}/${actualModelId} — 3x 404, cooldown 30 days`);
+                log.warn(`[AUTO-DEACTIVATE] ${provider}/${actualModelId} — 3x 404, cooldown 30 days`);
               }
             } catch { /* silent */ }
           }
@@ -2395,12 +2381,12 @@ export async function POST(req: NextRequest) {
         const reason = r.split(":").pop() ?? "unknown";
         breakdown[reason] = (breakdown[reason] ?? 0) + 1;
       }
-      console.log(`[SKIPS:${_reqId}] tried=${triedProviders.size}, skipped=${skipReasons.length} — ${JSON.stringify(breakdown)}`);
+      log.debug(`[SKIPS:${_reqId}] tried=${triedProviders.size}, skipped=${skipReasons.length} — ${JSON.stringify(breakdown)}`);
     }
 
     // ── Second pass: ถ้าไม่มี candidate ไหนได้ลองจริงๆ (ทุกตัวโดน skip) → ลอง skipped candidates แบบ relaxed
     if (triedProviders.size === 0 && skippedCandidates.length > 0 && Date.now() - startTime < TOTAL_TIMEOUT_MS) {
-      console.log(`[RELAXED-RETRY:${_reqId}] First pass skipped ${skippedCandidates.length} candidates → retrying ignoring soft filters`);
+      log.info(`[RELAXED-RETRY:${_reqId}] First pass skipped ${skippedCandidates.length} candidates → retrying ignoring soft filters`);
       for (const candidate of skippedCandidates.slice(0, 5)) {
         if (Date.now() - startTime > TOTAL_TIMEOUT_MS) break;
         const { provider, model_id: actualModelId, id: dbModelId } = candidate;

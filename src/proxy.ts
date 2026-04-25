@@ -19,7 +19,8 @@ const AUTH_ENABLED = Boolean(API_KEY || hasOwners() || adminPasswordEnabled());
 const MUTATING_METHODS = new Set(["POST", "PUT", "DELETE", "PATCH"]);
 
 // GET endpoints ที่ expose user messages / per-request traces / infra detail /
-// masked credentials — ต้อง auth เหมือน /api/admin/* ถึงแม้จะ GET method
+// masked credentials / operational state — ต้อง auth เหมือน /api/admin/*
+// ถึงแม้จะ GET method
 const SENSITIVE_GET_PREFIXES = [
   "/api/gateway-logs",     // user_message + assistant_message
   "/v1/trace/",            // per-request trace (messages + provider details)
@@ -30,6 +31,11 @@ const SENSITIVE_GET_PREFIXES = [
   "/api/setup",            // masked API keys + provider toggle state
   "/api/status",           // worker state + run timing
   "/api/warmup-stats",     // worker_logs (warmup-step messages)
+  "/api/semantic-cache",   // hashed user prompts (query_hash + redacted preview)
+  "/api/providers",        // operational provider state
+  "/api/provider-limits",  // upstream rate-limit headroom
+  "/api/live-score",       // per-model live success rate
+  "/api/learning",         // routing-learning state
 ];
 
 function isSensitiveGet(pathname: string, method: string): boolean {

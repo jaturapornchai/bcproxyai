@@ -202,12 +202,10 @@ export async function GET() {
     const sql = getSqlClient();
     const modelRows = await sql<{ total: number; down: number }[]>`
       SELECT
-        (SELECT COUNT(*)::int FROM models)                                           AS total,
-        (SELECT COUNT(DISTINCT h.model_id)::int
-         FROM health_logs h
-         INNER JOIN (SELECT model_id, MAX(id) AS max_id FROM health_logs GROUP BY model_id) l
-           ON h.model_id = l.model_id AND h.id = l.max_id
-         WHERE h.cooldown_until > now())                                             AS down
+        (SELECT COUNT(*)::int FROM models)                              AS total,
+        (SELECT COUNT(*)::int
+         FROM latest_model_health
+         WHERE cooldown_until > now())                                  AS down
     `;
     cooldowns.totalModels = Number(modelRows[0]?.total ?? 0);
     cooldowns.modelCount = Number(modelRows[0]?.down ?? 0);

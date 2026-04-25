@@ -38,10 +38,7 @@ export async function GET(req: NextRequest) {
     const rows = await sql<{ provider: string; model_count: number; available_count: number }[]>`
       SELECT m.provider, COUNT(*) as model_count,
         SUM(CASE WHEN m.id NOT IN (
-          SELECT h.model_id FROM health_logs h
-          INNER JOIN (SELECT model_id, MAX(id) as max_id FROM health_logs GROUP BY model_id) l
-            ON h.model_id = l.model_id AND h.id = l.max_id
-          WHERE h.cooldown_until > now()
+          SELECT model_id FROM latest_model_health WHERE cooldown_until > now()
         ) THEN 1 ELSE 0 END) as available_count
       FROM models m
       GROUP BY m.provider

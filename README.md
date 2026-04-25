@@ -169,7 +169,7 @@ bash /opt/sml-gateway/scripts/deploy-droplet.sh
 ```
 
 **Sensitive GET endpoints** (ป้องกันด้วย auth chain เดียวกัน — owner/master only,
-**check ก่อน /v1/* gate** เพื่อกัน `sml_live_*` token เห็น trace ของ tenant อื่น):
+**check ก่อน /v1/* gate** เพื่อกัน `sml_live_*` token เห็น state ของ tenant อื่น):
 - `/api/gateway-logs` — `user_message` + `assistant_message`
 - `/v1/trace/:reqId` — per-request trace + messages
 - `/api/infra` — Redis info + replica details
@@ -179,6 +179,11 @@ bash /opt/sml-gateway/scripts/deploy-droplet.sh
 - `/api/setup` — masked API keys + provider toggle
 - `/api/status` — worker state + run timing
 - `/api/warmup-stats` — warmup-step worker logs
+- `/api/semantic-cache` — query_hash + 40-char preview (full prompt redacted)
+- `/api/providers` — operational provider state
+- `/api/provider-limits` — upstream rate-limit headroom
+- `/api/live-score` — per-model live success rate
+- `/api/learning` — routing-learning state
 
 `/api/health` + `/api/auth/*` ยังเปิด public.
 

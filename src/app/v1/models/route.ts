@@ -41,13 +41,7 @@ export async function GET(_req: NextRequest) {
         COALESCE(b.avg_score, 0) as avg_score,
         COALESCE(b.avg_latency, 0) as avg_latency
       FROM models m
-      LEFT JOIN (
-        SELECT hl.model_id, hl.status, hl.cooldown_until
-        FROM health_logs hl
-        INNER JOIN (
-          SELECT model_id, MAX(id) as max_id FROM health_logs GROUP BY model_id
-        ) latest ON hl.model_id = latest.model_id AND hl.id = latest.max_id
-      ) h ON m.id = h.model_id
+      LEFT JOIN latest_model_health h ON m.id = h.model_id
       LEFT JOIN (
         SELECT model_id, AVG(score) as avg_score, AVG(latency_ms) as avg_latency
         FROM benchmark_results GROUP BY model_id

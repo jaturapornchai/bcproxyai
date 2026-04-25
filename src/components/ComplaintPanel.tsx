@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { PROVIDER_COLORS, fmtTime } from "./shared";
+import { getAdminAccess } from "./admin-access";
 
 interface Complaint {
   id: number;
@@ -231,6 +232,10 @@ export function ComplaintPanel() {
 
   const fetchData = useCallback(async () => {
     try {
+      if (!(await getAdminAccess())) {
+        setData(null);
+        return;
+      }
       const res = await fetch("/api/complaint?limit=20");
       if (res.ok) {
         setData(await res.json());

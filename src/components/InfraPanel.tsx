@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { getAdminAccess } from "./admin-access";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -432,6 +433,10 @@ export function InfraPanel() {
 
   const fetchData = useCallback(async () => {
     try {
+      if (!(await getAdminAccess())) {
+        setData(null);
+        return;
+      }
       const res = await fetch("/api/infra", { cache: "no-store" });
       if (res.ok) {
         setData(await res.json());

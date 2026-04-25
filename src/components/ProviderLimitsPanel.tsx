@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { ProviderBadge } from "./shared";
+import { getAdminAccess } from "./admin-access";
 
 interface ProviderLimit {
   provider: string;
@@ -102,6 +103,10 @@ export function ProviderLimitsPanel() {
 
   const fetchLimits = useCallback(async () => {
     try {
+      if (!(await getAdminAccess())) {
+        setLimits([]);
+        return;
+      }
       const res = await fetch("/api/provider-limits");
       if (res.ok) {
         const data: LimitsResponse = await res.json();

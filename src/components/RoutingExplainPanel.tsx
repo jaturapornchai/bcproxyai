@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { getAdminAccess } from "./admin-access";
 
 interface Candidate {
   provider: string;
@@ -43,6 +44,10 @@ export function RoutingExplainPanel() {
     let cancelled = false;
     const load = async () => {
       try {
+        if (!(await getAdminAccess())) {
+          if (!cancelled) setData(null);
+          return;
+        }
         const params = new URLSearchParams();
         params.set("limit", "30");
         if (filter === "fallback") params.set("fallback", "1");

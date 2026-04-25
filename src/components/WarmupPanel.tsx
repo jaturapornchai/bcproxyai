@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { getAdminAccess } from "./admin-access";
 
 interface WarmupLog {
   createdAt: string;
@@ -43,6 +44,10 @@ export function WarmupPanel() {
 
   const fetchStats = useCallback(async () => {
     try {
+      if (!(await getAdminAccess())) {
+        setStats(null);
+        return;
+      }
       const res = await fetch("/api/warmup-stats");
       if (res.ok) setStats(await res.json());
     } catch {

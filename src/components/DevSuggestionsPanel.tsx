@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { getAdminAccess } from "./admin-access";
 
 type Severity = "info" | "warn" | "high" | "critical";
 type Status = "open" | "acknowledged" | "resolved" | "dismissed";
@@ -82,6 +83,10 @@ export function DevSuggestionsPanel() {
 
   const fetchData = useCallback(async () => {
     try {
+      if (!(await getAdminAccess())) {
+        setData(null);
+        return;
+      }
       const url = showResolved ? "/api/dev-suggestions" : "/api/dev-suggestions?status=open";
       const res = await fetch(url);
       if (res.ok) setData(await res.json());
@@ -100,6 +105,7 @@ export function DevSuggestionsPanel() {
 
   const updateStatus = async (id: number, status: Status) => {
     try {
+      if (!(await getAdminAccess())) return;
       await fetch("/api/dev-suggestions", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },

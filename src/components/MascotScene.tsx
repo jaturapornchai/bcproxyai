@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { getAdminAccess } from "./admin-access";
 
 // Hero vs Villain combat scene
 // sceneToken changes every scene → re-mounts → replays animations
@@ -544,6 +545,13 @@ export function MascotScene() {
     let alive = true;
     const fetchAll = async () => {
       try {
+        if (!(await getAdminAccess())) {
+          if (alive) {
+            setLogs([]);
+            setScore(null);
+          }
+          return;
+        }
         const [logsRes, infraRes] = await Promise.all([
           fetch("/api/gateway-logs?limit=12"),
           fetch("/api/infra"),

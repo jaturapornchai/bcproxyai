@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { NavSessionChip } from "../components/NavSessionChip";
+import { getAdminAccess } from "../components/admin-access";
 
 /** Parse user message — handle legacy JSON array format from DB */
 function parseUserMsg(raw: string | null | undefined): string | null {
@@ -69,6 +70,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [triggering, setTriggering] = useState(false);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [, setTick] = useState(0);
 
   interface GatewayLog {
@@ -131,6 +133,10 @@ export default function Dashboard() {
     window.scrollTo(0, 0);
   }, []);
 
+  useEffect(() => {
+    getAdminAccess().then(setIsAdmin);
+  }, []);
+
   // Tick every second for cooldown countdowns
   useEffect(() => {
     const t = setInterval(() => setTick((n) => n + 1), 1000);
@@ -139,18 +145,19 @@ export default function Dashboard() {
 
   const fetchAll = useCallback(async () => {
     try {
+      const isAdmin = await getAdminAccess();
       const [s, m, l, cs, an, ps, cb] = await Promise.all([
-        fetch("/api/status").then((r) => r.json()),
+        isAdmin ? fetch("/api/status").then((r) => (r.ok ? r.json() : null)).catch(() => null) : Promise.resolve(null),
         fetch("/api/models").then((r) => r.json()),
         fetch("/api/leaderboard").then((r) => r.json()),
         fetch("/api/cost-savings").then((r) => r.json()).catch(() => null),
         fetch("/api/analytics").then((r) => r.json()).catch(() => null),
-        fetch("/api/providers").then((r) => r.json()).catch(() => []),
+        isAdmin ? fetch("/api/providers").then((r) => (r.ok ? r.json() : [])).catch(() => []) : Promise.resolve([]),
         // Admin-only — 401 in non-owner sessions; silently ignore so widget
         // just hides for non-admins (auth chain: master/cookie/Google).
-        fetch("/api/admin/circuits").then((r) => (r.ok ? r.json() : null)).catch(() => null),
+        isAdmin ? fetch("/api/admin/circuits").then((r) => (r.ok ? r.json() : null)).catch(() => null) : Promise.resolve(null),
       ]);
-      setStatusData(s);
+      setStatusData(s && typeof s === "object" && "worker" in s ? s : null);
       setModels(Array.isArray(m) ? m : []);
       setLeaderboard(Array.isArray(l) ? l : []);
       if (cs) setCostSavings(cs);
@@ -177,6 +184,10 @@ export default function Dashboard() {
   // Gateway logs — realtime polling every 2 seconds
   const fetchGatewayLogs = useCallback(async () => {
     try {
+      if (!(await getAdminAccess())) {
+        setGatewayLogs([]);
+        return;
+      }
       const g = await fetch("/api/gateway-logs").then((r) => r.json());
       setGatewayLogs(Array.isArray(g) ? g : Array.isArray(g.logs) ? g.logs : []);
     } catch { /* silent */ }
@@ -193,6 +204,7 @@ export default function Dashboard() {
   const triggerWorker = async () => {
     setTriggering(true);
     try {
+      if (!(await getAdminAccess())) return;
       await fetch("/api/worker", { method: "POST" });
       await fetchAll();
     } finally {
@@ -440,20 +452,24 @@ export default function Dashboard() {
           <PerfInsightsPanel />
         </section>
 
-        {/* ── Live Gateway Control Room (single-call snapshot) ───────────── */}
-        <section id="control-room" className="animate-fade-in-up">
-          <ControlRoomPanel />
-        </section>
+        {isAdmin && (
+          <>
+            {/* ── Live Gateway Control Room (single-call snapshot) ───────────── */}
+            <section id="control-room" className="animate-fade-in-up">
+              <ControlRoomPanel />
+            </section>
 
-        {/* ── AI Ops Autopilot — rule-based recommendation cards ────────── */}
-        <section id="autopilot" className="animate-fade-in-up">
-          <AutopilotPanel />
-        </section>
+            {/* ── AI Ops Autopilot — rule-based recommendation cards ────────── */}
+            <section id="autopilot" className="animate-fade-in-up">
+              <AutopilotPanel />
+            </section>
 
-        {/* ── Smart Routing Explain — recent decisions trail ────────────── */}
-        <section id="routing-explain" className="animate-fade-in-up">
-          <RoutingExplainPanel />
-        </section>
+            {/* ── Smart Routing Explain — recent decisions trail ────────────── */}
+            <section id="routing-explain" className="animate-fade-in-up">
+              <RoutingExplainPanel />
+            </section>
+          </>
+        )}
 
         {/* ── Replay & Compare ─────────────────────────────────────────── */}
         <section id="replay" className="animate-fade-in-up">
@@ -461,7 +477,7 @@ export default function Dashboard() {
         </section>
 
         {/* ── Live Mascot Theater (data-driven from gateway logs) ───────── */}
-        <MascotScene />
+        {isAdmin && <MascotScene />}
 
         {/* ── Dev Tools banner — quick links to new endpoints ───────────── */}
         <section className="animate-fade-in-up stagger-0">
@@ -496,7 +512,7 @@ export default function Dashboard() {
         {/* ── Gateway Config — moved to /guide page ──────────────────────── */}
 
         {/* ── Gateway Logs (top of dashboard, wide + big font) ──────────── */}
-        <section id="gateway-logs" className="animate-fade-in-up stagger-0">
+        {isAdmin && <section id="gateway-logs" className="animate-fade-in-up stagger-0">
           <div className="flex items-center gap-2 mb-1">
             <span className="text-2xl">📝</span>
             <span className="font-black text-white text-3xl">สมุดจดงาน</span>
@@ -569,7 +585,7 @@ export default function Dashboard() {
               )}
             </div>
           </div>
-        </section>
+        </section>}
 
         {/* ── Code Generation Log (moved to top — after gateway logs) ──── */}
         <section id="codegen" className="animate-fade-in-up stagger-0">
@@ -577,12 +593,12 @@ export default function Dashboard() {
         </section>
 
         {/* ── Dev Suggestions (things AI can't fix — human dev needs to) ── */}
-        <section id="dev-suggestions" className="animate-fade-in-up stagger-0">
+        {isAdmin && <section id="dev-suggestions" className="animate-fade-in-up stagger-0">
           <DevSuggestionsPanel />
-        </section>
+        </section>}
 
         {/* ── Infrastructure Monitoring ────────────────────────────────── */}
-        <section id="infra" className="animate-fade-in-up stagger-0">
+        {isAdmin && <section id="infra" className="animate-fade-in-up stagger-0">
           <div className="flex items-center gap-3 mb-4">
             <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-500/20 text-indigo-400">
               <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -593,7 +609,7 @@ export default function Dashboard() {
             <span className="text-xs text-gray-400 ml-1">Postgres · Valkey · Replicas · Rate Limit</span>
           </div>
           <InfraPanel />
-        </section>
+        </section>}
 
         {/* ── Section 1: Header + Worker Status ──────────────────────────── */}
         <section id="status" className="animate-fade-in-up">
@@ -642,20 +658,20 @@ export default function Dashboard() {
                   </div>
                   <div className="flex flex-col gap-1 text-xs text-gray-500">
                     <div className="flex gap-4">
-                      <span>เช็คชื่อล่าสุด: <span className="text-gray-300">{fmtTime(statusData?.worker.lastRun ?? null)}</span></span>
-                      <span>เช็คชื่อถัดไป: <span className="text-gray-300">{fmtTime(statusData?.worker.nextRun ?? null)}</span></span>
+                      <span>เช็คชื่อล่าสุด: <span className="text-gray-300">{fmtTime(statusData?.worker?.lastRun ?? null)}</span></span>
+                      <span>เช็คชื่อถัดไป: <span className="text-gray-300">{fmtTime(statusData?.worker?.nextRun ?? null)}</span></span>
                     </div>
-                    {statusData?.worker.judgeModel && (
+                    {statusData?.worker?.judgeModel && (
                       <div className="flex items-center gap-1.5">
                         <span className="text-gray-600">ตรวจด้วย:</span>
-                        <span className="text-cyan-400 font-mono">{statusData.worker.judgeModel}</span>
+                        <span className="text-cyan-400 font-mono">{statusData?.worker?.judgeModel}</span>
                       </div>
                     )}
                     <div className="flex items-center gap-3 flex-wrap">
-                      {statusData?.worker.nextRun && workerStatus !== "running" && (
+                      {statusData?.worker?.nextRun && workerStatus !== "running" && (
                         <div className="flex items-center gap-1.5">
                           <span className="text-indigo-400">⏱</span>
-                          <span className="text-indigo-300 font-medium">{fmtCountdown(statusData.worker.nextRun)}</span>
+                          <span className="text-indigo-300 font-medium">{fmtCountdown(statusData?.worker?.nextRun ?? null)}</span>
                         </div>
                       )}
                     </div>
@@ -777,19 +793,19 @@ export default function Dashboard() {
         </section>
 
         {/* ── Provider Limits (TPM/TPD) ──────────────────────────────── */}
-        <section id="limits" className="animate-fade-in-up stagger-1">
+        {isAdmin && <section id="limits" className="animate-fade-in-up stagger-1">
           <ProviderLimitsPanel />
-        </section>
+        </section>}
 
         {/* ── Semantic Cache Stats ───────────────────────────────────── */}
-        <section id="cache" className="animate-fade-in-up stagger-1">
+        {isAdmin && <section id="cache" className="animate-fade-in-up stagger-1">
           <SemanticCachePanel />
-        </section>
+        </section>}
 
         {/* ── Warmup Worker Stats ────────────────────────────────────── */}
-        <section id="warmup" className="animate-fade-in-up stagger-1">
+        {isAdmin && <section id="warmup" className="animate-fade-in-up stagger-1">
           <WarmupPanel />
-        </section>
+        </section>}
 
         {/* ── Provider Status — ทุก provider ──────────────────────────── */}
         <section id="providers" className="animate-fade-in-up stagger-1">
@@ -1181,7 +1197,7 @@ export default function Dashboard() {
         </section>
 
         {/* ── Section: Complaint System ─────────────────────────────────── */}
-        <section id="complaints" className="animate-fade-in-up stagger-5">
+        {isAdmin && <section id="complaints" className="animate-fade-in-up stagger-5">
           <div className="flex items-center gap-3 mb-4">
             <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-red-500/20 text-red-400">
               <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -1192,7 +1208,7 @@ export default function Dashboard() {
             <span className="text-xs text-gray-400 ml-1">ฟ้องครูเลย!</span>
           </div>
           <ComplaintPanel />
-        </section>
+        </section>}
 
 
         {/* ── Section 7: บันทึกการทำงาน ─────────────────────────────────── */}

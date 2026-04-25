@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { ProviderBadge } from "./shared";
+import { getAdminAccess } from "./admin-access";
 
 interface CacheEntry {
   id: number;
@@ -84,6 +85,10 @@ export function SemanticCachePanel() {
 
   const fetchStats = useCallback(async () => {
     try {
+      if (!(await getAdminAccess())) {
+        setStats(null);
+        return;
+      }
       const res = await fetch("/api/semantic-cache", { credentials: "include" });
       if (res.ok) setStats(await res.json());
     } catch {

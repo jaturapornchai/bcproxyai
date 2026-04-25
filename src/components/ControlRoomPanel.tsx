@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { getAdminAccess } from "./admin-access";
 
 interface ControlRoom {
   windowMin: number;
@@ -31,6 +32,10 @@ export function ControlRoomPanel() {
     let cancelled = false;
     const load = async () => {
       try {
+        if (!(await getAdminAccess())) {
+          if (!cancelled) setData(null);
+          return;
+        }
         const res = await fetch(`/api/control-room?windowMin=${windowMin}`, { credentials: "include" });
         if (!res.ok) return;
         const json = await res.json() as ControlRoom;

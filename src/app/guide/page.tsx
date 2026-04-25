@@ -61,7 +61,7 @@ function Step({ num, title, children }: { num: number; title: string; children: 
 
 // ─── Code snippets for Quick Connect ─────────────────────────────────────────
 
-type Lang = "nextjs" | "python" | "curl" | "langchain" | "hermes" | "openclaw" | "any";
+type Lang = "nextjs" | "python" | "curl" | "langchain" | "thclaws" | "hermes" | "openclaw" | "any";
 
 function buildSnippets(base: string, key: string): Record<Lang, { label: string; code: string; note?: string }> {
   return {
@@ -181,6 +181,26 @@ result = llm_with_tools.invoke("กรุงเทพอากาศเป็น
 print(result.tool_calls)`,
     note: "pip install langchain-openai",
   },
+  thclaws: {
+    label: "thClaws",
+    code: `# thClaws CLI ใน Docker — ให้ SMLGateway เลือก provider/model จริงเอง
+docker run --rm \\
+  -e DASHSCOPE_BASE_URL=${base} \\
+  -e DASHSCOPE_API_KEY=${key} \\
+  -e THCLAWS_DISABLE_KEYCHAIN=1 \\
+  -v "$PWD:/workspace" -w /workspace \\
+  thclaws-smlgateway:local \\
+  -p -m sml/auto --permission-mode auto \\
+  "สรุปโปรเจกต์นี้"
+
+# เลือก virtual model ตามงาน:
+#   sml/auto  = ค่าเริ่มต้น ให้ gateway route เอง
+#   sml/fast  = งานสั้นที่ต้องการ latency ต่ำ
+#   sml/tools = workflow ที่ต้องใช้ function/tool calling
+#
+# อย่า lock เป็น provider/model เฉพาะ เว้นแต่ต้องการ debug upstream โดยตรง`,
+    note: "ใช้ DashScope-compatible env เพื่อชี้ thClaws เข้า OpenAI-compatible SMLGateway",
+  },
   hermes: {
     label: "Hermes Agent",
     code: `# Hermes Agent (Nous Research) — self-improving open-source AI agent
@@ -193,8 +213,8 @@ source ~/.bashrc && hermes --version   # → Hermes Agent v0.10.0+
 # ── Point Hermes at SMLGateway (provider = custom) ──
 hermes config set model.provider custom
 hermes config set model.base_url ${base}
-hermes config set model.default mistral/mistral-small-latest  # tool_calls เสถียร
-# (หลีกเลี่ยง sml/auto เพราะ routing อาจเจอ model ที่ output tool-call เป็น text)
+hermes config set model.default sml/auto
+# ใช้ sml/tools ถ้า workflow ต้องเรียก tools หนัก ๆ
 
 # Hermes อ่าน API key จาก OPENAI_API_KEY ใน .env (custom provider)
 cat >> ~/.hermes/.env <<EOF
@@ -214,9 +234,9 @@ hermes chat -q "run: df -h | head -5"   # one-shot
 hermes chat                               # interactive
 hermes chat --continue                    # ต่อ session ล่าสุด
 
-# gateway auto-patches [system, tool, ...] message order for Mistral —
-# so Hermes' tool flow works out of the box (tested: 13/16 tools pass clean)`,
-    note: "ติดตั้งแล้วใช้ได้เลย — pin model เป็น mistral/mistral-small-latest กัน tool-call เพี้ยน",
+# gateway auto-patches [system, tool, ...] message order for Mistral
+# และ repair JSON-style tool calls เป็น OpenAI tool_calls shape`,
+    note: "ปล่อยให้ SMLGateway route ผ่าน sml/auto หรือใช้ sml/tools เมื่อต้องการ tool calling ชัดเจน",
   },
   openclaw: {
     label: "OpenClaw",
@@ -317,7 +337,7 @@ function QuickConnect() {
     });
   };
 
-  const tabs: Lang[] = ["nextjs", "python", "curl", "langchain", "hermes", "openclaw", "any"];
+  const tabs: Lang[] = ["nextjs", "python", "curl", "langchain", "thclaws", "hermes", "openclaw", "any"];
 
   return (
     <div className="space-y-4">
@@ -379,6 +399,7 @@ const NAV = [
   { id: "models", label: "โมเดลพิเศษ" },
   { id: "install", label: "ติดตั้ง" },
   { id: "auth", label: "ยืนยันตัวตน" },
+  { id: "thclaws", label: "thClaws" },
   { id: "openclaw", label: "OpenClaw" },
   { id: "hermes", label: "Hermes Agent" },
   { id: "api", label: "API Reference" },
@@ -414,7 +435,7 @@ export default function GuidePage() {
           <h1 className="text-lg font-black text-white">คู่มือ SMLGateway</h1>
           <div className="flex-1" />
           <a
-            href="https://github.com/jaturapornchai/sml-gateway"
+            href="https://github.com/jaturapornchai/bcproxyai"
             target="_blank"
             rel="noopener noreferrer"
             className="text-xs text-gray-400 hover:text-white"
@@ -443,7 +464,7 @@ export default function GuidePage() {
           <h1 className="text-4xl font-black text-white mb-2">คู่มือ SMLGateway</h1>
           <p className="text-sm text-gray-400 max-w-2xl mx-auto leading-relaxed">
             AI Gateway รวมผู้ให้บริการ AI ฟรี 30+ เจ้าไว้ที่เดียว — OpenAI-compatible API
-            เชื่อมต่อ OpenAI SDK, LangChain, Hermes Agent, OpenClaw ได้ทุก framework
+            เชื่อมต่อ OpenAI SDK, LangChain, thClaws, Hermes Agent, OpenClaw ได้ทุก framework
             ใช้ <InlineCode>sml/auto</InlineCode> ระบบเลือก model ที่ดีที่สุดให้อัตโนมัติ
           </p>
         </div>
@@ -457,7 +478,7 @@ export default function GuidePage() {
         <Section id="quick-connect" icon="&#9889;" title="เชื่อมต่อเร็ว">
           <P>
             SMLGateway เป็น OpenAI-compatible API — client library ทุกตัวที่ใช้ OpenAI SDK ได้
-            ชี้ <InlineCode>baseURL</InlineCode> มาที่ <InlineCode>${apiBase}/v1</InlineCode> ก็ใช้ได้ทันที
+            ชี้ <InlineCode>baseURL</InlineCode> มาที่ <InlineCode>{apiBase}/v1</InlineCode> ก็ใช้ได้ทันที
           </P>
           <QuickConnect />
         </Section>
@@ -602,7 +623,7 @@ cp .env.example .env.local`}</Code>
           </Step>
           <Step num={3} title="Build + Start">
             <Code>{`docker compose up -d --build`}</Code>
-            <P>รอ build ครั้งแรก 3-10 นาที จากนั้นเปิด <InlineCode>${apiBase}/</InlineCode></P>
+            <P>รอ build ครั้งแรก 3-10 นาที จากนั้นเปิด <InlineCode>{apiBase}/</InlineCode></P>
           </Step>
           <Step num={4} title="ใส่ API keys ผ่าน Dashboard">
             <P>
@@ -763,6 +784,50 @@ GET    /api/perf-insights              → {
             <strong>warnings</strong> = (provider, model) ที่มี fail streak ≥ 3 ใน 30 วินาที แต่ยังไม่ trip — early warning ก่อน circuit open.
             Dashboard section <strong>⚡ ประสิทธิภาพ</strong> แสดง 8 cards real-time (refresh 15s) + การ์ดแดง <strong>🚨 Circuits open: X</strong> เมื่อมี trip &gt; 0
           </p>
+        </Section>
+
+        <Section id="thclaws" icon="&#128295;" title="เชื่อม thClaws">
+          <Info>
+            thClaws ใช้ SMLGateway ผ่าน OpenAI-compatible endpoint และปล่อยให้ gateway route model จริงด้วย virtual model
+            อย่าง <InlineCode>sml/auto</InlineCode>, <InlineCode>sml/fast</InlineCode>, หรือ <InlineCode>sml/tools</InlineCode>
+          </Info>
+
+          <SubTitle>Docker / headless</SubTitle>
+          <P>
+            ใช้ DashScope-compatible env เพื่อชี้ thClaws เข้า SMLGateway แล้วระบุ model เป็น <InlineCode>sml/auto</InlineCode>.
+            ไม่ต้อง lock เป็น provider/model เฉพาะ ยกเว้นต้องการ debug upstream โดยตรง.
+          </P>
+          <Code>{`docker run --rm \\
+  -e DASHSCOPE_BASE_URL=${apiBase}/v1 \\
+  -e DASHSCOPE_API_KEY=dummy \\
+  -e THCLAWS_DISABLE_KEYCHAIN=1 \\
+  -v "$PWD:/workspace" -w /workspace \\
+  thclaws-smlgateway:local \\
+  -p -m sml/auto --permission-mode auto \\
+  "สรุปโปรเจกต์นี้"`}</Code>
+
+          <SubTitle>เลือก virtual model ให้เหมาะกับงาน</SubTitle>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <tbody className="divide-y divide-white/5">
+                {[
+                  ["sml/auto", "ค่าเริ่มต้น ให้ SMLGateway เลือก provider/model จากคะแนนจริง"],
+                  ["sml/fast", "งานสั้นที่ต้องการ latency ต่ำ"],
+                  ["sml/tools", "งาน agent ที่ต้องใช้ function/tool calling"],
+                ].map(([id, desc]) => (
+                  <tr key={id}>
+                    <td className="py-2 pr-4"><InlineCode>{id}</InlineCode></td>
+                    <td className="py-2 text-gray-300">{desc}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <Info>
+            ถ้า model upstream ส่ง function call เป็น JSON ใน <InlineCode>message.content</InlineCode>,
+            SMLGateway จะ repair เป็น OpenAI <InlineCode>tool_calls</InlineCode> shape เมื่อชื่อ function ตรงกับ schema ที่ client ส่งมา.
+          </Info>
         </Section>
 
         <Section id="openclaw" icon="&#128187;" title="เชื่อม OpenClaw">
@@ -1174,9 +1239,9 @@ curl ${apiBase}/v1/trace/5m3obi
           <ul className="list-disc list-inside space-y-1 text-sm text-gray-300">
             <li>Docker Desktop เปิดอยู่ไหม? (ไอคอนวาฬสีเขียว)</li>
             <li>Container health ไหม? <InlineCode>docker ps --filter name=sml-gateway</InlineCode></li>
-            <li>เปิด <InlineCode>${apiBase}/</InlineCode> เห็น dashboard ไหม?</li>
+            <li>เปิด <InlineCode>{apiBase}/</InlineCode> เห็น dashboard ไหม?</li>
             <li>Worker สแกนเสร็จไหม? มี model พร้อมใช้กี่ตัว? (ดูจาก dashboard &ldquo;คณะครู&rdquo;)</li>
-            <li>ทดสอบ: <InlineCode>curl ${apiBase}/v1/models</InlineCode> ตอบ list กลับไหม?</li>
+            <li>ทดสอบ: <InlineCode>curl {apiBase}/v1/models</InlineCode> ตอบ list กลับไหม?</li>
             <li>ถ้า Docker: base URL เป็น <InlineCode>host.docker.internal:3334</InlineCode> ไหม?</li>
           </ul>
 

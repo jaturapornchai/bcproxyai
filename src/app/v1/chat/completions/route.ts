@@ -22,6 +22,7 @@ import { canFitRequest, parseLimitHeaders, parseLimitError, recordLimit } from "
 import { recordOutcomeLearning, recordFailStreak, canHandleTokens, getCategoryWinners, detectCategory, isModelUnhealthyForCategory } from "@/lib/learning";
 import { upstreamAgent } from "@/lib/upstream-agent";
 import { emptyExplain, recordCandidate, stashExplain, consumeExplain, markWinner, type RoutingExplain } from "@/lib/routing-explain";
+import { extractRequestToolNames, repairJsonToolCallLeak } from "@/lib/tool-call-repair";
 
 // ── Category mapping: routing category → exam question category ──
 const ROUTING_TO_EXAM_CAT: Record<string, string> = {
@@ -1163,6 +1164,7 @@ function isRetryableStatus(status: number): boolean {
 
 const XML_TOOL_CALL_RE = /<tool_call>|<functioncall>|<function_calls>/i;
 const THINK_TAG_RE = /<think>[\s\S]*?<\/think>/g;
+const CODE_FENCE_RE = /^\s*```(?:json|tool_call|function_call)?\s*\n?([\s\S]*?)\n?```\s*$/i;
 
 function isResponseBad(content: string, hadTools: boolean, hasToolCalls = false): string | null {
   // Empty content is acceptable ONLY if the model produced real tool_calls.
@@ -1179,6 +1181,7 @@ function isResponseBad(content: string, hadTools: boolean, hasToolCalls = false)
 function cleanResponseContent(content: string): string {
   return content.replace(THINK_TAG_RE, "").trim();
 }
+
 
 let _staleModelsCleanedUp = false;
 
@@ -1221,6 +1224,7 @@ export async function POST(req: NextRequest) {
     const modelField = (body.model as string) || "auto";
     const isStream = body.stream === true;
     const caps = detectRequestCapabilities(body);
+    const _reqToolNames = extractRequestToolNames(body);
     // Inbound Bearer (already validated by proxy middleware) — used to namespace
     // response/semantic cache so per-key tenants don't share cached responses.
     const _inboundBearer = (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "").trim() || null;
@@ -1834,7 +1838,18 @@ export async function POST(req: NextRequest) {
               log.info(`[HEDGE-REASONING-FALLBACK] ${winner.provider}/${winner.model_id} — moved ${fallback.length} chars`);
             }
           }
-          const hasToolCalls = Array.isArray(firstMsg?.tool_calls) && (firstMsg!.tool_calls!.length > 0);
+          let hasToolCalls = Array.isArray(firstMsg?.tool_calls) && (firstMsg!.tool_calls!.length > 0);
+          // Repair JSON-style tool_call leaks (Hermes/Qwen/OpenClaw emit raw JSON in content)
+          if (firstMsg && !hasToolCalls && caps.hasTools && content) {
+            const repaired = repairJsonToolCallLeak(content, _reqToolNames);
+            if (repaired) {
+              firstMsg.tool_calls = repaired;
+              firstMsg.content = "";
+              content = "";
+              hasToolCalls = true;
+              log.warn(`[HEDGE-TC-REPAIR] ${winner.provider}/${winner.model_id} — moved ${repaired.length} JSON tool_call(s) from content→tool_calls`);
+            }
+          }
           const badReason = isResponseBad(content, caps.hasTools, hasToolCalls);
           if (badReason) {
             log.warn(`[HEDGE-BAD] ${winner.provider}/${winner.model_id} — ${badReason}`);
@@ -2131,7 +2146,19 @@ export async function POST(req: NextRequest) {
                 }
               }
 
-              const hasToolCalls = Array.isArray(firstMsg?.tool_calls) && (firstMsg!.tool_calls!.length > 0);
+              let hasToolCalls = Array.isArray(firstMsg?.tool_calls) && (firstMsg!.tool_calls!.length > 0);
+              // Repair JSON-style tool_call leaks (Hermes/Qwen/OpenClaw emit raw JSON in content
+              // instead of OpenAI tool_calls field). Standardizes to OpenAI spec so any claw works.
+              if (firstMsg && !hasToolCalls && caps.hasTools && content) {
+                const repaired = repairJsonToolCallLeak(content, _reqToolNames);
+                if (repaired) {
+                  firstMsg.tool_calls = repaired;
+                  firstMsg.content = "";
+                  content = "";
+                  hasToolCalls = true;
+                  log.warn(`[TC-REPAIR] ${provider}/${actualModelId} — moved ${repaired.length} JSON tool_call(s) from content→tool_calls`);
+                }
+              }
 
               const badReason = isResponseBad(content, caps.hasTools, hasToolCalls);
               if (badReason) {

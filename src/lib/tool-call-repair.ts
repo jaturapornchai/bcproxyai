@@ -1,0 +1,94 @@
+/**
+ * JSON tool-call leak detection & repair.
+ *
+ * Some upstream models (Hermes, Qwen, OpenClaw, NousResearch fine-tunes)
+ * emit tool calls as raw JSON in `message.content` instead of populating
+ * the OpenAI-standard `message.tool_calls` field. Downstream agents
+ * (OpenClaw / Cline / Hermes / Claude harness) then can't dispatch them
+ * and stall.
+ *
+ * This module detects those leaks and rewrites them into the OpenAI
+ * `tool_calls` shape so any claw can consume the response uniformly.
+ */
+
+const CODE_FENCE_RE = /^\s*```(?:json|tool_call|function_call)?\s*\n?([\s\S]*?)\n?```\s*$/i;
+
+export type RepairedToolCall = {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
+};
+
+export function extractRequestToolNames(body: Record<string, unknown>): Set<string> {
+  const names = new Set<string>();
+  const tools = body.tools;
+  if (!Array.isArray(tools)) return names;
+  for (const t of tools as Array<{ type?: string; function?: { name?: string }; name?: string }>) {
+    const n = t?.function?.name ?? t?.name;
+    if (typeof n === "string" && n) names.add(n);
+  }
+  return names;
+}
+
+function tcId(): string {
+  return "call_" + Math.random().toString(36).slice(2, 11);
+}
+
+function coerceArgs(v: unknown): string {
+  if (typeof v === "string") return v;
+  if (v == null) return "{}";
+  try { return JSON.stringify(v); } catch { return "{}"; }
+}
+
+function objectToToolCall(obj: Record<string, unknown>, toolNames: Set<string>): RepairedToolCall | null {
+  const name = obj.name ?? obj.tool ?? obj.function;
+  const args = obj.parameters ?? obj.arguments ?? obj.args ?? obj.input;
+  if (typeof name !== "string" || !name) return null;
+  if (toolNames.size > 0 && !toolNames.has(name)) return null;
+  return { id: tcId(), type: "function", function: { name, arguments: coerceArgs(args) } };
+}
+
+/**
+ * Detect & repair JSON-style tool-call leaks.
+ *
+ * Returns repaired tool_calls if confidence is high, else null.
+ *
+ * False-positive guard: only repair when the request actually had `tools`
+ * AND the emitted name matches one of the tool schemas the client sent.
+ * This prevents legitimate JSON content (e.g., user asked for JSON output)
+ * from being mistaken for a tool call.
+ *
+ * Accepted shapes (claws differ):
+ *   {"name": "x", "parameters": {...}}        — Hermes / OpenClaw style
+ *   {"name": "x", "arguments": {...}}         — OpenAI-ish leak
+ *   {"name": "x", "args": {...}}              — some Qwen forks
+ *   {"function": "x", "input": {...}}         — older NousResearch
+ *   [ {...}, {...} ]                          — multi-call array
+ *   ```json\n{...}\n```                       — code-fenced
+ */
+export function repairJsonToolCallLeak(content: string, toolNames: Set<string>): RepairedToolCall[] | null {
+  if (toolNames.size === 0) return null;
+  let s = content.trim();
+  if (!s) return null;
+
+  const fenceMatch = s.match(CODE_FENCE_RE);
+  if (fenceMatch) s = fenceMatch[1].trim();
+  if (s[0] !== "{" && s[0] !== "[") return null;
+
+  let parsed: unknown;
+  try { parsed = JSON.parse(s); } catch { return null; }
+
+  const calls: RepairedToolCall[] = [];
+  if (Array.isArray(parsed)) {
+    for (const item of parsed) {
+      if (item && typeof item === "object") {
+        const tc = objectToToolCall(item as Record<string, unknown>, toolNames);
+        if (tc) calls.push(tc);
+      }
+    }
+  } else if (parsed && typeof parsed === "object") {
+    const tc = objectToToolCall(parsed as Record<string, unknown>, toolNames);
+    if (tc) calls.push(tc);
+  }
+  return calls.length > 0 ? calls : null;
+}

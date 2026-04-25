@@ -50,6 +50,18 @@ export async function runMigrations(): Promise<void> {
 
     await sql`CREATE INDEX IF NOT EXISTS idx_health_model ON health_logs(model_id)`;
     await sql`CREATE INDEX IF NOT EXISTS idx_health_checked ON health_logs(checked_at)`;
+    // Composite index for the "latest row per model" pattern used across
+    // /api/health, /api/status, /api/models, /v1/chat/completions.
+    await sql`CREATE INDEX IF NOT EXISTS idx_health_model_id_desc ON health_logs(model_id, id DESC)`;
+    // Convenience view returning ONE row per model — the latest health entry.
+    // Routes can JOIN this directly instead of repeating the GROUP BY/MAX(id) pattern.
+    await sql`
+      CREATE OR REPLACE VIEW latest_model_health AS
+      SELECT DISTINCT ON (model_id)
+        model_id, status, latency_ms, error, checked_at, cooldown_until, id
+      FROM health_logs
+      ORDER BY model_id, id DESC
+    `;
 
     await sql`
       CREATE TABLE IF NOT EXISTS exam_attempts (
@@ -527,6 +539,10 @@ export async function runMigrations(): Promise<void> {
         )
       `;
       await sql`CREATE INDEX IF NOT EXISTS idx_semantic_cache_embedding ON semantic_cache USING ivfflat (embedding vector_cosine_ops)`;
+      // Tenant namespace — '_anon' for unauth/master, prefix of sml_live_* otherwise.
+      // Forward-compat ALTER for tables that pre-date this column.
+      await sql`ALTER TABLE semantic_cache ADD COLUMN IF NOT EXISTS tenant_ns TEXT NOT NULL DEFAULT '_anon'`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_semantic_cache_tenant ON semantic_cache(tenant_ns)`;
       console.log("[migrate] pgvector semantic_cache ready");
     } catch (e) {
       console.warn("[migrate] pgvector unavailable — semantic_cache skipped:", (e as Error).message);

@@ -12,6 +12,7 @@ import { detectPromptCategory, recordRoutingResult, getBestModelsForCategory, ge
 import { getRedis } from "@/lib/redis";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { getCachedResponse, setCachedResponse } from "@/lib/response-cache";
+import { log } from "@/lib/sampled-logger";
 import { bumpPerf } from "@/lib/perf-counters";
 import { recordBattleEvent, outcomeFromLatency } from "@/lib/battle-score";
 import { hasTpmHeadroom, recordTokenConsumption } from "@/lib/tpm-tracker";
@@ -1221,6 +1222,11 @@ export async function POST(req: NextRequest) {
     const modelField = (body.model as string) || "auto";
     const isStream = body.stream === true;
     const caps = detectRequestCapabilities(body);
+    // Inbound Bearer (already validated by proxy middleware) — used to namespace
+    // response/semantic cache so per-key tenants don't share cached responses.
+    const _inboundBearer = (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "").trim() || null;
+    // X-No-Cache: client opt-out for sensitive payloads
+    const _cacheOptOut = (req.headers.get("x-no-cache") ?? "").toLowerCase() === "1";
     const _reqTime = Date.now();
     const _reqMsg = redactForLog(extractUserMessage(body));
     const _reqId = Math.random().toString(36).slice(2, 8); // short id สำหรับไล่ log
@@ -1228,7 +1234,7 @@ export async function POST(req: NextRequest) {
     const _estTokensInit = estimateTokens(body);
     const _imgCount = caps.hasImages ? ((body.messages as Array<{content: unknown}>).reduce((n, m) => n + (Array.isArray(m.content) ? (m.content as Array<{type: string}>).filter(p => p.type === "image_url").length : 0), 0)) : 0;
     const _toolCount = Array.isArray(body.tools) ? (body.tools as unknown[]).length : 0;
-    console.log(`[REQ:${_reqId}] ${modelField} | stream=${isStream} | img=${_imgCount} | tools=${_toolCount} | msgs=${_msgCount} | est=${_estTokensInit}tok | "${_reqMsg}"`);
+    log.info(`[REQ:${_reqId}] ${modelField} | stream=${isStream} | img=${_imgCount} | tools=${_toolCount} | msgs=${_msgCount} | est=${_estTokensInit}tok | "${_reqMsg}"`);
 
     // Rate limiting — 100 req/60s per IP
     // Caddy sets X-Real-IP and X-Forwarded-For to exactly the true client IP
@@ -1265,7 +1271,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Improvement C: response cache check (non-stream, low-temperature, no tools)
-    const cachedHit = await getCachedResponse(body);
+    const cachedHit = await getCachedResponse(body, _inboundBearer, _cacheOptOut);
     if (cachedHit) {
       bumpPerf("cache:hit");
       console.log(`[CACHE-HIT] ${cachedHit.provider}/${cachedHit.model}`);
@@ -1859,7 +1865,7 @@ export async function POST(req: NextRequest) {
             recordTokenConsumption(winner.provider, winner.model_id, hedgeTotalTokens).catch(() => {});
             recordBattleEvent(outcomeFromLatency(latency, true)).catch(() => { /* cosmetic */ });
             if (content) {
-              setCachedResponse(body, { content, provider: winner.provider, model: winner.model_id }).catch(() => { /* non-critical */ });
+              setCachedResponse(body, { content, provider: winner.provider, model: winner.model_id }, _inboundBearer, _cacheOptOut).catch(() => { /* non-critical */ });
             }
             const hedgeHeaders = new Headers();
             hedgeHeaders.set("Content-Type", "application/json");
@@ -2191,7 +2197,7 @@ export async function POST(req: NextRequest) {
               recordTokenConsumption(provider, actualModelId, totalTokens).catch(() => {});
               // Improvement C: store in response cache (non-stream, low-temp, no tools)
               if (content) {
-                setCachedResponse(body, { content, provider, model: actualModelId }).catch(() => { /* non-critical */ });
+                setCachedResponse(body, { content, provider, model: actualModelId }, _inboundBearer, _cacheOptOut).catch(() => { /* non-critical */ });
               }
               recordBattleEvent(outcomeFromLatency(latency, true)).catch(() => { /* cosmetic */ });
               const _pt = usage?.prompt_tokens ?? 0; const _ct = usage?.completion_tokens ?? 0;

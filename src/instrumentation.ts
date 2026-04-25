@@ -1,6 +1,6 @@
 /**
- * P3-2: Next.js instrumentation hook for graceful shutdown
- * Registers SIGTERM/SIGINT handlers to drain in-flight requests before exit.
+ * Next.js instrumentation hook — runs once per server boot on the Node runtime.
+ * Used for: prewarm TLS, kick off worker cron, drain in-flight on shutdown.
  */
 import { upstreamAgent } from "@/lib/upstream-agent";
 import { startPrewarm } from "@/lib/prewarm";
@@ -15,6 +15,18 @@ export async function register() {
     // first real chat request doesn't pay the ~30-100ms handshake cost.
     // Best-effort, errors swallowed.
     startPrewarm();
+
+    // Kick off the worker cron (migration + heartbeat + cycles) on boot.
+    // Defaults to on; set WORKER_AUTOSTART=0 to wait for the first /api/worker
+    // ping instead (useful when running migrations from a one-shot job).
+    if (process.env.WORKER_AUTOSTART !== "0") {
+      try {
+        const { ensureWorkerStarted } = await import("@/lib/worker/startup");
+        ensureWorkerStarted();
+      } catch (err) {
+        console.error("[INSTRUMENT] worker autostart failed:", err);
+      }
+    }
 
     const shutdown = async (signal: string) => {
       if (shuttingDown) return;

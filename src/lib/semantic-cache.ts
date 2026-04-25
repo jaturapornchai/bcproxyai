@@ -65,16 +65,25 @@ async function embed(text: string): Promise<number[] | null> {
   }
 }
 
+function tenantNamespace(apiKey: string | null | undefined): string {
+  if (!apiKey) return "_anon";
+  if (apiKey.startsWith("sml_live_")) return apiKey.slice(0, 18);
+  return createHash("sha256").update(apiKey).digest("hex").slice(0, 12);
+}
+
 export async function getCachedBySimilarity(
   userMsg: string,
   threshold = 0.92,
+  opts: { apiKey?: string | null; skip?: boolean; tenantNs?: string } = {},
 ): Promise<{ response: unknown; provider: string; model: string } | null> {
+  if (opts.skip) return null;
   try {
     if (!(await checkPgvector())) return null;
     const vec = await embed(userMsg);
     if (!vec) return null;
     const sql = getSqlClient();
     const lit = toVectorLiteral(vec);
+    const ns = opts.tenantNs ?? tenantNamespace(opts.apiKey);
     const rows = await sql<
       {
         response: unknown;
@@ -87,6 +96,7 @@ export async function getCachedBySimilarity(
       SELECT id, response, provider, model, (embedding <=> ${lit}::vector) AS distance
       FROM semantic_cache
       WHERE embedding IS NOT NULL
+        AND tenant_ns = ${ns}
       ORDER BY embedding <=> ${lit}::vector
       LIMIT 1
     `;
@@ -115,7 +125,9 @@ export async function storeSemanticResponse(
   response: unknown,
   provider: string,
   model: string,
+  opts: { apiKey?: string | null; skip?: boolean; tenantNs?: string } = {},
 ): Promise<void> {
+  if (opts.skip) return;
   try {
     if (!(await checkPgvector())) return;
     const vec = await embed(userMsg);
@@ -123,9 +135,10 @@ export async function storeSemanticResponse(
     const sql = getSqlClient();
     const lit = toVectorLiteral(vec);
     const hash = hashQuery(userMsg);
+    const ns = opts.tenantNs ?? tenantNamespace(opts.apiKey);
     await sql`
-      INSERT INTO semantic_cache (query_hash, query, embedding, response, provider, model)
-      VALUES (${hash}, ${userMsg}, ${lit}::vector, ${JSON.stringify(response)}::jsonb, ${provider}, ${model})
+      INSERT INTO semantic_cache (query_hash, query, embedding, response, provider, model, tenant_ns)
+      VALUES (${hash}, ${userMsg}, ${lit}::vector, ${JSON.stringify(response)}::jsonb, ${provider}, ${model}, ${ns})
       ON CONFLICT (query_hash) DO UPDATE
       SET hit_count = semantic_cache.hit_count + 1,
           last_used_at = now()

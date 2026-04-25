@@ -5,8 +5,9 @@ import { getRedis } from "@/lib/redis";
 // the scan/health cron cycle. We use a Redis SETNX lock with a TTL that's
 // slightly longer than the cycle duration.
 //
-// If Redis is unreachable we return `true` so single-replica dev setups
-// still run the cycle.
+// Fail-closed by default: if Redis is unreachable in production, NO replica
+// runs the cycle (better than ALL replicas hammering shared resources).
+// To opt back in for single-replica dev setups, set WORKER_LEADER_FAIL_OPEN=1.
 
 const LEADER_KEY = "worker:leader";
 const LEADER_TTL_SEC = 14 * 60; // 14 minutes — shorter than the 15min cycle
@@ -14,6 +15,13 @@ const LEADER_TTL_SEC = 14 * 60; // 14 minutes — shorter than the 15min cycle
 function workerId(): string {
   // HOSTNAME is set by Docker to the container ID
   return process.env.HOSTNAME || process.env.COMPUTERNAME || "local";
+}
+
+function leaderFailOpen(): boolean {
+  // Explicit opt-in via env. Also default-on outside production to keep
+  // local dev (no Redis container) ergonomic.
+  if (process.env.WORKER_LEADER_FAIL_OPEN === "1") return true;
+  return process.env.NODE_ENV !== "production";
 }
 
 /**
@@ -31,8 +39,8 @@ export async function acquireLeader(): Promise<boolean> {
     const holder = await redis.get(LEADER_KEY);
     return holder === me;
   } catch {
-    // Redis down → let the worker run (single-replica fallback)
-    return true;
+    // Redis down → fail-closed in prod, fail-open in dev
+    return leaderFailOpen();
   }
 }
 

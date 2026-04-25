@@ -3,6 +3,14 @@ interface CacheEntry<T> {
   expires: number;
 }
 
+// Bounded LRU-ish: Map preserves insertion order, so on overflow we drop the
+// oldest key. Configurable via CACHE_MAX_ENTRIES env (clamped to safe range).
+const CACHE_MAX_ENTRIES = (() => {
+  const raw = Number(process.env.CACHE_MAX_ENTRIES);
+  if (!Number.isFinite(raw) || raw <= 0) return 2000;
+  return Math.min(Math.max(Math.floor(raw), 100), 100_000);
+})();
+
 const cache = new Map<string, CacheEntry<unknown>>();
 
 export function getCached<T>(key: string): T | null {
@@ -11,11 +19,23 @@ export function getCached<T>(key: string): T | null {
     cache.delete(key);
     return null;
   }
+  // Bump to most-recent by re-inserting (Map preserves order)
+  cache.delete(key);
+  cache.set(key, entry);
   return entry.data as T;
 }
 
 export function setCache<T>(key: string, data: T, ttlMs: number): void {
   cache.set(key, { data, expires: Date.now() + ttlMs });
+  if (cache.size > CACHE_MAX_ENTRIES) {
+    // Drop oldest entries until back under cap
+    const overflow = cache.size - CACHE_MAX_ENTRIES;
+    let dropped = 0;
+    for (const k of cache.keys()) {
+      cache.delete(k);
+      if (++dropped >= overflow) break;
+    }
+  }
 }
 
 // Stampede-safe cached query: if 50 requests hit a cold key at once, only one

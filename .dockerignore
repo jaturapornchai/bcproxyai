@@ -2,3 +2,12 @@ node_modules
 .next
 data
 .env.local
+caddy.log
+caddy.err.log
+*.log
+tsconfig.tsbuildinfo
+.git
+.github
+coverage
+loadtest/results
+generated/.cache

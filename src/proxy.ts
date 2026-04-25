@@ -18,6 +18,21 @@ const AUTH_ENABLED = Boolean(API_KEY || hasOwners() || adminPasswordEnabled());
 
 const MUTATING_METHODS = new Set(["POST", "PUT", "DELETE", "PATCH"]);
 
+// GET endpoints ที่ expose user messages / per-request traces / infra detail —
+// ต้อง auth เหมือน /api/admin/* ถึงแม้จะ GET method
+const SENSITIVE_GET_PREFIXES = [
+  "/api/gateway-logs",     // user_message + assistant_message
+  "/v1/trace/",            // per-request trace (messages + provider details)
+  "/api/dev-suggestions",  // internal diagnostics
+  "/api/k6-report",        // internal load-test data
+  "/api/infra",            // Redis info + replica details
+];
+
+function isSensitiveGet(pathname: string, method: string): boolean {
+  if (method !== "GET") return false;
+  return SENSITIVE_GET_PREFIXES.some((p) => pathname === p || pathname.startsWith(p + "/") || pathname.startsWith(p + "?"));
+}
+
 function timingSafeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   let diff = 0;
@@ -85,6 +100,18 @@ export async function proxy(req: NextRequest) {
       if (email && isOwnerEmail(email)) return NextResponse.next();
     } catch { /* fall through */ }
     return json({ error: { message: "admin: login or master key required", type: "auth_error" } }, 401);
+  }
+
+  // Sensitive GET endpoints (logs, traces, infra) → owner/master only
+  if (isSensitiveGet(pathname, method)) {
+    if (isMaster) return NextResponse.next();
+    if (verifyAdminCookie(req.cookies.get(ADMIN_COOKIE_NAME)?.value)) return NextResponse.next();
+    try {
+      const session = (await auth()) as { user?: { email?: string | null } } | null;
+      const email = session?.user?.email ?? "";
+      if (email && isOwnerEmail(email)) return NextResponse.next();
+    } catch { /* fall through */ }
+    return json({ error: { message: "owner only", type: "auth_error" } }, 401);
   }
 
   // All pages + GET /api/* are open — UI is meant to be viewable.

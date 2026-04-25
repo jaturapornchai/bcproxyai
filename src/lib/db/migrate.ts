@@ -408,8 +408,7 @@ export async function runMigrations(): Promise<void> {
     // ─── Teacher Hierarchy ───────────────────────────────────────────────────
     // role: 'principal' (1), 'head' (per-category), 'proctor' (5-10)
     // ครูถูกเลือกอัตโนมัติจาก exam/live score ทุกรอบ worker
-    // เปลี่ยน PK จาก model_id → BIGSERIAL เพื่อให้ model เดียวเป็น head หลาย category ได้
-    await sql`DROP TABLE IF EXISTS teachers CASCADE`;
+    // PK = BIGSERIAL id (ไม่ใช่ model_id) — model เดียวเป็น head หลาย category ได้
     await sql`
       CREATE TABLE IF NOT EXISTS teachers (
         id BIGSERIAL PRIMARY KEY,
@@ -421,6 +420,9 @@ export async function runMigrations(): Promise<void> {
         reappointed_count INT DEFAULT 0
       )
     `;
+    // Non-destructive forward-compat: ถ้า table มาจาก schema เก่า (model_id PK)
+    // ให้เพิ่ม column id ทีหลังโดยไม่ทำลายข้อมูล
+    await sql`ALTER TABLE teachers ADD COLUMN IF NOT EXISTS reappointed_count INT DEFAULT 0`;
     await sql`CREATE INDEX IF NOT EXISTS idx_teachers_role ON teachers(role)`;
     await sql`CREATE INDEX IF NOT EXISTS idx_teachers_category ON teachers(category) WHERE category IS NOT NULL`;
 

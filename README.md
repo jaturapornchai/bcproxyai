@@ -160,13 +160,22 @@ nano /opt/sml-gateway/.env.production
 bash /opt/sml-gateway/scripts/deploy-droplet.sh
 ```
 
-### Auth chain สำหรับ `/admin/*` + mutating `/api/*`
+### Auth chain สำหรับ `/admin/*` + mutating `/api/*` + sensitive GET
 ```
 1. Bearer GATEWAY_API_KEY  → pass  (CI / SDK path)
 2. Signed admin cookie     → pass  (password login)
 3. Google session + owner  → pass  (OAuth path)
 4. else → /login (page) หรือ 401 (API)
 ```
+
+**Sensitive GET endpoints** (ป้องกันด้วย auth chain เดียวกัน — เพราะ expose user message / infra detail):
+- `/api/gateway-logs` — มี `user_message` + `assistant_message`
+- `/v1/trace/:reqId` — per-request trace + messages
+- `/api/infra` — Redis info + replica details
+- `/api/dev-suggestions` — internal diagnostics
+- `/api/k6-report` — internal load-test data
+
+`/api/health` + `/api/auth/*` ยังเปิด public.
 
 ### คู่มือการสมัครใช้ API key (สำหรับ user ทั่วไป)
 
@@ -681,6 +690,31 @@ echo '/swapfile none swap sw 0 0' >> /etc/fstab
 ```bash
 curl -s -o /dev/null -w "%{http_code}\n" https://<your-domain>/api/health
 ```
+
+---
+
+## Operations / Tuning
+
+Runtime knobs (env) — clamp ที่ฝั่ง code ไว้แล้ว ใส่ผิดก็ไม่ crash:
+
+| Env | Default | Range | ผล |
+|---|---|---|---|
+| `PG_POOL_MAX` | 20 | 1–200 | จำนวน Postgres connection สูงสุดต่อ replica |
+| `PG_IDLE_TIMEOUT_SEC` | 30 | 1–3600 | ปิด idle connection หลัง N วินาที |
+| `PG_CONNECT_TIMEOUT_SEC` | 10 | 1–120 | timeout ตอน acquire connection |
+| `CACHE_MAX_ENTRIES` | 2000 | 100–100000 | LRU cap ของ in-memory cache (`getCached` / `cachedQuery`) |
+| `WORKER_LEADER_FAIL_OPEN` | `0` ใน prod, `1` ใน dev | `0`/`1` | ถ้า Redis ล่ม: `1` = run worker (single-replica), `0` = ไม่ run (กัน multi-replica thrashing) |
+| `OLLAMA_BASE_URL` | `http://host.docker.internal:11434` | URL | base ของ Ollama (override ได้ผ่าน `/admin/providers` ที่จะเก็บ DB ทับ env) |
+
+**Worker leader behavior** ([src/lib/worker/leader.ts](src/lib/worker/leader.ts)):
+- ตอน Redis ใช้ได้ → `SET NX EX 14m` ป้องกัน multi-replica run cycle ซ้อน
+- ตอน Redis ล่ม + `NODE_ENV=production` + `WORKER_LEADER_FAIL_OPEN` ไม่ใช่ `1` → return `false` (ไม่มี replica run)
+- ตอน Redis ล่ม + `NODE_ENV !== production` (หรือ `WORKER_LEADER_FAIL_OPEN=1`) → return `true` (single-replica fallback สำหรับ dev)
+
+**Migration safety** ([src/lib/db/migrate.ts](src/lib/db/migrate.ts)):
+ทุก table ใช้ `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN IF NOT EXISTS` ไม่มี `DROP TABLE` — restart container ไม่ทำลาย data เดิม.
+
+**Maintainability notes:** ไฟล์ใหญ่/refactor candidates → [docs/maintainability-notes.md](docs/maintainability-notes.md)
 
 ---
 

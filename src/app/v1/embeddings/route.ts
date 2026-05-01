@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { getNextApiKey } from "@/lib/api-keys";
 import { resolveProviderEmbeddingUrl } from "@/lib/provider-resolver";
 import { openAIError } from "@/lib/openai-compat";
-import { getCostAllowedProviders, isProviderCostAllowed } from "@/lib/cost-policy";
+import { getCostAllowedProviders, isModelCostAllowed, isProviderCostAllowed } from "@/lib/cost-policy";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -41,6 +41,7 @@ export async function POST(req: NextRequest) {
       const embeddingModel = requestedModel === "auto" || requestedModel === "sml/auto"
         ? DEFAULT_EMBEDDING_MODELS[provider]
         : requestedModel;
+      if (!isModelCostAllowed(provider, embeddingModel)) continue;
 
       try {
         const headers: Record<string, string> = {

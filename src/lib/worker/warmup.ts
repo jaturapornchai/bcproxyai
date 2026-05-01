@@ -4,7 +4,7 @@ import { getNextApiKey } from "@/lib/api-keys";
 import { resolveProviderUrl } from "@/lib/provider-resolver";
 import { upstreamAgent } from "@/lib/upstream-agent";
 import { recordOutcome } from "@/lib/live-score";
-import { getCostAllowedProviders, isProviderCostAllowed } from "@/lib/cost-policy";
+import { getCostAllowedProviders, isModelCostAllowed } from "@/lib/cost-policy";
 
 // ─── Warmup pinger ───
 // Every 2 minutes, send a cheap 1-token ping to every model that has passed the
@@ -70,7 +70,7 @@ async function acquireWarmupLeader(): Promise<boolean> {
 }
 
 async function pingOnce(candidate: WarmupCandidate): Promise<boolean> {
-  if (!isProviderCostAllowed(candidate.provider)) return false;
+  if (!isModelCostAllowed(candidate.provider, candidate.model_id)) return false;
 
   const url = resolveProviderUrl(candidate.provider);
   if (!url) return false;
@@ -141,7 +141,7 @@ async function runWarmupTick(): Promise<void> {
     // Uses the latest_model_health view so latest-row logic stays in one place.
     // Ordered by recent latency (NULLs last) — fastest first, so the cap
     // preserves the ones that matter for warm sockets.
-    const candidates = await sql<WarmupCandidate[]>`
+    const rows = await sql<WarmupCandidate[]>`
       WITH candidates AS (
         SELECT
           m.id,
@@ -171,6 +171,7 @@ async function runWarmupTick(): Promise<void> {
       ORDER BY latency_ms ASC NULLS LAST, provider ASC, model_id ASC
       LIMIT ${WARMUP_MAX_MODELS}
     `;
+    const candidates = rows.filter((candidate) => isModelCostAllowed(candidate.provider, candidate.model_id));
 
     const providerCount = candidates.reduce<Record<string, number>>((acc, c) => {
       acc[c.provider] = (acc[c.provider] ?? 0) + 1;

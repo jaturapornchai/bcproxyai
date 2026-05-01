@@ -4,7 +4,7 @@ import { getNextApiKey } from "@/lib/api-keys";
 import { PROVIDER_COMPLETIONS_URLS } from "@/lib/providers";
 import { resolveProviderCompletionsUrl } from "@/lib/provider-resolver";
 import { openAIError } from "@/lib/openai-compat";
-import { getCostAllowedProviders, isProviderCostAllowed } from "@/lib/cost-policy";
+import { getCostAllowedProviders, isModelCostAllowed, isProviderCostAllowed } from "@/lib/cost-policy";
 import crypto from "crypto";
 
 export const dynamic = "force-dynamic";
@@ -66,7 +66,7 @@ export async function POST(req: NextRequest) {
     for (const model of modelList) {
       const url = resolveProviderCompletionsUrl(model.provider);
       if (!url) continue;
-      if (!isProviderCostAllowed(model.provider)) continue;
+      if (!isModelCostAllowed(model.provider, model.model_id)) continue;
 
       const apiKey = getNextApiKey(model.provider);
       if (!apiKey) continue;

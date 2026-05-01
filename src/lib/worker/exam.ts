@@ -12,6 +12,7 @@ import { getSqlClient } from "@/lib/db/schema";
 import { getNextApiKey } from "@/lib/api-keys";
 import { resolveProviderUrl, resolveProviderAuth } from "@/lib/provider-resolver";
 import { computeNextExamAt, getLiveSuccessRate } from "@/lib/learning";
+import { costPolicyBlockMessage, isModelCostAllowed } from "@/lib/cost-policy";
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
 
@@ -894,6 +895,9 @@ async function askModel(
   question: ExamQuestion,
   supportsReasoning = false,
 ): Promise<AskResult> {
+  if (!isModelCostAllowed(provider, modelId)) {
+    return { answer: "", latency: 0, error: costPolicyBlockMessage(provider, modelId) };
+  }
   const url = resolveProviderUrl(provider);
   if (!url) return { answer: "", latency: 0, error: "unknown provider" };
 
@@ -1194,7 +1198,7 @@ export async function runExams(): Promise<{ examined: number; passed: number; fa
   //   (1) ไม่เคยสอบ
   //   (2) ถึงเวลา next_exam_at แล้ว (คำนวณจาก live success rate)
   //   (3) health available
-  const models = await sql<DbModel[]>`
+  const rows = await sql<DbModel[]>`
     WITH latest_attempt AS (
       SELECT DISTINCT ON (model_id)
         model_id, passed, finished_at, attempt_number, next_exam_at
@@ -1233,6 +1237,7 @@ export async function runExams(): Promise<{ examined: number; passed: number; fa
     ORDER BY la.attempt_number NULLS FIRST, m.provider, m.model_id
     LIMIT ${MAX_MODELS_PER_RUN}
   `;
+  const models = rows.filter((m) => isModelCostAllowed(m.provider, m.model_id));
   void RETEST_HOURS; // kept for backward compat
 
   if (models.length === 0) {

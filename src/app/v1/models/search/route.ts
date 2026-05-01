@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSqlClient } from "@/lib/db/schema";
+import { isModelCostAllowed } from "@/lib/cost-policy";
 
 export const dynamic = "force-dynamic";
 
@@ -115,7 +116,8 @@ export async function GET(req: NextRequest) {
       LIMIT ${top}
     `;
 
-    const rows = await sql.unsafe(query);
+    const rows = (await sql.unsafe(query) as Array<Record<string, unknown>>)
+      .filter((row) => isModelCostAllowed(String(row.provider), String(row.model_id)));
 
     return NextResponse.json({
       total: rows.length,

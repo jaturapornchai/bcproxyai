@@ -3,6 +3,7 @@ import { getNextApiKey, getAvailableProviders } from "@/lib/api-keys";
 import { emitEvent } from "@/lib/routing-learn";
 import { invalidateModelListCache } from "@/lib/model-list-cache";
 import { isProviderEnabled } from "@/lib/provider-toggle";
+import { isModelCostAllowed } from "@/lib/cost-policy";
 
 interface ModelRow {
   id: string;
@@ -947,6 +948,21 @@ export async function scanModels(): Promise<{ found: number; new: number; disapp
     await logWorker("scan", `ลบ model ไม่มี-key ล้มเหลว: ${err}`, "error");
   }
 
+  try {
+    const existing = await sql<{ id: string; provider: string; model_id: string }[]>`
+      SELECT id, provider, model_id FROM models
+    `;
+    const blockedIds = existing
+      .filter((m) => !isModelCostAllowed(m.provider, m.model_id))
+      .map((m) => m.id);
+    if (blockedIds.length > 0) {
+      await sql`DELETE FROM models WHERE id IN ${sql(blockedIds)}`;
+      await logWorker("scan", `🧹 ลบ ${blockedIds.length} model ที่ไม่อยู่ใน free model whitelist`, "warn");
+    }
+  } catch (err) {
+    await logWorker("scan", `ลบ model นอก free whitelist ล้มเหลว: ${err}`, "error");
+  }
+
   // Helper: ข้าม provider ที่ปิดเอง
   const guard = async <T>(name: string, fn: () => Promise<T[]>): Promise<T[]> => {
     if (!(await isProviderEnabled(name))) return [];
@@ -991,7 +1007,7 @@ export async function scanModels(): Promise<{ found: number; new: number; disapp
     guard("thaillm", fetchThaiLLMModels),
   ]);
 
-  const allModels = [
+  const rawModels = [
     ...orModels, ...kiloModels, ...googleModels, ...groqModels, ...cerebrasModels, ...sambaNovaModels,
     ...mistralModels, ...ollamaModels, ...githubModels, ...fireworksModels, ...cohereModels,
     ...cloudflareModels, ...hfModels, ...nvidiaModels,
@@ -999,6 +1015,7 @@ export async function scanModels(): Promise<{ found: number; new: number; disapp
     ...siliconflowModels, ...glhfModels, ...togetherModels, ...hyperbolicModels,
     ...zaiModels, ...dashscopeModels, ...rekaModels, ...typhoonModels, ...thaillmModels,
   ];
+  const allModels = rawModels.filter((m) => isModelCostAllowed(m.provider, m.model_id));
   const foundIds = new Set(allModels.map(m => m.id));
   let newCount = 0;
 

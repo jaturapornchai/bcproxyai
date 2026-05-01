@@ -26,7 +26,7 @@ import { emptyExplain, recordCandidate, stashExplain, consumeExplain, markWinner
 import { buildOpenAIStyleToolCallStreamChunks, extractRequestToolNames, repairJsonToolCallLeak, repairStreamedJsonToolCallLeak } from "@/lib/tool-call-repair";
 import { shouldSuppressToolsForSimpleChat } from "@/lib/tool-use-policy";
 import { analyzeRequestProfile, rankCandidatesByRequestProfile, scoreCandidateForRequest } from "@/lib/request-intelligence";
-import { costPolicyBlockMessage, isProviderCostAllowed } from "@/lib/cost-policy";
+import { costPolicyBlockMessage, isModelCostAllowed, isPaidProviderOverrideEnabled } from "@/lib/cost-policy";
 
 // ── Category mapping: routing category → exam question category ──
 const ROUTING_TO_EXAM_CAT: Record<string, string> = {
@@ -515,8 +515,9 @@ async function getAvailableModels(caps: RequestCapabilities, benchmarkCategory?:
       COALESCE(rs.avg_lat_real, ex.total_latency_ms::float, 9999999) ASC
   `) as ModelRow[];
 
-  modelListCache.set(ck, { rows: [...rows], exp: now + MODEL_LIST_TTL_MS });
-  return reorderForLatency(rows, estTokens);
+  const costAllowedRows = rows.filter((row) => isModelCostAllowed(row.provider, row.model_id));
+  modelListCache.set(ck, { rows: [...costAllowedRows], exp: now + MODEL_LIST_TTL_MS });
+  return reorderForLatency(costAllowedRows, estTokens);
 }
 
 // Pure sort tweak split out so cache hits can re-apply it cheaply.
@@ -715,6 +716,7 @@ function parseModelField(model: string): {
   if (model === "sml/tools") return { mode: "tools" };
   if (model === "sml/thai") return { mode: "thai" };
   if (model === "sml/consensus") return { mode: "consensus" };
+  if (model === "openrouter/free") return { mode: "direct", provider: "openrouter", modelId: "openrouter/free" };
 
   const providerMatch = model.match(/^(thaillm|typhoon|openrouter|kilo|google|groq|cerebras|sambanova|mistral|ollama|github|fireworks|cohere|cloudflare|huggingface|nvidia|chutes|llm7|scaleway|pollinations|ollamacloud|siliconflow|glhf|together|hyperbolic|zai|dashscope|reka)\/(.+)$/);
   if (providerMatch) return { mode: "direct", provider: providerMatch[1], modelId: providerMatch[2] };
@@ -730,7 +732,7 @@ async function getAllModelsIncludingCooldown(caps: RequestCapabilities): Promise
     ? "CASE WHEN m.provider IN ('google','groq','ollama') THEN 0 ELSE 1 END ASC, RANDOM()"
     : "RANDOM()";
 
-  return await sql.unsafe(`
+  const rows = await sql.unsafe(`
     SELECT m.id, m.provider, m.model_id, m.supports_tools, m.supports_vision, m.tier, m.context_length,
       COALESCE(ex.score_pct, 0) as avg_score, COALESCE(ex.total_latency_ms::float, 9999999) as avg_latency
     FROM models m
@@ -748,6 +750,7 @@ async function getAllModelsIncludingCooldown(caps: RequestCapabilities): Promise
     ORDER BY ${orderClause}
     LIMIT 20
   `) as ModelRow[];
+  return rows.filter((row) => isModelCostAllowed(row.provider, row.model_id));
 }
 
 async function selectModelsByMode(
@@ -793,7 +796,7 @@ async function selectModelsByMode(
         COALESCE(rs.avg_lat_real, ex.total_latency_ms::float, 9999999) ASC,
         ex.score_pct DESC
     `) as ModelRow[];
-    return fastRows;
+    return fastRows.filter((row) => isModelCostAllowed(row.provider, row.model_id));
   }
 
   if (mode === "tools") {
@@ -832,8 +835,8 @@ async function forwardToProvider(
   externalSignal?: AbortSignal,
   opts: { supportsReasoning?: boolean } = {},
 ): Promise<Response> {
-  if (!isProviderCostAllowed(provider)) {
-    throw new Error(costPolicyBlockMessage(provider));
+  if (!isModelCostAllowed(provider, actualModelId)) {
+    throw new Error(costPolicyBlockMessage(provider, actualModelId));
   }
 
   const url = resolveProviderUrl(provider);
@@ -859,6 +862,13 @@ async function forwardToProvider(
   }
 
   const requestBody: Record<string, unknown> = { ...body, model: actualModelId };
+  if (!isPaidProviderOverrideEnabled() && provider === "openrouter") {
+    const paidFeatureKeys = ["plugins", "web_search_options", "web_search", "search"];
+    const paidFeature = paidFeatureKeys.find((key) => requestBody[key] !== undefined);
+    if (paidFeature) {
+      throw new Error(`OpenRouter paid add-on '${paidFeature}' is blocked in no-spend mode`);
+    }
+  }
   const attemptToolNames = extractRequestToolNames(requestBody);
   if (shouldSuppressToolsForSimpleChat(requestBody, attemptToolNames)) {
     delete requestBody.tools;
@@ -1428,7 +1438,7 @@ export async function POST(req: NextRequest) {
       const userMsg = extractUserMessage(body);
       const consensusStart = Date.now();
 
-      const allModels = (await getAvailableModels(caps)).filter((m) => isProviderCostAllowed(m.provider));
+      const allModels = (await getAvailableModels(caps)).filter((m) => isModelCostAllowed(m.provider, m.model_id));
       const picked: ModelRow[] = [];
       const usedProviders = new Set<string>();
       for (const m of allModels) {
@@ -1493,9 +1503,9 @@ export async function POST(req: NextRequest) {
     // ---- Direct provider routing ----
     if (parsed.mode === "direct") {
       const { provider, modelId } = parsed;
-      if (!isProviderCostAllowed(provider!)) {
+      if (!isModelCostAllowed(provider!, modelId)) {
         return openAIError(402, {
-          message: costPolicyBlockMessage(provider!),
+          message: costPolicyBlockMessage(provider!, modelId),
           code: "cost_policy_blocked",
           param: "model",
         });
@@ -1529,9 +1539,9 @@ export async function POST(req: NextRequest) {
       }
 
       const row = rows[0];
-      if (!isProviderCostAllowed(row.provider)) {
+      if (!isModelCostAllowed(row.provider, row.model_id)) {
         return openAIError(402, {
-          message: costPolicyBlockMessage(row.provider),
+          message: costPolicyBlockMessage(row.provider, row.model_id),
           code: "cost_policy_blocked",
           param: "model",
         });
@@ -1615,7 +1625,7 @@ export async function POST(req: NextRequest) {
     const blockedProviders = new Set<string>();
 
     // กรอง provider ที่ไม่มี API key ออก (ใช้งานไม่ได้แน่นอน)
-    finalCandidates = finalCandidates.filter(c => hasProviderKey(c.provider));
+    finalCandidates = finalCandidates.filter(c => hasProviderKey(c.provider) && isModelCostAllowed(c.provider, c.model_id));
     // กรอง provider ที่ผู้ใช้ปิดเองผ่าน UI
     finalCandidates = finalCandidates.filter(c => isProviderEnabledSync(c.provider));
 

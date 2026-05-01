@@ -3,7 +3,7 @@ import { getNextApiKey } from "@/lib/api-keys";
 import { resolveProviderUrl } from "@/lib/provider-resolver";
 import { invalidateModelListCache } from "@/lib/model-list-cache";
 import { upstreamAgent } from "@/lib/upstream-agent";
-import { costPolicyBlockMessage, isProviderCostAllowed } from "@/lib/cost-policy";
+import { costPolicyBlockMessage, isModelCostAllowed } from "@/lib/cost-policy";
 
 async function logWorker(step: string, message: string, level = "info") {
   try {
@@ -40,8 +40,8 @@ export function isNonChatModel(modelId: string): boolean {
 export async function pingModel(
   model: DbModel
 ): Promise<{ status: string; latency: number; error?: string; isNonChat?: boolean }> {
-  if (!isProviderCostAllowed(model.provider)) {
-    return { status: "error", latency: 0, error: costPolicyBlockMessage(model.provider) };
+  if (!isModelCostAllowed(model.provider, model.model_id)) {
+    return { status: "error", latency: 0, error: costPolicyBlockMessage(model.provider, model.model_id) };
   }
 
   const url = resolveProviderUrl(model.provider);
@@ -143,7 +143,7 @@ const TINY_PNG_BASE64 =
 export async function testVisionSupport(
   model: DbModel
 ): Promise<0 | 1 | -1> {
-  if (!isProviderCostAllowed(model.provider)) return -1;
+  if (!isModelCostAllowed(model.provider, model.model_id)) return -1;
 
   const url = resolveProviderUrl(model.provider);
   if (!url) return -1;
@@ -211,7 +211,7 @@ export async function testVisionSupport(
 export async function testToolSupport(
   model: DbModel
 ): Promise<0 | 1 | -1> {
-  if (!isProviderCostAllowed(model.provider)) return -1;
+  if (!isModelCostAllowed(model.provider, model.model_id)) return -1;
 
   const url = resolveProviderUrl(model.provider);
   if (!url) return -1;

@@ -5,6 +5,7 @@ import { isOwnerEmail, hasOwners } from "@/lib/admin-emails";
 import { ADMIN_COOKIE_NAME, adminPasswordEnabled, verifyAdminCookie } from "@/lib/admin-cookie";
 import { timingSafeStringEqual } from "@/lib/secret-compare";
 import { getNextApiKey } from "@/lib/api-keys";
+import { costPolicyBlockMessage, isModelCostAllowed } from "@/lib/cost-policy";
 import { resolveProviderUrl } from "@/lib/provider-resolver";
 import { upstreamAgent } from "@/lib/upstream-agent";
 
@@ -99,6 +100,9 @@ export async function POST(req: NextRequest) {
 
   const results = await Promise.all(candidates.map(async (c) => {
     if (!c.provider || !c.model) return { ...c, ok: false, error: "missing provider/model" };
+    if (!isModelCostAllowed(c.provider, c.model)) {
+      return { ...c, ok: false, status: 402, error: costPolicyBlockMessage(c.provider, c.model) };
+    }
     const url = resolveProviderUrl(c.provider);
     if (!url) return { ...c, ok: false, error: "unknown provider" };
     const apiKey = getNextApiKey(c.provider);

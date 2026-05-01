@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSqlClient } from "@/lib/db/schema";
 import { getCached, setCache } from "@/lib/cache";
+import { isModelCostAllowed } from "@/lib/cost-policy";
 
 export const dynamic = "force-dynamic";
 
@@ -74,7 +75,7 @@ export async function GET(req: NextRequest) {
     }
 
     const now = new Date();
-    const result = rows.map((r) => {
+    const result = rows.filter((r) => isModelCostAllowed(String(r.provider), String(r.modelId))).map((r) => {
       let healthStatusFinal = (r.healthStatus as string) ?? "unknown";
       if (r.cooldownUntil && new Date(r.cooldownUntil as string) > now) {
         healthStatusFinal = "cooldown";

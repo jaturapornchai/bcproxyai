@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { getNextApiKey } from "@/lib/api-keys";
 import { resolveProviderUrl } from "@/lib/provider-resolver";
-import { costPolicyBlockMessage, isProviderCostAllowed } from "@/lib/cost-policy";
+import { costPolicyBlockMessage, isModelCostAllowed } from "@/lib/cost-policy";
 
 export const dynamic = "force-dynamic";
 
@@ -27,8 +27,8 @@ export async function POST(req: NextRequest) {
     if (!modelId || !provider || !messages?.length) {
       return new Response(JSON.stringify({ error: "Missing fields" }), { status: 400 });
     }
-    if (!isProviderCostAllowed(provider)) {
-      return new Response(JSON.stringify({ error: costPolicyBlockMessage(provider) }), { status: 402 });
+    if (!isModelCostAllowed(provider, modelId)) {
+      return new Response(JSON.stringify({ error: costPolicyBlockMessage(provider, modelId) }), { status: 402 });
     }
 
     const url = resolveProviderUrl(provider);

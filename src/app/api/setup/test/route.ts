@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSqlClient } from "@/lib/db/schema";
+import { costPolicyBlockMessage, isProviderCostAllowed } from "@/lib/cost-policy";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +22,9 @@ export async function POST(req: NextRequest) {
   const { provider, apiKey } = await req.json();
   if (!provider || typeof provider !== "string") {
     return NextResponse.json({ ok: false, error: "Missing provider" }, { status: 400 });
+  }
+  if (!isProviderCostAllowed(provider)) {
+    return NextResponse.json({ ok: false, error: costPolicyBlockMessage(provider) }, { status: 402 });
   }
 
   const sql = getSqlClient();

@@ -1,7 +1,7 @@
 import { getSqlClient } from "@/lib/db/schema";
 import { getNextApiKey } from "@/lib/api-keys";
 import { resolveProviderUrl } from "@/lib/provider-resolver";
-import { costPolicyBlockMessage, isProviderCostAllowed } from "@/lib/cost-policy";
+import { costPolicyBlockMessage, isModelCostAllowed } from "@/lib/cost-policy";
 
 // DeepSeek as judge (cheap + reliable) — key resolved from DB at call time
 const DEEPSEEK_MODEL = "deepseek-chat";
@@ -139,8 +139,8 @@ export async function askModel(
   question: string,
   options?: { imageUrl?: string }
 ): Promise<{ answer: string; latency: number; error?: string }> {
-  if (!isProviderCostAllowed(provider)) {
-    return { answer: "", latency: 0, error: costPolicyBlockMessage(provider) };
+  if (!isModelCostAllowed(provider, modelId)) {
+    return { answer: "", latency: 0, error: costPolicyBlockMessage(provider, modelId) };
   }
 
   const url = resolveProviderUrl(provider);
@@ -204,7 +204,7 @@ export async function judgeAnswer(
 
   // Try DeepSeek first (cheap + reliable)
   const deepseekKey = getNextApiKey("deepseek");
-  if (deepseekKey && isProviderCostAllowed("deepseek")) {
+  if (deepseekKey && isModelCostAllowed("deepseek", DEEPSEEK_MODEL)) {
     try {
       const res = await fetch(resolveProviderUrl("deepseek"), {
         method: "POST",
@@ -239,7 +239,7 @@ export async function judgeAnswer(
 
   // Fallback: free models from OpenRouter
   for (const judgeModel of FALLBACK_JUDGE_MODELS) {
-    if (!isProviderCostAllowed("openrouter")) break;
+    if (!isModelCostAllowed("openrouter", judgeModel)) continue;
     try {
       const res = await fetch(resolveProviderUrl("openrouter"), {
         method: "POST",
@@ -316,7 +316,9 @@ export async function runBenchmarks(): Promise<{
 
   let totalQuestions = 0;
   let testedModels = 0;
-  let lastJudgeModel = getNextApiKey("deepseek") ? DEEPSEEK_MODEL : FALLBACK_JUDGE_MODELS[0];
+  let lastJudgeModel = isModelCostAllowed("deepseek", DEEPSEEK_MODEL) && getNextApiKey("deepseek")
+    ? DEEPSEEK_MODEL
+    : FALLBACK_JUDGE_MODELS[0];
 
   // CONCURRENCY=8 keeps benchmark from hogging the 20-conn PG pool while
   // /v1/chat/completions traffic is still flowing. Each worker takes 2-3

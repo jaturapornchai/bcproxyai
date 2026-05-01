@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSqlClient } from "@/lib/db/schema";
 import { getAllProviderToggles } from "@/lib/provider-toggle";
+import { isProviderCostAllowed } from "@/lib/cost-policy";
 
 export const dynamic = "force-dynamic";
 
@@ -79,7 +80,7 @@ export async function GET(req: NextRequest) {
 
     const toggleMap = await getAllProviderToggles();
 
-    const providers = catalogRows.map(c => {
+    const providers = catalogRows.filter((c) => isProviderCostAllowed(c.name)).map(c => {
       const provider = c.name;
       const noKeyRequired = NO_KEY_REQUIRED.has(provider);
       const dbKey = dbKeys.get(provider) ?? "";

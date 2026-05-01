@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSqlClient } from "@/lib/db/schema";
 import { openAIError, toOpenAIModelObject, unixNow } from "@/lib/openai-compat";
+import { isModelCostAllowed } from "@/lib/cost-policy";
 
 export const dynamic = "force-dynamic";
 
@@ -49,7 +50,7 @@ export async function GET(_req: NextRequest) {
       ORDER BY avg_score DESC, m.provider ASC, m.name ASC
     `;
 
-    const realModels = rows.map((row) => {
+    const realModels = rows.filter((row) => isModelCostAllowed(row.provider, row.model_id)).map((row) => {
       const created = row.first_seen
         ? Math.floor(new Date(row.first_seen).getTime() / 1000)
         : unixNow();

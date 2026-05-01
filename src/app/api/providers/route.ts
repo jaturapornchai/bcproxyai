@@ -80,8 +80,10 @@ export async function GET(req: NextRequest) {
 
     const toggleMap = await getAllProviderToggles();
 
-    const providers = catalogRows.filter((c) => isProviderCostAllowed(c.name)).map(c => {
+    const riskyProviders = catalogRows.filter((c) => !isProviderCostAllowed(c.name)).length;
+    const providers = catalogRows.map(c => {
       const provider = c.name;
+      const costAllowed = isProviderCostAllowed(provider);
       const noKeyRequired = NO_KEY_REQUIRED.has(provider);
       const dbKey = dbKeys.get(provider) ?? "";
       const hasDbKey = dbKey.length > 0;
@@ -117,6 +119,11 @@ export async function GET(req: NextRequest) {
         verifyNotes: c.verify_notes ?? "",
         lastVerifiedAt: c.last_verified_at ? c.last_verified_at.toISOString() : null,
         publicModelsCount: c.public_models_count,
+        costAllowed,
+        costRiskLevel: costAllowed ? "safe" : "billable",
+        costRiskMessage: costAllowed
+          ? "อยู่ใน whitelist ฟรีของ gateway"
+          : "อยู่นอก whitelist ฟรี: provider นี้อาจตัดเครดิตหรือคิดเงินเมื่อทดสอบ/ใช้งาน",
         hasKey,
         hasDbKey,
         noKeyRequired,
@@ -127,7 +134,9 @@ export async function GET(req: NextRequest) {
       };
     });
 
-    return NextResponse.json(providers);
+    const res = NextResponse.json(providers);
+    res.headers.set("X-SMLGateway-Risky-Providers", String(riskyProviders));
+    return res;
   } catch (err) {
     console.error("[providers] error:", err);
     return NextResponse.json([], { status: 500 });

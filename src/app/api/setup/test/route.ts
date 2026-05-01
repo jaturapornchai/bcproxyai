@@ -19,11 +19,11 @@ interface CatalogRow {
 }
 
 export async function POST(req: NextRequest) {
-  const { provider, apiKey } = await req.json();
+  const { provider, apiKey, acceptCostRisk } = await req.json();
   if (!provider || typeof provider !== "string") {
     return NextResponse.json({ ok: false, error: "Missing provider" }, { status: 400 });
   }
-  if (!isProviderCostAllowed(provider)) {
+  if (!isProviderCostAllowed(provider) && acceptCostRisk !== true) {
     return NextResponse.json({ ok: false, error: costPolicyBlockMessage(provider) }, { status: 402 });
   }
 

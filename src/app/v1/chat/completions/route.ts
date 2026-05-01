@@ -1323,6 +1323,18 @@ export async function POST(req: NextRequest) {
       } catch { /* non-critical */ }
     }
 
+    if (!isPaidProviderOverrideEnabled()) {
+      const paidAddonKeys = ["plugins", "web_search_options", "web_search", "search"];
+      const paidAddon = paidAddonKeys.find((key) => body[key] !== undefined);
+      if (paidAddon) {
+        return openAIError(402, {
+          message: `Paid add-on '${paidAddon}' is blocked in no-spend mode`,
+          code: "cost_policy_blocked",
+          param: paidAddon,
+        });
+      }
+    }
+
     const modelField = (body.model as string) || "auto";
     const isStream = body.stream === true;
     const caps = detectRequestCapabilities(body);

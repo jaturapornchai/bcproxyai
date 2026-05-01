@@ -27,6 +27,9 @@ interface ProviderStatus {
   verifyNotes?: string;
   lastVerifiedAt?: string | null;
   publicModelsCount?: number | null;
+  costAllowed: boolean;
+  costRiskLevel: "safe" | "billable";
+  costRiskMessage: string;
 }
 
 // Provider "ของไทย" = notes / label / name มีคำว่า "thai" (case-insensitive)
@@ -59,10 +62,15 @@ export default function SetupPage() {
   const [testResult, setTestResult] = useState<Record<string, { ok?: boolean; models?: number; error?: string; warn?: string } | undefined>>({});
   const [scanning, setScanning] = useState(false);
   const [filter, setFilter] = useState<"all" | "active" | "no_key" | "free" | "thai" | "broken">("all");
+  const [riskyProviderCount, setRiskyProviderCount] = useState(0);
+  const [acceptedRisk, setAcceptedRisk] = useState<Record<string, boolean>>({});
 
   const fetchStatuses = useCallback(() => {
     fetch("/api/providers")
-      .then((r) => r.json())
+      .then(async (r) => {
+        setRiskyProviderCount(Number(r.headers.get("X-SMLGateway-Risky-Providers") ?? 0));
+        return r.json();
+      })
       .then((d) => { if (Array.isArray(d)) setStatuses(d); })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -79,6 +87,8 @@ export default function SetupPage() {
   const handleTestAndSave = async (provider: string) => {
     const apiKey = keyInputs[provider]?.trim();
     if (!apiKey) return;
+    const status = statuses.find((s) => s.provider === provider);
+    if (status && !status.costAllowed && !acceptedRisk[provider]) return;
     setTesting((p) => ({ ...p, [provider]: true }));
     setTestResult((p) => ({ ...p, [provider]: undefined }));
     setSaveResult((p) => ({ ...p, [provider]: undefined }));
@@ -87,7 +97,7 @@ export default function SetupPage() {
       const res = await fetch("/api/setup/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider, apiKey }),
+        body: JSON.stringify({ provider, apiKey, acceptCostRisk: acceptedRisk[provider] === true }),
       });
       testData = await res.json();
       setTestResult((p) => ({ ...p, [provider]: testData }));
@@ -227,7 +237,7 @@ export default function SetupPage() {
       <main className="max-w-6xl mx-auto px-4 py-6 space-y-4">
         {/* Quick start guide */}
         <section className="rounded-xl border border-indigo-500/20 bg-gradient-to-r from-indigo-500/5 to-cyan-500/5 p-4">
-          <div className="text-sm font-bold text-indigo-300 mb-2">เริ่มต้นง่ายๆ 3 ขั้น (ฟรีทุกผู้ให้บริการ)</div>
+          <div className="text-sm font-bold text-indigo-300 mb-2">เริ่มต้นง่ายๆ 3 ขั้น (โหมดฟรีเท่านั้น)</div>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs text-gray-300">
             <div className="flex items-start gap-2">
               <span className="text-lg leading-none shrink-0">1️⃣</span>
@@ -242,6 +252,13 @@ export default function SetupPage() {
               <span>กด <strong className="text-amber-300">ค้นหา model ตอนนี้</strong> ที่มุมขวาบน → ระบบค้นหา model ให้</span>
             </div>
           </div>
+          {riskyProviderCount > 0 && (
+            <div className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-100">
+              แสดงผู้ให้บริการทั้งหมดแล้ว แต่มี {riskyProviderCount} รายการที่อยู่นอก whitelist ฟรีและอาจตัดเครดิต/คิดเงิน.
+              ถ้าจะทดลอง provider เสี่ยง ให้ใช้ email/account ใหม่ที่ไม่ผูกบัตร ไม่มีเครดิตเติมเงิน และแยกจากบัญชีหลัก.
+              Gateway จะไม่ route ใช้งานจริงให้ provider เสี่ยงจนกว่าจะตั้งค่า whitelist/paid mode เอง.
+            </div>
+          )}
         </section>
 
         {/* Filter chips */}
@@ -332,6 +349,13 @@ export default function SetupPage() {
                         <span className="font-bold text-white">{st.label}</span>
                         {st.freeTier && <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-500/15 text-cyan-300 border border-cyan-500/20">🆓 ฟรี</span>}
                         <span className={`text-[10px] px-2 py-0.5 rounded-full border ${statusBadge.cls}`}>{statusBadge.text}</span>
+                        {st.costAllowed ? (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/20">ปลอดภัยตาม whitelist</span>
+                        ) : (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/15 text-red-300 border border-red-500/25" title={st.costRiskMessage}>
+                            เสี่ยงเสียเงิน
+                          </span>
+                        )}
                         {st.homepageOk === false && (
                           <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/25" title={`homepage HTTP ${st.homepageStatusCode ?? "?"} — ${st.verifyNotes ?? ""}`}>
                             ⚠️ ลิงก์สมัครเสีย
@@ -390,6 +414,22 @@ export default function SetupPage() {
                     </div>
                   ) : (
                     <div className="space-y-2">
+                      {!st.costAllowed && (
+                        <div className="rounded-lg border border-red-500/25 bg-red-500/10 p-2 text-[11px] text-red-100 space-y-1">
+                          <div className="font-bold text-red-200">คำเตือน: provider นี้อาจตัดเครดิต/คิดเงิน</div>
+                          <div>{st.costRiskMessage}</div>
+                          <div>แนะนำให้สมัครด้วย email/account ใหม่ที่ไม่ผูกบัตรและไม่มีเครดิตเติมเงิน เพื่อกันเงินรั่วจากบัญชีหลัก.</div>
+                          <label className="flex items-start gap-2 pt-1 text-red-50">
+                            <input
+                              type="checkbox"
+                              checked={acceptedRisk[st.provider] === true}
+                              onChange={(e) => setAcceptedRisk((p) => ({ ...p, [st.provider]: e.target.checked }))}
+                              className="mt-0.5"
+                            />
+                            <span>ฉันเข้าใจความเสี่ยง และยืนยันว่าจะทดสอบ/บันทึก provider นี้ด้วยความรับผิดชอบของฉันเอง</span>
+                          </label>
+                        </div>
+                      )}
                       <div className="flex items-center gap-2">
                         <input
                           type="password"
@@ -404,7 +444,7 @@ export default function SetupPage() {
                         />
                         <button
                           onClick={() => handleTestAndSave(st.provider)}
-                          disabled={isTesting || isSaving || !(keyInputs[st.provider]?.trim())}
+                          disabled={isTesting || isSaving || !(keyInputs[st.provider]?.trim()) || (!st.costAllowed && acceptedRisk[st.provider] !== true)}
                           title="ทดสอบรหัส ถ้าใช้ได้จะบันทึกให้อัตโนมัติ"
                           className="px-4 py-2 rounded-lg bg-gradient-to-r from-cyan-600 to-emerald-600 hover:from-cyan-500 hover:to-emerald-500 text-white text-xs font-bold disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                         >

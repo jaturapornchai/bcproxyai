@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { extractRequestToolNames, repairJsonToolCallLeak } from "@/lib/tool-call-repair";
+import { buildOpenAIStyleToolCallStreamChunks, extractRequestToolNames, repairJsonToolCallLeak, repairStreamedJsonToolCallLeak } from "@/lib/tool-call-repair";
 
 const TOOLS = new Set(["brain_search", "send_email"]);
 
@@ -128,5 +128,66 @@ describe("repairJsonToolCallLeak", () => {
     const result = repairJsonToolCallLeak(content, TOOLS);
     expect(result).toHaveLength(1);
     expect(result![0].function.name).toBe("brain_search");
+  });
+});
+
+describe("repairStreamedJsonToolCallLeak", () => {
+  const streamTools = new Set(["SendMessage"]);
+
+  it("repairs thClaws streamed SendMessage JSON split across chunks", () => {
+    const streamText = [
+      'data: {"id":"chatcmpl_1","object":"chat.completion.chunk","created":1,"model":"x","choices":[{"index":0,"delta":{"content":"{\\"type\\": \\"function\\", "},"finish_reason":null}]}',
+      "",
+      'data: {"id":"chatcmpl_1","object":"chat.completion.chunk","created":1,"model":"x","choices":[{"index":0,"delta":{"content":"\\"name\\": \\"SendMessage\\", \\"parameters\\": {\\"to\\": \\"*\\", \\"text\\": \\"สวัสดี\\"}}"},"finish_reason":null}]}',
+      "",
+      'data: {"id":"chatcmpl_1","object":"chat.completion.chunk","created":1,"model":"x","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}',
+      "",
+      "data: [DONE]",
+      "",
+    ].join("\n");
+
+    const result = repairStreamedJsonToolCallLeak(streamText, streamTools);
+    expect(result).not.toBeNull();
+    expect(result!.source.id).toBe("chatcmpl_1");
+    expect(result!.repaired).toHaveLength(1);
+    expect(result!.repaired[0].function.name).toBe("SendMessage");
+    expect(JSON.parse(result!.repaired[0].function.arguments)).toEqual({ to: "*", text: "สวัสดี" });
+  });
+
+  it("returns null for normal streamed content", () => {
+    const streamText = 'data: {"choices":[{"delta":{"content":"สวัสดีครับ"},"finish_reason":null}]}\n\ndata: [DONE]\n\n';
+    expect(repairStreamedJsonToolCallLeak(streamText, streamTools)).toBeNull();
+  });
+
+  it("returns null when the streamed tool name was not requested", () => {
+    const streamText = 'data: {"choices":[{"delta":{"content":"{\\"name\\":\\"SendMessage\\",\\"parameters\\":{}}"},"finish_reason":null}]}\n\ndata: [DONE]\n\n';
+    expect(repairStreamedJsonToolCallLeak(streamText, new Set(["OtherTool"]))).toBeNull();
+  });
+});
+
+describe("buildOpenAIStyleToolCallStreamChunks", () => {
+  it("emits OpenAI-style streaming tool-call deltas", () => {
+    const chunks = buildOpenAIStyleToolCallStreamChunks([{
+      id: "call_abc",
+      type: "function",
+      function: { name: "SendMessage", arguments: "{\"to\":\"*\",\"text\":\"hello\"}" },
+    }], { id: "chatcmpl_1", created: 1, model: "x" });
+
+    const events = chunks
+      .filter(chunk => chunk.startsWith("data: {"))
+      .map(chunk => JSON.parse(chunk.slice("data: ".length)));
+    expect(events).toHaveLength(3);
+    expect(events[0].choices[0].delta.tool_calls[0]).toEqual({
+      index: 0,
+      id: "call_abc",
+      type: "function",
+      function: { name: "SendMessage", arguments: "" },
+    });
+    expect(events[1].choices[0].delta.tool_calls[0]).toEqual({
+      index: 0,
+      function: { arguments: "{\"to\":\"*\",\"text\":\"hello\"}" },
+    });
+    expect(events[2].choices[0].finish_reason).toBe("tool_calls");
+    expect(chunks.at(-1)).toBe("data: [DONE]\n\n");
   });
 });

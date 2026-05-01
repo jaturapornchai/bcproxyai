@@ -4,6 +4,7 @@ import { setProviderEnabled, getAllProviderToggles } from "@/lib/provider-toggle
 import { triggerExamForProvider } from "@/lib/worker/exam";
 import { runWorkerCycle } from "@/lib/worker";
 import { seal as sealSecret, open as openSecret } from "@/lib/secret-vault";
+import { invalidateApiKeyCache } from "@/lib/api-keys";
 
 export const dynamic = "force-dynamic";
 
@@ -64,6 +65,7 @@ export async function POST(req: NextRequest) {
 
     if (!apiKey || apiKey.trim() === "") {
       await sql`DELETE FROM api_keys WHERE provider = ${provider}`;
+      invalidateApiKeyCache();
       return NextResponse.json({ ok: true, action: "deleted" });
     }
 
@@ -76,6 +78,7 @@ export async function POST(req: NextRequest) {
       VALUES (${provider}, ${stored}, now())
       ON CONFLICT (provider) DO UPDATE SET api_key = EXCLUDED.api_key, updated_at = now()
     `;
+    invalidateApiKeyCache();
 
     // ใส่ key ใหม่ → ให้ model ที่เคยตก/รอ schedule ของ provider นี้ค่อยสอบใหม่ทันที
     // (กันสอบวน: เฉพาะ attempt ที่เก่ากว่า 5 นาที + worker cycle ตรวจซ้ำอีกชั้น)

@@ -11,6 +11,7 @@
 import { getSqlClient } from "@/lib/db/schema";
 import { getAllProviderNames } from "@/lib/provider-resolver";
 import { open as openSealed } from "@/lib/secret-vault";
+import { isProviderCostAllowed } from "@/lib/cost-policy";
 
 const NO_KEY_REQUIRED = new Set(["ollama", "pollinations"]);
 
@@ -21,29 +22,44 @@ const cooldownMap = new Map<string, number>(); // "provider:key" -> cooldown unt
 // Cache DB keys for 30s to avoid hitting DB on every request
 let dbKeysCache: Record<string, string> = {};
 let dbKeysCacheTime = 0;
-let dbKeysFetchInProgress = false;
+let dbKeysRefreshPromise: Promise<void> | null = null;
 
 async function refreshDbKeys(): Promise<void> {
-  if (dbKeysFetchInProgress) return;
-  dbKeysFetchInProgress = true;
-  try {
-    const sql = getSqlClient();
-    const rows = await sql<{ provider: string; api_key: string }[]>`
-      SELECT provider, api_key FROM api_keys
-    `;
-    const next: Record<string, string> = {};
-    for (const r of rows) {
-      // openSealed is a no-op for legacy plaintext rows + decrypts the
-      // enc:v1:* blobs written by /api/setup once APP_ENCRYPTION_KEY is set.
-      next[r.provider] = openSealed(r.api_key);
+  if (dbKeysRefreshPromise) return dbKeysRefreshPromise;
+
+  dbKeysRefreshPromise = (async () => {
+    try {
+      const sql = getSqlClient();
+      const rows = await sql<{ provider: string; api_key: string }[]>`
+        SELECT provider, api_key FROM api_keys
+      `;
+      const next: Record<string, string> = {};
+      for (const r of rows) {
+        // openSealed is a no-op for legacy plaintext rows + decrypts the
+        // enc:v1:* blobs written by /api/setup once APP_ENCRYPTION_KEY is set.
+        next[r.provider] = openSealed(r.api_key);
+      }
+      dbKeysCache = next;
+      dbKeysCacheTime = Date.now();
+    } catch {
+      // ignore
+    } finally {
+      dbKeysRefreshPromise = null;
     }
-    dbKeysCache = next;
-    dbKeysCacheTime = Date.now();
-  } catch {
-    // ignore
-  } finally {
-    dbKeysFetchInProgress = false;
-  }
+  })();
+
+  return dbKeysRefreshPromise;
+}
+
+export async function ensureApiKeysLoaded(): Promise<void> {
+  const now = Date.now();
+  if (dbKeysCacheTime > 0 && now - dbKeysCacheTime <= 30_000) return;
+  await refreshDbKeys();
+}
+
+export function invalidateApiKeyCache(): void {
+  dbKeysCache = {};
+  dbKeysCacheTime = 0;
 }
 
 function getDbKeySync(provider: string): string {
@@ -68,6 +84,8 @@ function cleanExpired() {
 
 export function getNextApiKey(provider: string): string {
   cleanExpired();
+
+  if (!isProviderCostAllowed(provider)) return "";
 
   const raw = getDbKeySync(provider);
   const keys = raw.split(",").map((k) => k.trim()).filter(Boolean);
@@ -99,6 +117,7 @@ export function markKeyCooldown(provider: string, key: string, durationMs = 3000
  * (DB only — ไม่อ่าน process.env)
  */
 export function hasProviderKey(provider: string): boolean {
+  if (!isProviderCostAllowed(provider)) return false;
   if (NO_KEY_REQUIRED.has(provider)) return true;
   return getNextApiKey(provider).length > 0;
 }

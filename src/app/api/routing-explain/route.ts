@@ -23,6 +23,37 @@ interface Row {
   created_at: string;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeRoutingExplain(value: unknown) {
+  if (!isRecord(value)) return null;
+  const selected = isRecord(value.selected)
+    ? {
+        provider: typeof value.selected.provider === "string" ? value.selected.provider : "",
+        model: typeof value.selected.model === "string" ? value.selected.model : "",
+        reason: typeof value.selected.reason === "string" ? value.selected.reason : "",
+      }
+    : null;
+
+  return {
+    mode: typeof value.mode === "string" ? value.mode : "unknown",
+    category: typeof value.category === "string" ? value.category : null,
+    candidates: Array.isArray(value.candidates)
+      ? value.candidates.filter(isRecord).map((c) => ({
+          provider: typeof c.provider === "string" ? c.provider : "",
+          model: typeof c.model === "string" ? c.model : "",
+          accepted: c.accepted === true,
+          reason: typeof c.reason === "string" ? c.reason : "rejected:other",
+          detail: typeof c.detail === "string" ? c.detail : undefined,
+        }))
+      : [],
+    selected,
+    fallbackUsed: value.fallbackUsed === true,
+  };
+}
+
 export async function GET(req: Request) {
   try {
     const url = new URL(req.url);
@@ -55,7 +86,7 @@ export async function GET(req: Request) {
         provider: r.provider,
         status: r.status,
         latencyMs: r.latency_ms,
-        explain: r.routing_explain,
+        explain: normalizeRoutingExplain(r.routing_explain),
         at: r.created_at,
       })),
     });

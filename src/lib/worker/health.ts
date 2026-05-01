@@ -2,6 +2,8 @@ import { getSqlClient } from "@/lib/db/schema";
 import { getNextApiKey } from "@/lib/api-keys";
 import { resolveProviderUrl } from "@/lib/provider-resolver";
 import { invalidateModelListCache } from "@/lib/model-list-cache";
+import { upstreamAgent } from "@/lib/upstream-agent";
+import { costPolicyBlockMessage, isProviderCostAllowed } from "@/lib/cost-policy";
 
 async function logWorker(step: string, message: string, level = "info") {
   try {
@@ -21,9 +23,27 @@ interface DbModel {
   supports_vision: number;
 }
 
+export function isNonChatModel(modelId: string): boolean {
+  const s = modelId.toLowerCase();
+  return (
+    s.includes("whisper") ||
+    s.includes("lyria") ||
+    s.includes("orpheus") ||
+    s.includes("tts") ||
+    s.includes("prompt-guard") ||
+    s.includes("safeguard") ||
+    s.includes("compound") ||
+    s.includes("allam")
+  );
+}
+
 export async function pingModel(
   model: DbModel
 ): Promise<{ status: string; latency: number; error?: string; isNonChat?: boolean }> {
+  if (!isProviderCostAllowed(model.provider)) {
+    return { status: "error", latency: 0, error: costPolicyBlockMessage(model.provider) };
+  }
+
   const url = resolveProviderUrl(model.provider);
   if (!url) return { status: "error", latency: 0, error: "unknown provider" };
 
@@ -123,6 +143,8 @@ const TINY_PNG_BASE64 =
 export async function testVisionSupport(
   model: DbModel
 ): Promise<0 | 1 | -1> {
+  if (!isProviderCostAllowed(model.provider)) return -1;
+
   const url = resolveProviderUrl(model.provider);
   if (!url) return -1;
 
@@ -189,6 +211,8 @@ export async function testVisionSupport(
 export async function testToolSupport(
   model: DbModel
 ): Promise<0 | 1 | -1> {
+  if (!isProviderCostAllowed(model.provider)) return -1;
+
   const url = resolveProviderUrl(model.provider);
   if (!url) return -1;
 
@@ -287,7 +311,15 @@ export async function checkHealth(): Promise<{
       )
   `;
 
-  const eligible = models;
+  const knownNonChat = models.filter((m) => isNonChatModel(m.model_id));
+  for (const model of knownNonChat) {
+    try {
+      await sql`UPDATE models SET supports_audio_output = 1 WHERE id = ${model.id}`;
+      await logWorker("health", `🔇 ${model.model_id} — ข้าม health ping เพราะเป็น non-chat model`, "warn");
+    } catch { /* non-critical */ }
+  }
+
+  const eligible = models.filter((m) => !isNonChatModel(m.model_id));
 
   await logWorker("health", `Checking ${eligible.length} eligible models`);
 

@@ -35,6 +35,25 @@ interface Resp {
   entries: Entry[];
 }
 
+function normalizeResp(value: Resp): Resp {
+  return {
+    total: Number.isFinite(value.total) ? value.total : 0,
+    entries: Array.isArray(value.entries)
+      ? value.entries.map((entry) => ({
+          ...entry,
+          explain: entry.explain
+            ? {
+                ...entry.explain,
+                candidates: Array.isArray(entry.explain.candidates) ? entry.explain.candidates : [],
+                selected: entry.explain.selected ?? null,
+                fallbackUsed: entry.explain.fallbackUsed === true,
+              }
+            : null,
+        }))
+      : [],
+  };
+}
+
 export function RoutingExplainPanel() {
   const [data, setData] = useState<Resp | null>(null);
   const [filter, setFilter] = useState<"all" | "fallback" | "error">("all");
@@ -55,7 +74,7 @@ export function RoutingExplainPanel() {
         const res = await fetch(`/api/routing-explain?${params.toString()}`, { credentials: "include" });
         if (!res.ok) return;
         const json = (await res.json()) as Resp;
-        if (!cancelled) setData(json);
+        if (!cancelled) setData(normalizeResp(json));
       } catch { /* silent */ }
     };
     load();
@@ -101,6 +120,7 @@ export function RoutingExplainPanel() {
         {data.entries.map((e) => {
           const id = e.requestId ?? "";
           const isOpen = openId === id;
+          const candidates = Array.isArray(e.explain?.candidates) ? e.explain.candidates : [];
           return (
             <div key={id || e.at} className="border border-white/5 rounded-lg overflow-hidden">
               <button
@@ -127,9 +147,9 @@ export function RoutingExplainPanel() {
                     selected=<span className="text-emerald-300">{e.explain.selected?.reason ?? "—"}</span>
                   </div>
                   <div>
-                    <div className="text-gray-500">Candidates ({e.explain.candidates.length}):</div>
+                    <div className="text-gray-500">Candidates ({candidates.length}):</div>
                     <ol className="space-y-0.5 ml-3">
-                      {e.explain.candidates.map((c, i) => (
+                      {candidates.map((c, i) => (
                         <li key={i} className="text-gray-300">
                           {c.accepted ? "✅" : "·"} {c.provider}/{c.model}{" "}
                           <span className="text-gray-500">— {c.reason}{c.detail ? ` (${c.detail})` : ""}</span>

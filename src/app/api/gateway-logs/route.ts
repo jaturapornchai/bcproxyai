@@ -48,6 +48,8 @@ export async function GET(req: NextRequest) {
                provider, status, latency_ms as "latencyMs",
                input_tokens as "inputTokens", output_tokens as "outputTokens",
                error, user_message as "userMessage", assistant_message as "assistantMessage",
+               request_id as "requestId", client_ip as "clientIp",
+               routing_explain as "routingExplain",
                created_at as "createdAt"
         FROM gateway_logs
         WHERE id < ${cursor}
@@ -61,6 +63,8 @@ export async function GET(req: NextRequest) {
                provider, status, latency_ms as "latencyMs",
                input_tokens as "inputTokens", output_tokens as "outputTokens",
                error, user_message as "userMessage", assistant_message as "assistantMessage",
+               request_id as "requestId", client_ip as "clientIp",
+               routing_explain as "routingExplain",
                created_at as "createdAt"
         FROM gateway_logs ORDER BY id DESC
         LIMIT ${limit} OFFSET ${offset}

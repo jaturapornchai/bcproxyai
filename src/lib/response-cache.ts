@@ -9,6 +9,7 @@ import { getRedis } from "./redis";
 
 const CACHE_ENABLED = process.env.RESPONSE_CACHE_ENABLED !== "0";
 const CACHE_TTL_SEC = 3600;
+const CACHE_IGNORED_TOP_LEVEL_FIELDS = new Set(["stream", "store"]);
 
 function tenantNamespace(apiKey: string | null | undefined): string {
   // Master / no-auth → shared bucket. Per-key clients → isolated bucket so
@@ -20,11 +21,22 @@ function tenantNamespace(apiKey: string | null | undefined): string {
   return createHash("sha256").update(apiKey).digest("hex").slice(0, 12);
 }
 
+function stableForCache(value: unknown, topLevel = false): unknown {
+  if (Array.isArray(value)) return value.map((v) => stableForCache(v));
+  if (!value || typeof value !== "object") return value;
+
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+    if (topLevel && CACHE_IGNORED_TOP_LEVEL_FIELDS.has(key)) continue;
+    const v = (value as Record<string, unknown>)[key];
+    if (v === undefined) continue;
+    out[key] = stableForCache(v);
+  }
+  return out;
+}
+
 function cacheKey(body: Record<string, unknown>, apiKey: string | null): string {
-  const messages = body.messages;
-  const model = body.model ?? "auto";
-  const temperature = body.temperature ?? 0;
-  const payload = JSON.stringify({ model, messages, temperature });
+  const payload = JSON.stringify(stableForCache(body, true));
   const hash = createHash("sha256").update(payload).digest("hex").slice(0, 32);
   return `respcache:${tenantNamespace(apiKey)}:${hash}`;
 }
@@ -33,6 +45,11 @@ function shouldSkip(body: Record<string, unknown>, optOut: boolean): boolean {
   if (!CACHE_ENABLED) return true;
   if (optOut) return true;
   if (body.stream === true) return true;
+  if (Number(body.temperature ?? 0) > 0) return true;
+  if (Number(body.n ?? 1) !== 1) return true;
+  if (body.logprobs || body.top_logprobs) return true;
+  if (body.audio) return true;
+  if (Array.isArray(body.modalities) && !body.modalities.every((m) => m === "text")) return true;
   // Tools/tool_choice carry private function definitions and the response
   // shape varies wildly per call — never reuse across requests.
   if (body.tools || body.tool_choice) return true;

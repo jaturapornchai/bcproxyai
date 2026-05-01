@@ -186,22 +186,36 @@ function getCategoryLabel(category: string): string {
  * Used by gateway to deprioritize models with many complaints
  */
 export async function getReputationScore(dbModelId: string): Promise<number> {
+  const scores = await getReputationScores([dbModelId]);
+  return scores.get(dbModelId) ?? 100;
+}
+
+export async function getReputationScores(dbModelIds: string[]): Promise<Map<string, number>> {
+  const uniqueIds = [...new Set(dbModelIds.filter(Boolean))];
+  const scores = new Map<string, number>();
+  for (const id of uniqueIds) scores.set(id, 100);
+  if (uniqueIds.length === 0) return scores;
+
   try {
     const sql = getSqlClient();
-    const rows = await sql<{ total: number; failed: number }[]>`
+    const rows = await sql<{ model_id: string; total: number; failed: number }[]>`
       SELECT
+        model_id::text,
         COUNT(*) as total,
         SUM(CASE WHEN status = 'exam_failed' THEN 1 ELSE 0 END) as failed
       FROM complaints
-      WHERE model_id = ${dbModelId} AND created_at >= now() - interval '7 days'
+      WHERE model_id = ANY(${uniqueIds})
+        AND created_at >= now() - interval '7 days'
+      GROUP BY model_id
     `;
 
-    const result = rows[0];
-    if (!result || result.total === 0) return 100;
-
-    const penalty = result.total * 10 + result.failed * 10;
-    return Math.max(0, 100 - penalty);
+    for (const result of rows) {
+      if (!result || Number(result.total) === 0) continue;
+      const penalty = Number(result.total) * 10 + Number(result.failed ?? 0) * 10;
+      scores.set(result.model_id, Math.max(0, 100 - penalty));
+    }
   } catch {
-    return 100;
+    return scores;
   }
+  return scores;
 }

@@ -18,6 +18,7 @@ export type PerfEvent =
   | "spec:fire"
   | "spec:win"
   | "sticky:hit"
+  | "semantic:hit"
   | "demote:rate-limit";
 
 export function bumpPerf(event: PerfEvent): void {
@@ -36,7 +37,7 @@ export async function getPerfCounts(): Promise<Record<PerfEvent, number>> {
     "cache:hit", "cache:miss",
     "hedge:win", "hedge:loss",
     "spec:fire", "spec:win",
-    "sticky:hit", "demote:rate-limit",
+    "sticky:hit", "semantic:hit", "demote:rate-limit",
   ];
   const zero = Object.fromEntries(events.map(e => [e, 0])) as Record<PerfEvent, number>;
   try {

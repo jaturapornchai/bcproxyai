@@ -71,6 +71,15 @@ function tenantNamespace(apiKey: string | null | undefined): string {
   return createHash("sha256").update(apiKey).digest("hex").slice(0, 12);
 }
 
+function normalizeStoredResponse(response: unknown): unknown {
+  if (typeof response !== "string") return response;
+  try {
+    return JSON.parse(response);
+  } catch {
+    return response;
+  }
+}
+
 export async function getCachedBySimilarity(
   userMsg: string,
   threshold = 0.92,
@@ -116,7 +125,7 @@ export async function getCachedBySimilarity(
     );
     console.log(`[SEMCACHE] hit similarity=${similarity.toFixed(4)}`);
     return {
-      response: row.response,
+      response: normalizeStoredResponse(row.response),
       provider: row.provider ?? "",
       model: row.model ?? "",
     };
@@ -144,9 +153,12 @@ export async function storeSemanticResponse(
     const ns = opts.tenantNs ?? tenantNamespace(opts.apiKey);
     await sql`
       INSERT INTO semantic_cache (query_hash, query, embedding, response, provider, model, tenant_ns)
-      VALUES (${hash}, ${userMsg}, ${lit}::vector, ${JSON.stringify(response)}::jsonb, ${provider}, ${model}, ${ns})
+      VALUES (${hash}, ${userMsg}, ${lit}::vector, ${sql.json(response as never)}::jsonb, ${provider}, ${model}, ${ns})
       ON CONFLICT (tenant_ns, query_hash) DO UPDATE
-      SET hit_count = semantic_cache.hit_count + 1,
+      SET response = EXCLUDED.response,
+          provider = EXCLUDED.provider,
+          model = EXCLUDED.model,
+          hit_count = semantic_cache.hit_count + 1,
           last_used_at = now()
     `;
     console.log("[SEMCACHE] stored");

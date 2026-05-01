@@ -1,6 +1,7 @@
 import { getSqlClient } from "@/lib/db/schema";
 import { getNextApiKey } from "@/lib/api-keys";
 import { resolveProviderUrl } from "@/lib/provider-resolver";
+import { costPolicyBlockMessage, isProviderCostAllowed } from "@/lib/cost-policy";
 
 // DeepSeek as judge (cheap + reliable) — key resolved from DB at call time
 const DEEPSEEK_MODEL = "deepseek-chat";
@@ -138,6 +139,10 @@ export async function askModel(
   question: string,
   options?: { imageUrl?: string }
 ): Promise<{ answer: string; latency: number; error?: string }> {
+  if (!isProviderCostAllowed(provider)) {
+    return { answer: "", latency: 0, error: costPolicyBlockMessage(provider) };
+  }
+
   const url = resolveProviderUrl(provider);
   if (!url) return { answer: "", latency: 0, error: "unknown provider" };
 
@@ -199,7 +204,7 @@ export async function judgeAnswer(
 
   // Try DeepSeek first (cheap + reliable)
   const deepseekKey = getNextApiKey("deepseek");
-  if (deepseekKey) {
+  if (deepseekKey && isProviderCostAllowed("deepseek")) {
     try {
       const res = await fetch(resolveProviderUrl("deepseek"), {
         method: "POST",
@@ -234,6 +239,7 @@ export async function judgeAnswer(
 
   // Fallback: free models from OpenRouter
   for (const judgeModel of FALLBACK_JUDGE_MODELS) {
+    if (!isProviderCostAllowed("openrouter")) break;
     try {
       const res = await fetch(resolveProviderUrl("openrouter"), {
         method: "POST",

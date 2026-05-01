@@ -167,6 +167,13 @@ function adaptiveReplyMinChars(userThai: number): number {
   return Math.min(THAI_FAIL_FIXED_MIN_CHARS, Math.max(3, Math.floor(userThai / 2)));
 }
 
+function isShortThaiUtilityPrompt(text: string): boolean {
+  const normalized = text.trim();
+  if (normalized.length > 80) return false;
+  return /^(สวัสดี|หวัดดี|ดี|โอเค|ขอบคุณ|ตอบ\s*ok|ตอบคำว่า|ตอบสั้น|ทักทาย|hello|hi)(\s|[.!?。！？]|$)/i.test(normalized) ||
+    /ตอบสั้น|สั้นๆ|สั้น ๆ|คำเดียว|เท่านั้น/.test(normalized);
+}
+
 async function cleanupOldPenalties(): Promise<void> {
   if (Math.random() > 0.01) return; // 1% sample — cheap amortised cleanup
   try {
@@ -212,6 +219,14 @@ export async function recordThaiQualityPenalty(
   }
   const qRatio = qMarks / responseContent.length;
   const minReplyThai = adaptiveReplyMinChars(userThai);
+
+  // Short Thai utility prompts ("สวัสดี ตอบสั้นๆ", "ตอบคำว่า ok") should not
+  // be judged with the same Thai-length threshold as real Thai QA. In logs this
+  // caused a good answer like "สวัสดีครับ" to demote a fast model.
+  if (isShortThaiUtilityPrompt(userContent) && replyThai > 0 && qRatio <= THAI_FAIL_QMARK_RATIO) {
+    return false;
+  }
+
   const failed = replyThai < minReplyThai || qRatio > THAI_FAIL_QMARK_RATIO;
   if (!failed) return false;
 

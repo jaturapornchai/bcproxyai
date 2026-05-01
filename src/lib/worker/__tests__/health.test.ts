@@ -1,18 +1,34 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-// Mock getDb
-const mockRun = vi.fn(() => ({ changes: 0 }));
-const mockGet = vi.fn();
-const mockAll = vi.fn(() => []);
-const mockPrepare = vi.fn(() => ({
-  run: mockRun,
-  get: mockGet,
-  all: mockAll,
-}));
-const mockDb = { prepare: mockPrepare };
+let mockModels: Array<ReturnType<typeof makeModel>> = [];
+const sqlCalls: Array<{ text: string; values: unknown[] }> = [];
+const mockSql = vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => {
+  const text = strings.join("?");
+  sqlCalls.push({ text, values });
+  if (text.includes("FROM models m")) return Promise.resolve(mockModels);
+  return Promise.resolve([]);
+});
 
 vi.mock("@/lib/db/schema", () => ({
-  getDb: vi.fn(() => mockDb),
+  getSqlClient: vi.fn(() => mockSql),
+}));
+
+vi.mock("@/lib/api-keys", () => ({
+  getNextApiKey: vi.fn(() => "test-key"),
+}));
+
+vi.mock("@/lib/provider-resolver", () => ({
+  resolveProviderUrl: vi.fn((provider: string) =>
+    provider.startsWith("unknown") ? "" : "https://example.test/v1/chat/completions"
+  ),
+}));
+
+vi.mock("@/lib/model-list-cache", () => ({
+  invalidateModelListCache: vi.fn(),
+}));
+
+vi.mock("@/lib/upstream-agent", () => ({
+  upstreamAgent: undefined,
 }));
 
 // Mock global fetch
@@ -38,6 +54,17 @@ function makeModel(provider = "openrouter", modelId = "test-model") {
     supports_vision: -1,
   };
 }
+
+beforeEach(() => {
+  vi.stubEnv("SML_ALLOW_PAID_PROVIDERS", "1");
+  vi.clearAllMocks();
+  mockModels = [];
+  sqlCalls.length = 0;
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe("isNonChatModel", () => {
   it("returns true for whisper models", () => {
@@ -296,16 +323,16 @@ describe("checkHealth", () => {
   });
 
   it("returns zeros when no eligible models", async () => {
-    mockAll.mockReturnValueOnce([]); // no models from DB
+    mockModels = [];
 
     const result = await checkHealth();
     expect(result).toEqual({ checked: 0, available: 0, cooldown: 0 });
   });
 
   it("sets cooldown for rate_limited models", async () => {
-    mockAll.mockReturnValueOnce([
+    mockModels = [
       makeModel("openrouter", "test-chat"),
-    ]);
+    ];
 
     mockFetch.mockResolvedValueOnce({
       ok: false,
@@ -319,19 +346,18 @@ describe("checkHealth", () => {
     expect(result.available).toBe(0);
 
     // Verify insertLog was called with a cooldown_until value
-    const healthInsert = mockRun.mock.calls.find(
-      (call) => call[0] === "openrouter:test-chat"
+    const healthInsert = sqlCalls.find(
+      (call) => call.text.includes("INSERT INTO health_logs") && call.values[0] === "openrouter:test-chat"
     );
     expect(healthInsert).toBeDefined();
-    // 5th param (index 4) is cooldown_until, should not be null
-    expect(healthInsert![4]).not.toBeNull();
+    expect(healthInsert!.values[4]).not.toBeNull();
   });
 
   it("marks available models correctly", async () => {
     const model = makeModel("groq", "llama-3-70b");
     model.supports_tools = 1;
     model.supports_vision = 1;
-    mockAll.mockReturnValueOnce([model]);
+    mockModels = [model];
 
     mockFetch.mockResolvedValueOnce({ ok: true });
 
@@ -346,7 +372,7 @@ describe("checkHealth", () => {
     const llama = makeModel("groq", "llama-3-70b");
     llama.supports_tools = 1;
     llama.supports_vision = 1;
-    mockAll.mockReturnValueOnce([whisper, llama]);
+    mockModels = [whisper, llama];
 
     mockFetch.mockResolvedValueOnce({ ok: true }); // only llama gets pinged
 

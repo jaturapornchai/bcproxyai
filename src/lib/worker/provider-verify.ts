@@ -12,6 +12,7 @@
  */
 import { getSqlClient } from "@/lib/db/schema";
 import { getNextApiKey } from "@/lib/api-keys";
+import { isProviderCostAllowed } from "@/lib/cost-policy";
 
 const PROBE_TIMEOUT_MS = 8_000;
 const CONCURRENCY = 6;
@@ -83,6 +84,19 @@ async function probeOne(row: CatalogRow): Promise<VerifyResult> {
   //    counts as "alive" (auth required but endpoint exists — good signal).
   //    Uses the provider's real stored key if available, else dummy.
   if (row.models_url) {
+    if (!isProviderCostAllowed(row.name)) {
+      notes.push("models probe skipped by cost policy");
+      return {
+        name: row.name,
+        homepage_status_code: hpCode,
+        homepage_ok: hpOk,
+        models_status_code: null,
+        models_ok: null,
+        public_models_count: null,
+        notes: notes.join("; "),
+      };
+    }
+
     const scheme = (row.auth_scheme ?? "bearer") as "bearer" | "query-key" | "none" | "apikey-header";
     const realKey = getNextApiKey(row.name);
     const probeKey = realKey || "dummy-for-probe";

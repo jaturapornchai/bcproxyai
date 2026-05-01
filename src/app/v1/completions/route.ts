@@ -4,6 +4,7 @@ import { getNextApiKey } from "@/lib/api-keys";
 import { PROVIDER_COMPLETIONS_URLS } from "@/lib/providers";
 import { resolveProviderCompletionsUrl } from "@/lib/provider-resolver";
 import { openAIError } from "@/lib/openai-compat";
+import { getCostAllowedProviders, isProviderCostAllowed } from "@/lib/cost-policy";
 import crypto from "crypto";
 
 export const dynamic = "force-dynamic";
@@ -29,7 +30,12 @@ export async function POST(req: NextRequest) {
     const sql = getSqlClient();
     const now = new Date().toISOString();
 
-    const providersWithCompletions = Object.keys(PROVIDER_COMPLETIONS_URLS);
+    const providersWithCompletions = Object.keys(PROVIDER_COMPLETIONS_URLS).filter(isProviderCostAllowed);
+    if (providersWithCompletions.length === 0) {
+      return openAIError(503, {
+        message: `No cost-allowed completion providers available. Allowed providers: ${getCostAllowedProviders().join(", ")}.`,
+      });
+    }
 
     const models = await sql<{ id: string; provider: string; model_id: string }[]>`
       SELECT m.id, m.provider, m.model_id
@@ -60,6 +66,7 @@ export async function POST(req: NextRequest) {
     for (const model of modelList) {
       const url = resolveProviderCompletionsUrl(model.provider);
       if (!url) continue;
+      if (!isProviderCostAllowed(model.provider)) continue;
 
       const apiKey = getNextApiKey(model.provider);
       if (!apiKey) continue;

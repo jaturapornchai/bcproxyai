@@ -16,6 +16,30 @@ function parseUserMsg(raw: string | null | undefined): string | null {
   } catch { /* not JSON */ }
   return raw;
 }
+
+type RoutingExplain = {
+  mode?: string;
+  category?: string;
+  fallbackUsed?: boolean;
+  selected?: { provider?: string; model?: string; reason?: string };
+  candidates?: Array<{ provider?: string; model?: string; accepted?: boolean; reason?: string }>;
+};
+
+function routingActivity(routingExplain: RoutingExplain | null | undefined): string {
+  if (!routingExplain) return "—";
+  const candidates = Array.isArray(routingExplain.candidates) ? routingExplain.candidates : [];
+  const accepted = candidates.filter((c) => c.accepted).length;
+  const mode = routingExplain.mode ? `mode:${routingExplain.mode}` : null;
+  const category = routingExplain.category ? `cat:${routingExplain.category}` : null;
+  const fallback = routingExplain.fallbackUsed ? "fallback" : null;
+  return [mode, category, candidates.length ? `${accepted}/${candidates.length} candidates` : null, fallback]
+    .filter(Boolean)
+    .join(" · ") || "—";
+}
+
+function shortId(id: string | null | undefined): string {
+  return id ? id.slice(0, 8) : "—";
+}
 import {
   CircleProgress,
   GlowDot,
@@ -80,9 +104,14 @@ export default function Dashboard() {
     provider: string | null;
     status: number;
     latencyMs: number;
+    inputTokens: number;
+    outputTokens: number;
     error: string | null;
     userMessage: string | null;
     assistantMessage: string | null;
+    requestId: string | null;
+    clientIp: string | null;
+    routingExplain: RoutingExplain | null;
     createdAt: string;
   }
   const [gatewayLogs, setGatewayLogs] = useState<GatewayLog[]>([]);
@@ -540,7 +569,9 @@ export default function Dashboard() {
                       <th className="px-2 py-1 text-left">Resolved</th>
                       <th className="px-2 py-1 text-left">Provider</th>
                       <th className="px-2 py-1 text-right">Latency</th>
-                      <th className="px-2 py-1 text-left">ข้อความ</th>
+                      <th className="px-2 py-1 text-right">In/Out</th>
+                      <th className="px-2 py-1 text-left">กิจกรรม</th>
+                      <th className="px-2 py-1 text-left">ขาเข้า / ขาออก</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-white/5">
@@ -565,15 +596,27 @@ export default function Dashboard() {
                             {log.provider ? <ProviderBadge provider={log.provider} /> : <span className="text-gray-600">—</span>}
                           </td>
                           <td className="px-2 py-1 text-right text-gray-300 font-mono">{fmtMs(log.latencyMs)}</td>
-                          <td className="px-2 py-1 text-gray-300 truncate max-w-[480px]">
+                          <td className="px-2 py-1 text-right text-gray-400 font-mono whitespace-nowrap">
+                            {log.inputTokens.toLocaleString()} / {log.outputTokens.toLocaleString()}
+                          </td>
+                          <td className="px-2 py-1 text-gray-400 min-w-[220px]">
+                            <div className="text-xs leading-relaxed">
+                              <div>{routingActivity(log.routingExplain)}</div>
+                              <div className="text-gray-600 font-mono">req:{shortId(log.requestId)}</div>
+                            </div>
+                          </td>
+                          <td className="px-2 py-1 text-gray-300 min-w-[520px]">
                             <button
-                              className="text-left hover:text-white transition-colors cursor-pointer truncate max-w-full"
+                              className="block text-left hover:text-white transition-colors cursor-pointer w-full"
                               onClick={() => setLogDetail(log)}
                             >
                               {log.error ? (
-                                <span className="text-red-400">{log.error.slice(0, 120)}</span>
+                                <span className="text-red-400 line-clamp-2">{log.error.slice(0, 220)}</span>
                               ) : (
-                                <span>{parseUserMsg(log.userMessage)?.slice(0, 100) ?? "—"}</span>
+                                <span className="space-y-0.5">
+                                  <span className="block text-cyan-200 line-clamp-2">→ {parseUserMsg(log.userMessage)?.slice(0, 180) ?? "—"}</span>
+                                  <span className="block text-emerald-200/80 line-clamp-2">← {log.assistantMessage?.slice(0, 180) ?? "stream/ไม่มีข้อความที่บันทึก"}</span>
+                                </span>
                               )}
                             </button>
                           </td>
@@ -1261,7 +1304,7 @@ export default function Dashboard() {
       {/* ── Log Detail Modal ─────────────────────────────────────────────── */}
       {logDetail && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setLogDetail(null)}>
-          <div className="bg-gray-900 border border-white/10 rounded-2xl shadow-2xl max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-gray-900 border border-white/10 rounded-2xl shadow-2xl max-w-5xl w-full mx-4 max-h-[88vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-6 py-4 border-b border-white/10">
               <div className="flex items-center gap-3">
                 <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-bold ${
@@ -1275,9 +1318,26 @@ export default function Dashboard() {
               <button onClick={() => setLogDetail(null)} className="text-gray-500 hover:text-white text-lg cursor-pointer">✕</button>
             </div>
             <div className="px-6 py-4 space-y-4">
+              <div className="grid gap-3 md:grid-cols-3">
+                <div className="bg-white/5 rounded-lg p-3">
+                  <div className="text-xs text-gray-500 mb-1">Request ID</div>
+                  <div className="text-sm text-gray-200 font-mono break-all">{logDetail.requestId ?? "—"}</div>
+                </div>
+                <div className="bg-white/5 rounded-lg p-3">
+                  <div className="text-xs text-gray-500 mb-1">Client</div>
+                  <div className="text-sm text-gray-200 font-mono break-all">{logDetail.clientIp ?? "—"}</div>
+                </div>
+                <div className="bg-white/5 rounded-lg p-3">
+                  <div className="text-xs text-gray-500 mb-1">Tokens ขาเข้า/ขาออก</div>
+                  <div className="text-sm text-gray-200 font-mono">
+                    {logDetail.inputTokens.toLocaleString()} / {logDetail.outputTokens.toLocaleString()}
+                  </div>
+                </div>
+              </div>
               <div>
-                <div className="text-xs text-gray-500 mb-1">Model</div>
-                <div className="text-sm text-indigo-300 font-mono">{logDetail.requestModel} → {logDetail.resolvedModel ?? "—"}</div>
+                <div className="text-xs text-gray-500 mb-1">Model routing</div>
+                <div className="text-sm text-indigo-300 font-mono break-all">{logDetail.requestModel} → {logDetail.resolvedModel ?? "—"}</div>
+                <div className="text-xs text-gray-500 mt-1">{routingActivity(logDetail.routingExplain)}</div>
               </div>
               {logDetail.error && (
                 <div>
@@ -1285,17 +1345,25 @@ export default function Dashboard() {
                   <div className="text-sm text-red-400 bg-red-500/10 rounded-lg p-3 font-mono whitespace-pre-wrap break-all">{logDetail.error}</div>
                 </div>
               )}
-              <div>
-                <div className="text-xs text-gray-500 mb-1">ข้อความผู้ใช้</div>
-                <div className="text-sm text-gray-300 bg-white/5 rounded-lg p-3 whitespace-pre-wrap break-all">
+              <div className="grid gap-4 lg:grid-cols-2">
+                <div>
+                  <div className="text-xs text-cyan-300 mb-1">ขาเข้า: ข้อความผู้ใช้</div>
+                  <div className="text-sm text-gray-200 bg-cyan-500/10 border border-cyan-500/20 rounded-lg p-3 whitespace-pre-wrap break-all min-h-32">
                   {parseUserMsg(logDetail.userMessage) ?? "—"}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-emerald-300 mb-1">ขาออก: คำตอบ AI / ผลลัพธ์</div>
+                  <div className="text-sm text-gray-200 bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-3 whitespace-pre-wrap break-all min-h-32">
+                    {logDetail.assistantMessage ?? "stream/ไม่มีข้อความที่บันทึก"}
+                  </div>
                 </div>
               </div>
-              {logDetail.assistantMessage && (
+              {logDetail.routingExplain && (
                 <div>
-                  <div className="text-xs text-gray-500 mb-1">คำตอบ AI</div>
-                  <div className="text-sm text-gray-300 bg-white/5 rounded-lg p-3 whitespace-pre-wrap break-all">
-                    {logDetail.assistantMessage}
+                  <div className="text-xs text-gray-500 mb-1">กิจกรรม routing ทั้งหมด</div>
+                  <div className="text-xs text-gray-300 bg-black/30 rounded-lg p-3 font-mono whitespace-pre-wrap break-all max-h-80 overflow-y-auto">
+                    {JSON.stringify(logDetail.routingExplain, null, 2)}
                   </div>
                 </div>
               )}

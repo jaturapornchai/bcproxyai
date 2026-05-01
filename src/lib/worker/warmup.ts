@@ -1,9 +1,10 @@
 import { getSqlClient } from "@/lib/db/schema";
-import { getRedis } from "@/lib/redis";
+import { ensureRedisConnected } from "@/lib/redis";
 import { getNextApiKey } from "@/lib/api-keys";
 import { resolveProviderUrl } from "@/lib/provider-resolver";
 import { upstreamAgent } from "@/lib/upstream-agent";
 import { recordOutcome } from "@/lib/live-score";
+import { getCostAllowedProviders, isProviderCostAllowed } from "@/lib/cost-policy";
 
 // ─── Warmup pinger ───
 // Every 2 minutes, send a cheap 1-token ping to every model that has passed the
@@ -29,6 +30,12 @@ const WARMUP_MAX_MODELS = (() => {
   return Math.min(Math.max(Math.floor(raw), 1), 500);
 })();
 
+const WARMUP_MAX_PER_PROVIDER = (() => {
+  const raw = Number(process.env.WARMUP_MAX_PER_PROVIDER);
+  if (!Number.isFinite(raw) || raw <= 0) return 4;
+  return Math.min(Math.max(Math.floor(raw), 1), 50);
+})();
+
 let warmupTimer: ReturnType<typeof setInterval> | null = null;
 
 interface WarmupCandidate {
@@ -51,7 +58,7 @@ function leaderFailOpen(): boolean {
 
 async function acquireWarmupLeader(): Promise<boolean> {
   try {
-    const redis = getRedis();
+    const redis = await ensureRedisConnected();
     const me = workerId();
     const result = await redis.set(WARMUP_LEADER_KEY, me, "EX", WARMUP_LEADER_TTL_SEC, "NX");
     if (result === "OK") return true;
@@ -63,6 +70,8 @@ async function acquireWarmupLeader(): Promise<boolean> {
 }
 
 async function pingOnce(candidate: WarmupCandidate): Promise<boolean> {
+  if (!isProviderCostAllowed(candidate.provider)) return false;
+
   const url = resolveProviderUrl(candidate.provider);
   if (!url) return false;
 
@@ -127,33 +136,58 @@ async function runWarmupTick(): Promise<void> {
 
   try {
     const sql = getSqlClient();
+    const costAllowedProviders = getCostAllowedProviders();
     // Models that passed their most-recent exam AND have no active cooldown.
     // Uses the latest_model_health view so latest-row logic stays in one place.
     // Ordered by recent latency (NULLs last) — fastest first, so the cap
     // preserves the ones that matter for warm sockets.
     const candidates = await sql<WarmupCandidate[]>`
-      SELECT m.id, m.provider, m.model_id
-      FROM models m
-      LEFT JOIN latest_model_health h ON h.model_id = m.id
-      WHERE EXISTS (
-        SELECT 1 FROM exam_attempts e
-        WHERE e.model_id = m.id
-          AND e.passed = true
-          AND e.started_at = (
-            SELECT MAX(started_at) FROM exam_attempts WHERE model_id = m.id
-          )
+      WITH candidates AS (
+        SELECT
+          m.id,
+          m.provider,
+          m.model_id,
+          h.latency_ms,
+          ROW_NUMBER() OVER (
+            PARTITION BY m.provider
+            ORDER BY h.latency_ms ASC NULLS LAST, m.model_id ASC
+          ) AS provider_rank
+        FROM models m
+        LEFT JOIN latest_model_health h ON h.model_id = m.id
+        WHERE EXISTS (
+          SELECT 1 FROM exam_attempts e
+          WHERE e.model_id = m.id
+            AND e.passed = true
+            AND e.started_at = (
+              SELECT MAX(started_at) FROM exam_attempts WHERE model_id = m.id
+            )
+        )
+        AND (h.cooldown_until IS NULL OR h.cooldown_until <= now())
+        AND m.provider = ANY(${costAllowedProviders})
       )
-      AND (h.cooldown_until IS NULL OR h.cooldown_until <= now())
-      ORDER BY h.latency_ms ASC NULLS LAST
+      SELECT id, provider, model_id
+      FROM candidates
+      WHERE provider_rank <= ${WARMUP_MAX_PER_PROVIDER}
+      ORDER BY latency_ms ASC NULLS LAST, provider ASC, model_id ASC
       LIMIT ${WARMUP_MAX_MODELS}
     `;
+
+    const providerCount = candidates.reduce<Record<string, number>>((acc, c) => {
+      acc[c.provider] = (acc[c.provider] ?? 0) + 1;
+      return acc;
+    }, {});
+    const providerSummary = Object.entries(providerCount)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 8)
+      .map(([provider, count]) => `${provider}:${count}`)
+      .join(",");
 
     if (candidates.length === 0) {
       console.log("[WARMUP] ไม่มี model ที่พร้อม warmup (ยังไม่ผ่านสอบหรืออยู่ cooldown)");
       return;
     }
 
-    console.log(`[WARMUP] ping ${candidates.length} models เพื่อ keep-alive (cap=${WARMUP_MAX_MODELS})`);
+    console.log(`[WARMUP] ping ${candidates.length} models เพื่อ keep-alive (cap=${WARMUP_MAX_MODELS}, perProvider=${WARMUP_MAX_PER_PROVIDER}, providers=${providerSummary})`);
     const start = Date.now();
     const okCount = await runConcurrent(candidates, WARMUP_CONCURRENCY, pingOnce);
     const durMs = Date.now() - start;

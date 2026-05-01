@@ -1,17 +1,18 @@
 import { NextRequest } from "next/server";
 import { getSqlClient } from "@/lib/db/schema";
-import { getNextApiKey, markKeyCooldown, hasProviderKey } from "@/lib/api-keys";
+import { ensureApiKeysLoaded, getNextApiKey, markKeyCooldown, hasProviderKey } from "@/lib/api-keys";
 import { resolveProviderUrl, resolveProviderAuth } from "@/lib/provider-resolver";
 import { clearCache } from "@/lib/cache";
 import { registerInvalidator as registerModelListInvalidator } from "@/lib/model-list-cache";
 import { compressMessages } from "@/lib/prompt-compress";
 import { openAIError, ensureChatCompletionFields } from "@/lib/openai-compat";
 import { autoDetectComplaint } from "@/lib/auto-complaint";
-import { getReputationScore } from "@/lib/worker/complaint";
+import { getReputationScores } from "@/lib/worker/complaint";
 import { detectPromptCategory, recordRoutingResult, getBestModelsForCategory, getBestModelsByBenchmarkCategory, emitEvent, getRealAvgLatency, recordThaiQualityPenalty } from "@/lib/routing-learn";
 import { getRedis } from "@/lib/redis";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { getCachedResponse, setCachedResponse } from "@/lib/response-cache";
+import { getCachedBySimilarity, storeSemanticResponse } from "@/lib/semantic-cache";
 import { log } from "@/lib/sampled-logger";
 import { bumpPerf } from "@/lib/perf-counters";
 import { recordBattleEvent, outcomeFromLatency } from "@/lib/battle-score";
@@ -22,7 +23,10 @@ import { canFitRequest, parseLimitHeaders, parseLimitError, recordLimit } from "
 import { recordOutcomeLearning, recordFailStreak, canHandleTokens, getCategoryWinners, detectCategory, isModelUnhealthyForCategory } from "@/lib/learning";
 import { upstreamAgent } from "@/lib/upstream-agent";
 import { emptyExplain, recordCandidate, stashExplain, consumeExplain, markWinner, type RoutingExplain } from "@/lib/routing-explain";
-import { extractRequestToolNames, repairJsonToolCallLeak } from "@/lib/tool-call-repair";
+import { buildOpenAIStyleToolCallStreamChunks, extractRequestToolNames, repairJsonToolCallLeak, repairStreamedJsonToolCallLeak } from "@/lib/tool-call-repair";
+import { shouldSuppressToolsForSimpleChat } from "@/lib/tool-use-policy";
+import { analyzeRequestProfile, rankCandidatesByRequestProfile, scoreCandidateForRequest } from "@/lib/request-intelligence";
+import { costPolicyBlockMessage, isProviderCostAllowed } from "@/lib/cost-policy";
 
 // ── Category mapping: routing category → exam question category ──
 const ROUTING_TO_EXAM_CAT: Record<string, string> = {
@@ -578,6 +582,7 @@ interface GatewayLogRow {
 
 const LOG_FLUSH_INTERVAL_MS = 100;
 const LOG_FLUSH_MAX_BATCH = 200; // hard cap to avoid giant INSERTs
+const LOG_TEXT_LIMIT = 4_000;
 let _logBuffer: GatewayLogRow[] = [];
 let _logFlushTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -597,8 +602,8 @@ async function flushGatewayLogs(): Promise<void> {
       input_tokens: r.inputTokens,
       output_tokens: r.outputTokens,
       error: r.error,
-      user_message: r.userMessage?.slice(0, 500) ?? null,
-      assistant_message: r.assistantMessage?.slice(0, 500) ?? null,
+      user_message: r.userMessage?.slice(0, LOG_TEXT_LIMIT) ?? null,
+      assistant_message: r.assistantMessage?.slice(0, LOG_TEXT_LIMIT) ?? null,
       request_id: r.requestId,
       client_ip: r.clientIp,
       routing_explain: r.routingExplain == null ? null : JSON.stringify(r.routingExplain),
@@ -651,12 +656,12 @@ function extractUserMessage(body: Record<string, unknown>): string | null {
   const messages = body.messages as Array<{ role: string; content: unknown }> | undefined;
   if (!messages || messages.length === 0) return null;
   const last = messages[messages.length - 1];
-  if (typeof last.content === "string") return last.content.slice(0, 500);
+  if (typeof last.content === "string") return last.content.slice(0, LOG_TEXT_LIMIT);
   if (Array.isArray(last.content)) {
     return (last.content as Array<{ type: string; text?: string }>)
-      .filter((p) => p.type === "text" && p.text).map((p) => p.text).join("").slice(0, 500) || null;
+      .filter((p) => p.type === "text" && p.text).map((p) => p.text).join("").slice(0, LOG_TEXT_LIMIT) || null;
   }
-  return JSON.stringify(last.content).slice(0, 500);
+  return JSON.stringify(last.content).slice(0, LOG_TEXT_LIMIT);
 }
 
 async function logCooldown(modelId: string, errorMsg: string, httpStatus = 0, overrideMinutes?: number) {
@@ -720,6 +725,7 @@ function parseModelField(model: string): {
 async function getAllModelsIncludingCooldown(caps: RequestCapabilities): Promise<ModelRow[]> {
   const sql = getSqlClient();
   const visionFilter = caps.hasImages ? "AND m.supports_vision = 1" : "";
+  const toolsFilter = caps.hasTools ? "AND m.supports_tools = 1" : "";
   const orderClause = caps.hasImages
     ? "CASE WHEN m.provider IN ('google','groq','ollama') THEN 0 ELSE 1 END ASC, RANDOM()"
     : "RANDOM()";
@@ -738,6 +744,7 @@ async function getAllModelsIncludingCooldown(caps: RequestCapabilities): Promise
       AND COALESCE(m.supports_audio_output, 0) != 1
       AND COALESCE(m.supports_image_gen, 0) != 1
       ${visionFilter}
+      ${toolsFilter}
     ORDER BY ${orderClause}
     LIMIT 20
   `) as ModelRow[];
@@ -753,6 +760,7 @@ async function selectModelsByMode(
 
   if (mode === "fast") {
     const visionFilter = caps.hasImages ? "AND m.supports_vision = 1" : "";
+    const toolsFilter = caps.hasTools ? "AND m.supports_tools = 1" : "";
     const fastRows = await sql.unsafe(`
       SELECT
         m.id, m.provider, m.model_id, m.supports_tools, m.supports_vision, m.tier, m.context_length,
@@ -779,6 +787,7 @@ async function selectModelsByMode(
         AND COALESCE(m.supports_audio_output, 0) != 1
         AND COALESCE(m.supports_image_gen, 0) != 1
         ${visionFilter}
+        ${toolsFilter}
       ORDER BY
         CASE WHEN m.provider = 'ollama' THEN 1 ELSE 0 END ASC,
         COALESCE(rs.avg_lat_real, ex.total_latency_ms::float, 9999999) ASC,
@@ -823,6 +832,10 @@ async function forwardToProvider(
   externalSignal?: AbortSignal,
   opts: { supportsReasoning?: boolean } = {},
 ): Promise<Response> {
+  if (!isProviderCostAllowed(provider)) {
+    throw new Error(costPolicyBlockMessage(provider));
+  }
+
   const url = resolveProviderUrl(provider);
   if (!url) throw new Error(`Unknown provider: ${provider}`);
 
@@ -846,6 +859,12 @@ async function forwardToProvider(
   }
 
   const requestBody: Record<string, unknown> = { ...body, model: actualModelId };
+  const attemptToolNames = extractRequestToolNames(requestBody);
+  if (shouldSuppressToolsForSimpleChat(requestBody, attemptToolNames)) {
+    delete requestBody.tools;
+    requestBody.tool_choice = "none";
+    log.info(`[FWD] Suppressing thClaws team tools for simple chat on ${provider}/${actualModelId}`);
+  }
 
   // Auto-enable thinking for reasoning-capable models — unless client already
   // set reasoning/enable_thinking explicitly (opt-out via header or body).
@@ -853,7 +872,8 @@ async function forwardToProvider(
                  requestBody.enable_thinking === false ||
                  requestBody["x-sml-disable-thinking"] === true;
   const alreadySet = requestBody.reasoning !== undefined || requestBody.enable_thinking !== undefined;
-  if (supportsReasoning && !alreadySet && !optOut) {
+  const canAutoEnableThinking = supportsReasoning && provider !== "ollama";
+  if (canAutoEnableThinking && !alreadySet && !optOut) {
     requestBody.reasoning = { effort: "medium" };
     requestBody.enable_thinking = true;
   }
@@ -970,16 +990,7 @@ async function forwardToProvider(
     }
   }
 
-  const hasImagesInReq = Array.isArray(requestBody.messages) && (requestBody.messages as Array<{content: unknown}>).some(
-    m => Array.isArray(m.content) && (m.content as Array<{type: string}>).some(p => p.type === "image_url")
-  );
   let toolsStripped = false;
-  if (hasImagesInReq && requestBody.tools) {
-    console.log(`[FWD] Stripping tools (images+tools incompatible) for ${provider}/${actualModelId}`);
-    delete requestBody.tools;
-    delete requestBody.tool_choice;
-    toolsStripped = true;
-  }
   if (!toolsStripped) {
     try {
       const sql = getSqlClient();
@@ -1182,6 +1193,87 @@ function cleanResponseContent(content: string): string {
   return content.replace(THINK_TAG_RE, "").trim();
 }
 
+function applyNaturalConversationHint(body: Record<string, unknown>, intent: string, userMessage: string): void {
+  const hasThai = /[\u0E00-\u0E7F]{3,}/.test(userMessage);
+  if (intent !== "simple-chat" && !hasThai) return;
+  if (body.tools || body.response_format || body.stream === true) return;
+  const messages = body.messages as Array<{ role: string; content: unknown }> | undefined;
+  if (!Array.isArray(messages)) return;
+  const hint = [
+    "ตอบภาษาไทยเหมือนคนไทยคุยกันจริง ๆ สั้น กระชับ เป็นธรรมชาติ",
+    "เลือกคำลงท้ายแบบเดียว ห้ามเขียนรูปแบบ 'ครับ/ค่ะ'",
+    "ถ้าผู้ใช้ถามทั่วไปให้ตอบ 1-3 ประโยคก่อน ไม่ต้องลิสต์ยาว",
+    "ถ้าผู้ใช้ขอตัวอย่าง ให้ให้ตัวอย่างเดียวก่อน เว้นแต่เขาขอหลายแบบ",
+    "ทำตามข้อจำกัดของผู้ใช้ตรง ๆ เช่น ไม่เว่อร์ ภาษาชาวบ้าน สุภาพขึ้น",
+  ].join(" ");
+  if (messages[0]?.role === "system") {
+    if (typeof messages[0].content === "string" && messages[0].content.includes("ห้ามเขียนรูปแบบ 'ครับ/ค่ะ'")) return;
+    messages[0] = { ...messages[0], content: `${hint}\n\n${String(messages[0]?.content ?? "")}` };
+  } else {
+    body.messages = [{ role: "system", content: hint }, ...messages];
+  }
+}
+
+function normalizeNaturalConversationContent(content: string, intent: string): string {
+  void intent;
+  return content
+    .replace(/ครับ\s*\/\s*ค่ะ/g, "ครับ")
+    .replace(/ค่ะ\s*\/\s*ครับ/g, "ครับ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+function normalizeToolCallArguments(message: { tool_calls?: unknown[] } | undefined): void {
+  if (!message || !Array.isArray(message.tool_calls)) return;
+  for (const call of message.tool_calls as Array<{ function?: { arguments?: unknown } }>) {
+    if (!call?.function) continue;
+    const args = call.function.arguments;
+    if (args == null || args === "null" || args === "") {
+      call.function.arguments = "{}";
+    } else if (typeof args !== "string") {
+      try { call.function.arguments = JSON.stringify(args); } catch { call.function.arguments = "{}"; }
+    }
+  }
+}
+
+function extractSemanticContent(response: unknown): string | null {
+  if (!response || typeof response !== "object") return null;
+  const rec = response as Record<string, unknown>;
+  if (typeof rec.content === "string" && rec.content.trim()) return rec.content.trim();
+  const choices = rec.choices;
+  if (Array.isArray(choices)) {
+    const first = choices[0] as { message?: { content?: unknown } } | undefined;
+    if (typeof first?.message?.content === "string" && first.message.content.trim()) {
+      return first.message.content.trim();
+    }
+  }
+  return null;
+}
+
+function shouldUseSemanticMemory(body: Record<string, unknown>, caps: RequestCapabilities, userMessage: string, optOut: boolean): boolean {
+  if (process.env.SEMANTIC_CACHE_ENABLED === "0") return false;
+  if (optOut || body.stream === true) return false;
+  if (caps.hasTools || caps.hasImages || caps.needsJsonSchema) return false;
+  if (!userMessage || userMessage.length < 8) return false;
+  if (body.response_format || body.tools || body.tool_choice) return false;
+  return true;
+}
+
+function injectSemanticMemory(body: Record<string, unknown>, content: string): void {
+  const messages = body.messages as Array<{ role: string; content: unknown }> | undefined;
+  if (!Array.isArray(messages) || !content.trim()) return;
+  const memory = [
+    "ความจำของระบบจากคำถาม/คำตอบที่คล้ายกัน:",
+    content.slice(0, 1200),
+    "ใช้เป็นบริบทเฉพาะเมื่อเกี่ยวข้อง ถ้าไม่เกี่ยวข้องให้ตอบจากคำถามล่าสุดตามปกติ",
+  ].join("\n");
+  if (messages[0]?.role === "system") {
+    messages[0] = { ...messages[0], content: `${String(messages[0].content ?? "")}\n\n${memory}` };
+  } else {
+    body.messages = [{ role: "system", content: memory }, ...messages];
+  }
+}
+
 
 let _staleModelsCleanedUp = false;
 
@@ -1238,6 +1330,7 @@ export async function POST(req: NextRequest) {
     const _imgCount = caps.hasImages ? ((body.messages as Array<{content: unknown}>).reduce((n, m) => n + (Array.isArray(m.content) ? (m.content as Array<{type: string}>).filter(p => p.type === "image_url").length : 0), 0)) : 0;
     const _toolCount = Array.isArray(body.tools) ? (body.tools as unknown[]).length : 0;
     log.info(`[REQ:${_reqId}] ${modelField} | stream=${isStream} | img=${_imgCount} | tools=${_toolCount} | msgs=${_msgCount} | est=${_estTokensInit}tok | "${_reqMsg}"`);
+    await ensureApiKeysLoaded();
 
     // Rate limiting — 100 req/60s per IP
     // Caddy sets X-Real-IP and X-Forwarded-For to exactly the true client IP
@@ -1273,6 +1366,22 @@ export async function POST(req: NextRequest) {
       `.catch(() => {});
     }
 
+    const parsed = parseModelField(modelField);
+
+    let estInputTokens = estimateTokens(body);
+    const userMessageForRouting = extractUserMessage(body) ?? "";
+    const promptCategory = detectPromptCategory(userMessageForRouting);
+    const requestProfile = analyzeRequestProfile({
+      caps,
+      userMessage: userMessageForRouting,
+      estTokens: estInputTokens,
+      mode: parsed.mode,
+      maxTokens: body.max_tokens,
+      temperature: body.temperature,
+    });
+    applyNaturalConversationHint(body, requestProfile.intent, userMessageForRouting);
+    log.info(`[CAT:${_reqId}] ${promptCategory} | intent=${requestProfile.intent} | complexity=${requestProfile.complexity.toFixed(2)} | tags=${requestProfile.tags.join(",")}`);
+
     // Improvement C: response cache check (non-stream, low-temperature, no tools)
     const cachedHit = await getCachedResponse(body, _inboundBearer, _cacheOptOut);
     if (cachedHit) {
@@ -1301,18 +1410,25 @@ export async function POST(req: NextRequest) {
       return new Response(JSON.stringify(cacheBody), { status: 200, headers: cacheHeaders });
     }
 
-    const parsed = parseModelField(modelField);
-
-    const estInputTokens = estimateTokens(body);
-    const promptCategory = detectPromptCategory(extractUserMessage(body) ?? "");
-    log.info(`[CAT:${_reqId}] ${promptCategory}`);
+    let semanticMemoryHit: { provider: string; model: string } | null = null;
+    if (shouldUseSemanticMemory(body, caps, userMessageForRouting, _cacheOptOut)) {
+      const similar = await getCachedBySimilarity(userMessageForRouting, 0.9, { apiKey: _inboundBearer });
+      const memory = extractSemanticContent(similar?.response);
+      if (memory) {
+        injectSemanticMemory(body, memory);
+        estInputTokens = estimateTokens(body);
+        semanticMemoryHit = { provider: similar?.provider ?? "", model: similar?.model ?? "" };
+        bumpPerf("semantic:hit");
+        log.info(`[RAG-HIT:${_reqId}] ${semanticMemoryHit.provider}/${semanticMemoryHit.model} | +memory ctx | est=${estInputTokens}tok`);
+      }
+    }
 
     // ---- Consensus mode ----
     if (parsed.mode === "consensus") {
       const userMsg = extractUserMessage(body);
       const consensusStart = Date.now();
 
-      const allModels = await getAvailableModels(caps);
+      const allModels = (await getAvailableModels(caps)).filter((m) => isProviderCostAllowed(m.provider));
       const picked: ModelRow[] = [];
       const usedProviders = new Set<string>();
       for (const m of allModels) {
@@ -1377,6 +1493,13 @@ export async function POST(req: NextRequest) {
     // ---- Direct provider routing ----
     if (parsed.mode === "direct") {
       const { provider, modelId } = parsed;
+      if (!isProviderCostAllowed(provider!)) {
+        return openAIError(402, {
+          message: costPolicyBlockMessage(provider!),
+          code: "cost_policy_blocked",
+          param: "model",
+        });
+      }
       const response = await forwardToProvider(provider!, modelId!, body, isStream);
       // Parse rate limit headers regardless of success/fail
       const hdrLimit = parseLimitHeaders(response.headers);
@@ -1391,7 +1514,7 @@ export async function POST(req: NextRequest) {
         return openAIError(response.status, { message: errText || `Provider ${provider} returned ${response.status}` });
       }
       log.info(`[RES:${_reqId}] ${response.status} | ${provider}/${modelId} | ${Date.now() - _reqTime}ms | direct`);
-      return buildProxiedResponse(response, provider!, modelId!, isStream, estInputTokens, softBackoff, _reqId);
+      return buildProxiedResponse(response, provider!, modelId!, isStream, estInputTokens, softBackoff, _reqId, _reqToolNames, Boolean(semanticMemoryHit));
     }
 
     // ---- Match by model string ----
@@ -1406,13 +1529,20 @@ export async function POST(req: NextRequest) {
       }
 
       const row = rows[0];
+      if (!isProviderCostAllowed(row.provider)) {
+        return openAIError(402, {
+          message: costPolicyBlockMessage(row.provider),
+          code: "cost_policy_blocked",
+          param: "model",
+        });
+      }
       const response = await forwardToProvider(row.provider, row.model_id, body, isStream);
       if (!response.ok && isRetryableStatus(response.status)) {
         const errText = await response.text();
         return openAIError(response.status, { message: errText || `Provider ${row.provider} returned ${response.status}` });
       }
       log.info(`[RES:${_reqId}] ${response.status} | ${row.provider}/${row.model_id} | ${Date.now() - _reqTime}ms | match`);
-      return buildProxiedResponse(response, row.provider, row.model_id, isStream, estInputTokens, softBackoff, _reqId);
+      return buildProxiedResponse(response, row.provider, row.model_id, isStream, estInputTokens, softBackoff, _reqId, _reqToolNames, Boolean(semanticMemoryHit));
     }
 
     // ---- Smart routing: auto / fast / tools / thai ----
@@ -1475,7 +1605,7 @@ export async function POST(req: NextRequest) {
       return openAIError(503, { message: reason });
     }
 
-    const MAX_RETRIES = 25;
+    const MAX_RETRIES = requestProfile.retryBudget;
     let lastError = "";
     let lastProvider: string | null = null;
     let lastModelId: string | null = null;
@@ -1655,6 +1785,9 @@ export async function POST(req: NextRequest) {
       log.debug(`[DEV-STRATEGY:${_reqId}] strongest — top: ${finalCandidates.slice(0,3).map(c => `${c.provider}/${c.model_id}(${c.tier}/${c.context_length})`).join(", ")}`);
     }
 
+    finalCandidates = rankCandidatesByRequestProfile(finalCandidates, requestProfile);
+    log.info(`[REQ-INTEL:${_reqId}] ${requestProfile.intent} minCtx=${requestProfile.minContext} retry=${requestProfile.retryBudget} timeout=${requestProfile.timeoutMs}ms top3=${finalCandidates.slice(0,3).map(c => `${c.provider}/${c.model_id}`).join(", ")}`);
+
     // ─── Provider-first selection ─────────────────────────────────────────
     // ขั้นตอน:
     //   1. ตัดทิ้ง model ที่เพิ่ง fail ติดกัน (isRecentlyDead)
@@ -1673,12 +1806,14 @@ export async function POST(req: NextRequest) {
       (byProvider[c.provider] ??= []).push(c);
     }
 
+    const reputationScores = await getReputationScores(poolCandidates.map((m) => m.id));
     const providerRanking = await Promise.all(
       Object.entries(byProvider).map(async ([prov, models]) => {
         const liveP = getProviderScore(prov);
         const avgBenchLat = models.reduce((s, m) => s + (m.avg_latency ?? 9999999), 0) / models.length;
         const avgBenchScore = models.reduce((s, m) => s + (m.avg_score ?? 0), 0) / models.length;
-        const repScores = await Promise.all(models.map(m => getReputationScore(m.id)));
+        const avgRequestScore = models.reduce((s, m) => s + scoreCandidateForRequest(m, requestProfile), 0) / models.length;
+        const repScores = models.map(m => reputationScores.get(m.id) ?? 100);
         const avgRep = repScores.reduce((s, r) => s + r, 0) / repScores.length;
 
         // Weight: live success rate + exam score (ถ่วงเท่ากัน) + inverse latency
@@ -1688,10 +1823,14 @@ export async function POST(req: NextRequest) {
         if (prov === "ollama") {
           weight = -Infinity;
         } else {
+          const benchWeight = requestProfile.preferFast ? 900 : 3_000;
+          const requestWeight = requestProfile.preferFast ? 6 : 2;
+          const latencyDivisor = requestProfile.preferFast ? -3 : -10;
           weight =
             liveP.successRate * 50_000 +          // live success rate (ลดจาก 100K → 50K)
-            avgBenchScore * 3_000 * (avgRep / 100) +  // exam score (เพิ่ม 3x จาก 1K → 3K)
-            Math.min(liveP.avgLatency, avgBenchLat) / -10; // latency penalty
+            avgBenchScore * benchWeight * (avgRep / 100) +
+            avgRequestScore * requestWeight +
+            Math.min(liveP.avgLatency, avgBenchLat) / latencyDivisor;
         }
         return { prov, models, weight, liveScore: liveP };
       })
@@ -1711,10 +1850,10 @@ export async function POST(req: NextRequest) {
     const seenIds = new Set<string>();
     for (const { models } of providerRanking) {
       const sortedModels = [...models].sort((a, b) => {
-        const la = getModelScore(a.id);
-        const lb = getModelScore(b.id);
-        const scoreA = la.successRate * 5_000 + (a.avg_score ?? 0) * 300 - Math.min(la.avgLatency, a.avg_latency ?? 9999) / 100;
-        const scoreB = lb.successRate * 5_000 + (b.avg_score ?? 0) * 300 - Math.min(lb.avgLatency, b.avg_latency ?? 9999) / 100;
+        const la = getModelScore(a.model_id);
+        const lb = getModelScore(b.model_id);
+        const scoreA = la.successRate * 5_000 + (a.avg_score ?? 0) * 300 + scoreCandidateForRequest(a, requestProfile) - Math.min(la.avgLatency, a.avg_latency ?? 9999) / 100;
+        const scoreB = lb.successRate * 5_000 + (b.avg_score ?? 0) * 300 + scoreCandidateForRequest(b, requestProfile) - Math.min(lb.avgLatency, b.avg_latency ?? 9999) / 100;
         return scoreB - scoreA;
       });
       for (const m of sortedModels) {
@@ -1753,11 +1892,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Total retry budget — ขยายตาม estTokens (U2: aggressive overhaul)
-    const TOTAL_TIMEOUT_MS =
-      estTokens > 40_000 ? 120_000 :
-      estTokens > 20_000 ? 90_000  :
-      estTokens > 10_000 ? 60_000  :
-      30_000;
+    const TOTAL_TIMEOUT_MS = requestProfile.timeoutMs;
 
     // Improvement A (U2): parallel hedge top-3 cloud candidates (skip for stream / tools)
     // Each contender must come from a DIFFERENT provider — sending concurrent requests
@@ -1774,7 +1909,7 @@ export async function POST(req: NextRequest) {
         seenProviders.add(c.provider);
         hedgeContenders.push(c);
         lastHedgeIdx = hi;
-        if (hedgeContenders.length === 3) break;
+        if (hedgeContenders.length === requestProfile.hedgeLimit) break;
       }
     }
     // Sequential starts AFTER the last hedged position so we don't re-run the hedge slot
@@ -1785,6 +1920,7 @@ export async function POST(req: NextRequest) {
     const canHedge =
       !caps.hasTools &&
       estTokens <= 20_000 &&
+      requestProfile.hedgeLimit > 0 &&
       hedgeCount >= 2;
     // Only skip hedged candidates when hedge actually runs — otherwise start from 0
     if (!canHedge) hedgeStartIdx = 0;
@@ -1826,7 +1962,7 @@ export async function POST(req: NextRequest) {
         // Parse and return the hedge winner response (non-stream)
         try {
           const cloned = hedgeResp.clone();
-          const json = await cloned.json() as { choices?: Array<{ message?: { content?: string; reasoning?: string; reasoning_content?: string; tool_calls?: unknown[] } }>; usage?: { prompt_tokens?: number; completion_tokens?: number } };
+          const json = await cloned.json() as { choices?: Array<{ finish_reason?: string; message?: { content?: string; reasoning?: string; reasoning_content?: string; tool_calls?: unknown[] } }>; usage?: { prompt_tokens?: number; completion_tokens?: number } };
           const firstMsg = json.choices?.[0]?.message;
           let content = firstMsg?.content ?? "";
           // Same reasoning→content fallback as the sequential path
@@ -1839,12 +1975,14 @@ export async function POST(req: NextRequest) {
             }
           }
           let hasToolCalls = Array.isArray(firstMsg?.tool_calls) && (firstMsg!.tool_calls!.length > 0);
+          normalizeToolCallArguments(firstMsg);
           // Repair JSON-style tool_call leaks (Hermes/Qwen/OpenClaw emit raw JSON in content)
           if (firstMsg && !hasToolCalls && caps.hasTools && content) {
             const repaired = repairJsonToolCallLeak(content, _reqToolNames);
             if (repaired) {
               firstMsg.tool_calls = repaired;
               firstMsg.content = "";
+              json.choices![0].finish_reason = "tool_calls";
               content = "";
               hasToolCalls = true;
               log.warn(`[HEDGE-TC-REPAIR] ${winner.provider}/${winner.model_id} — moved ${repaired.length} JSON tool_call(s) from content→tool_calls`);
@@ -1861,9 +1999,13 @@ export async function POST(req: NextRequest) {
               content = cleanResponseContent(content);
               if (json.choices?.[0]?.message) json.choices[0].message.content = content;
             }
+            if (content) {
+              content = normalizeNaturalConversationContent(content, requestProfile.intent);
+              if (json.choices?.[0]?.message) json.choices[0].message.content = content;
+            }
             const usage = json.usage;
             await logGateway(modelField, winner.model_id, winner.provider, 200, latency,
-              usage?.prompt_tokens ?? 0, usage?.completion_tokens ?? 0, null, userMsg, content?.slice(0, 500) ?? null,
+              usage?.prompt_tokens ?? 0, usage?.completion_tokens ?? 0, null, userMsg, content?.slice(0, LOG_TEXT_LIMIT) ?? null,
               _reqId, ip);
             await recordRoutingResult(winner.id, winner.provider, promptCategory, true, latency);
             recordOutcome(winner.provider, winner.model_id, true, latency);
@@ -1893,6 +2035,9 @@ export async function POST(req: NextRequest) {
             recordBattleEvent(outcomeFromLatency(latency, true)).catch(() => { /* cosmetic */ });
             if (content) {
               setCachedResponse(body, { content, provider: winner.provider, model: winner.model_id }, _inboundBearer, _cacheOptOut).catch(() => { /* non-critical */ });
+              if (shouldUseSemanticMemory(body, caps, userMessageForRouting, _cacheOptOut)) {
+                storeSemanticResponse(userMessageForRouting, { content }, winner.provider, winner.model_id, { apiKey: _inboundBearer }).catch(() => { /* non-critical */ });
+              }
             }
             const hedgeHeaders = new Headers();
             hedgeHeaders.set("Content-Type", "application/json");
@@ -1900,6 +2045,7 @@ export async function POST(req: NextRequest) {
             hedgeHeaders.set("X-SMLGateway-Model", winner.model_id);
             hedgeHeaders.set("X-SMLGateway-Hedge", "true");
             hedgeHeaders.set("X-SMLGateway-Request-Id", _reqId);
+            if (semanticMemoryHit) hedgeHeaders.set("X-SMLGateway-RAG", "HIT");
             if (softBackoff) hedgeHeaders.set("X-Resceo-Backoff", "true");
             hedgeHeaders.set("Access-Control-Allow-Origin", "*");
             const _hpt = usage?.prompt_tokens ?? 0; const _hct = usage?.completion_tokens ?? 0;
@@ -2023,8 +2169,8 @@ export async function POST(req: NextRequest) {
       // Only fires when hedge at the top of the handler was skipped (stream
       // or tools path) or fell through — otherwise top-3 hedge already
       // covered the speculative case.
-      const SPEC_THRESHOLD_MS = 1_500;
-      const doSpeculative = tried === 1 && !isStream && !caps.hasTools && hedgeStartIdx === 0;
+      const SPEC_THRESHOLD_MS = requestProfile.preferFast ? 900 : 1_500;
+      const doSpeculative = tried === 1 && !isStream && !caps.hasTools && requestProfile.hedgeLimit > 0 && hedgeStartIdx === 0;
       let peekCandidate: typeof candidate | null = null;
       if (doSpeculative) {
         for (let j = i + 1; j < Math.min(i + 4, spreadCandidates.length); j++) {
@@ -2129,7 +2275,7 @@ export async function POST(req: NextRequest) {
           if (!isStream) {
             try {
               const cloned = response.clone();
-              const json = await cloned.json() as { choices?: Array<{ message?: { content?: string; reasoning?: string; reasoning_content?: string; tool_calls?: unknown[] } }>; usage?: { prompt_tokens?: number; completion_tokens?: number } };
+              const json = await cloned.json() as { choices?: Array<{ finish_reason?: string; message?: { content?: string; reasoning?: string; reasoning_content?: string; tool_calls?: unknown[] } }>; usage?: { prompt_tokens?: number; completion_tokens?: number } };
               const firstMsg = json.choices?.[0]?.message;
               let content = firstMsg?.content ?? "";
 
@@ -2147,6 +2293,7 @@ export async function POST(req: NextRequest) {
               }
 
               let hasToolCalls = Array.isArray(firstMsg?.tool_calls) && (firstMsg!.tool_calls!.length > 0);
+              normalizeToolCallArguments(firstMsg);
               // Repair JSON-style tool_call leaks (Hermes/Qwen/OpenClaw emit raw JSON in content
               // instead of OpenAI tool_calls field). Standardizes to OpenAI spec so any claw works.
               if (firstMsg && !hasToolCalls && caps.hasTools && content) {
@@ -2154,6 +2301,7 @@ export async function POST(req: NextRequest) {
                 if (repaired) {
                   firstMsg.tool_calls = repaired;
                   firstMsg.content = "";
+                  json.choices![0].finish_reason = "tool_calls";
                   content = "";
                   hasToolCalls = true;
                   log.warn(`[TC-REPAIR] ${provider}/${actualModelId} — moved ${repaired.length} JSON tool_call(s) from content→tool_calls`);
@@ -2176,11 +2324,15 @@ export async function POST(req: NextRequest) {
                 content = cleanResponseContent(content);
                 if (json.choices?.[0]?.message) json.choices[0].message.content = content;
               }
+              if (content) {
+                content = normalizeNaturalConversationContent(content, requestProfile.intent);
+                if (json.choices?.[0]?.message) json.choices[0].message.content = content;
+              }
 
               const usage = json.usage;
               markWinner(_reqId, provider, actualModelId, "selected:healthy");
               await logGateway(modelField, actualModelId, provider, 200, latency,
-                usage?.prompt_tokens ?? 0, usage?.completion_tokens ?? 0, null, userMsg, content?.slice(0, 500) ?? null,
+                usage?.prompt_tokens ?? 0, usage?.completion_tokens ?? 0, null, userMsg, content?.slice(0, LOG_TEXT_LIMIT) ?? null,
                 _reqId, ip);
               await recordRoutingResult(dbModelId, provider, promptCategory, true, latency);
               recordOutcome(provider, actualModelId, true, latency);
@@ -2216,6 +2368,7 @@ export async function POST(req: NextRequest) {
               headers.set("Content-Type", "application/json");
               headers.set("X-SMLGateway-Provider", provider);
               headers.set("X-SMLGateway-Model", actualModelId);
+              if (semanticMemoryHit) headers.set("X-SMLGateway-RAG", "HIT");
               if (softBackoff) headers.set("X-Resceo-Backoff", "true");
               headers.set("Access-Control-Allow-Origin", "*");
 
@@ -2236,6 +2389,9 @@ export async function POST(req: NextRequest) {
               // Improvement C: store in response cache (non-stream, low-temp, no tools)
               if (content) {
                 setCachedResponse(body, { content, provider, model: actualModelId }, _inboundBearer, _cacheOptOut).catch(() => { /* non-critical */ });
+                if (shouldUseSemanticMemory(body, caps, userMessageForRouting, _cacheOptOut)) {
+                  storeSemanticResponse(userMessageForRouting, { content }, provider, actualModelId, { apiKey: _inboundBearer }).catch(() => { /* non-critical */ });
+                }
               }
               recordBattleEvent(outcomeFromLatency(latency, true)).catch(() => { /* cosmetic */ });
               const _pt = usage?.prompt_tokens ?? 0; const _ct = usage?.completion_tokens ?? 0;
@@ -2248,7 +2404,7 @@ export async function POST(req: NextRequest) {
             }
           }
 
-          const proxied = await buildProxiedResponse(response, provider, actualModelId, isStream, estInputTokens, softBackoff, _reqId);
+          const proxied = await buildProxiedResponse(response, provider, actualModelId, isStream, estInputTokens, softBackoff, _reqId, _reqToolNames);
           const streamLatency = Date.now() - startTime;
           await recordRoutingResult(dbModelId, provider, promptCategory, true, streamLatency);
           recordOutcome(provider, actualModelId, true, streamLatency);
@@ -2455,7 +2611,7 @@ export async function POST(req: NextRequest) {
             recordOutcome(provider, actualModelId, true, streamLatency);
             await logGateway(modelField, actualModelId, provider, 200, streamLatency, 0, 0, null, userMsg, "[relaxed-retry]", _reqId, ip);
             log.info(`[RES:${_reqId}] 200 | ${provider}/${actualModelId} | ${streamLatency}ms | relaxed-retry stream | Q:"${_reqMsg}"`);
-            return buildProxiedResponse(response, provider, actualModelId, isStream, estInputTokens, softBackoff, _reqId);
+            return buildProxiedResponse(response, provider, actualModelId, isStream, estInputTokens, softBackoff, _reqId, _reqToolNames);
           }
           const errText = await response.text().catch(() => "");
           lastError = `${provider}/${actualModelId}: HTTP ${response.status}`;
@@ -2505,18 +2661,56 @@ async function buildProxiedResponse(
   stream: boolean,
   estimatedInputTokens = 0,
   softBackoff = false,
-  requestId: string | null = null
+  requestId: string | null = null,
+  requestToolNames: Set<string> = new Set(),
+  ragHit = false,
 ): Promise<Response> {
   const headers = new Headers();
   headers.set("Content-Type", upstream.headers.get("Content-Type") || "application/json");
   headers.set("X-SMLGateway-Provider", provider);
   headers.set("X-SMLGateway-Model", modelId);
   if (requestId) headers.set("X-SMLGateway-Request-Id", requestId);
+  if (ragHit) headers.set("X-SMLGateway-RAG", "HIT");
   if (softBackoff) headers.set("X-Resceo-Backoff", "true");
   headers.set("Access-Control-Allow-Origin", "*");
 
   if (stream && upstream.body) {
     const reader = upstream.body.getReader();
+    if (requestToolNames.size > 0) {
+      const chunks: Uint8Array[] = [];
+      let totalBytes = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        totalBytes += value.byteLength;
+        chunks.push(value);
+      }
+
+      const originalBytes = new Uint8Array(totalBytes);
+      let offset = 0;
+      for (const chunk of chunks) {
+        originalBytes.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+
+      const streamText = new TextDecoder().decode(originalBytes);
+      const repairedStream = repairStreamedJsonToolCallLeak(streamText, requestToolNames);
+      if (repairedStream) {
+        const source = repairedStream.source;
+        const id = typeof source.id === "string" ? source.id : `chatcmpl_${requestId ?? Date.now().toString(36)}`;
+        const created = typeof source.created === "number" ? source.created : Math.floor(Date.now() / 1000);
+        const sourceModel = typeof source.model === "string" ? source.model : modelId;
+        const encoder = new TextEncoder();
+        const repairedChunks = buildOpenAIStyleToolCallStreamChunks(repairedStream.repaired, { id, created, model: sourceModel });
+        await trackTokenUsage(provider, modelId, estimatedInputTokens, Math.ceil(totalBytes / 3));
+        log.warn(`[STREAM-TC-REPAIR] ${provider}/${modelId} — moved ${repairedStream.repaired.length} streamed JSON tool_call(s) from content to tool_calls`);
+        return new Response(encoder.encode(repairedChunks.join("")), { status: upstream.status, headers });
+      }
+
+      await trackTokenUsage(provider, modelId, estimatedInputTokens, Math.ceil(totalBytes / 3));
+      return new Response(originalBytes, { status: upstream.status, headers });
+    }
+
     let totalBytes = 0;
     const passthrough = new ReadableStream({
       async pull(controller) {

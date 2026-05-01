@@ -4,11 +4,9 @@ import { getWorkerStatus, runWorkerCycle } from "@/lib/worker";
 
 export const dynamic = "force-dynamic";
 
-// Trigger worker start on first request to this route
-ensureWorkerStarted();
-
 export async function GET() {
   try {
+    ensureWorkerStarted();
     const status = await getWorkerStatus();
     return NextResponse.json({ ok: true, worker: status });
   } catch (err) {
@@ -19,6 +17,7 @@ export async function GET() {
 
 export async function POST() {
   try {
+    ensureWorkerStarted();
     runWorkerCycle().catch((err) => {
       console.error("[worker] manual cycle error:", err);
     });

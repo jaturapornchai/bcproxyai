@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { getNextApiKey } from "@/lib/api-keys";
 import { resolveProviderEmbeddingUrl } from "@/lib/provider-resolver";
 import { openAIError } from "@/lib/openai-compat";
+import { getCostAllowedProviders, isProviderCostAllowed } from "@/lib/cost-policy";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -28,7 +29,7 @@ export async function POST(req: NextRequest) {
     const requestedModel = (body.model as string) || "auto";
 
     // Try each embedding provider in order
-    const providerOrder = ["ollama", "mistral", "openrouter"];
+    const providerOrder = ["ollama", "mistral", "openrouter"].filter(isProviderCostAllowed);
 
     for (const provider of providerOrder) {
       const url = resolveProviderEmbeddingUrl(provider);
@@ -94,7 +95,7 @@ export async function POST(req: NextRequest) {
     }
 
     return openAIError(503, {
-      message: "No embedding providers available. Configure Ollama, Mistral, or OpenRouter API keys.",
+      message: `No cost-allowed embedding providers available. Allowed providers: ${getCostAllowedProviders().join(", ")}.`,
     });
   } catch (err) {
     console.error("[embeddings] error:", err);

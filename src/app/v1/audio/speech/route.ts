@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { getNextApiKey } from "@/lib/api-keys";
 import { openAIError } from "@/lib/openai-compat";
+import { costPolicyBlockMessage, isProviderCostAllowed } from "@/lib/cost-policy";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -13,6 +14,13 @@ export const runtime = "nodejs";
  */
 export async function POST(req: NextRequest) {
   try {
+    if (!isProviderCostAllowed("groq")) {
+      return openAIError(402, {
+        message: costPolicyBlockMessage("groq"),
+        code: "cost_policy_blocked",
+      });
+    }
+
     const apiKey = getNextApiKey("groq");
     if (!apiKey) {
       return openAIError(503, {

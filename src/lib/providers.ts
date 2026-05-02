@@ -34,6 +34,7 @@ export const PROVIDER_URLS: Record<string, string> = {
   monsterapi: "https://llm.monsterapi.ai/v1/chat/completions",
   friendli: "https://api.friendli.ai/dedicated/v1/chat/completions",
   ai21: "https://api.ai21.com/studio/v1/chat/completions",
+  sealion: "https://api.sea-lion.ai/v1/chat/completions",
 };
 
 // Embedding endpoints (providers that support embeddings)
@@ -84,4 +85,5 @@ export const PROVIDER_LABELS: Record<string, string> = {
   monsterapi: "Monster",
   friendli: "Friendli",
   ai21: "AI21",
+  sealion: "SEA-LION",
 };

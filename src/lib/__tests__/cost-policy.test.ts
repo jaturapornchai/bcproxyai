@@ -15,7 +15,8 @@ describe("cost policy", () => {
   it("allows only hardcoded remote free models across whitelisted providers", () => {
     expect(getCostAllowedProviders().sort()).toEqual([
       "cerebras", "chutes", "cohere", "github", "google", "groq", "huggingface",
-      "mistral", "nvidia", "ollamacloud", "openrouter", "sambanova", "together",
+      "mistral", "nvidia", "ollamacloud", "openrouter", "sambanova", "sealion",
+      "thaillm", "together", "typhoon",
     ]);
     expect(getFreeModelAllowlist()).toContain("openrouter/openai/gpt-oss-20b:free");
     expect(getFreeModelAllowlist()).toContain("groq/llama-3.3-70b-versatile");
@@ -30,6 +31,15 @@ describe("cost policy", () => {
     expect(getFreeModelAllowlist()).toContain("together/meta-llama/Llama-3.3-70B-Instruct-Turbo-Free");
     expect(getFreeModelAllowlist()).toContain("chutes/deepseek-ai/DeepSeek-R1");
     expect(getFreeModelAllowlist()).toContain("ollamacloud/gpt-oss:120b-cloud");
+    expect(getFreeModelAllowlist()).toContain("typhoon/typhoon-v2.5-30b-a3b-instruct");
+    expect(getFreeModelAllowlist()).toContain("thaillm/openthaigpt-thaillm-8b-instruct-v7.2");
+    expect(getFreeModelAllowlist()).toContain("sealion/aisingapore/Gemma-SEA-LION-v4-27B-IT");
+
+    expect(isProviderCostAllowed("typhoon")).toBe(true);
+    expect(isProviderCostAllowed("thaillm")).toBe(true);
+    expect(isProviderCostAllowed("sealion")).toBe(true);
+    expect(isModelCostAllowed("typhoon", "typhoon-v2.1-12b-instruct")).toBe(true);
+    expect(isModelCostAllowed("typhoon", "typhoon-v2-pro-paid")).toBe(false);
 
     expect(isProviderCostAllowed("ollama")).toBe(false);
     expect(isProviderCostAllowed("pollinations")).toBe(false);

@@ -59,6 +59,9 @@ const nvidia = (m: string, n: string, c: number, caps: ModelCaps = {}) => entry(
 const together = (m: string, n: string, c: number, caps: ModelCaps = {}) => entry("together", m, n, c, caps);
 const chutes = (m: string, n: string, c: number, caps: ModelCaps = {}) => entry("chutes", m, n, c, caps);
 const ollamacloud = (m: string, n: string, c: number, caps: ModelCaps = {}) => entry("ollamacloud", m, n, c, caps);
+const typhoon = (m: string, n: string, c: number, caps: ModelCaps = {}) => entry("typhoon", m, n, c, caps);
+const thaillm = (m: string, n: string, c: number, caps: ModelCaps = {}) => entry("thaillm", m, n, c, caps);
+const sealion = (m: string, n: string, c: number, caps: ModelCaps = {}) => entry("sealion", m, n, c, caps);
 
 // Hardcoded zero-spend catalog. Each entry must come from a provider that
 // publishes a real free tier (rate-limited but not credit-trial). Local
@@ -212,6 +215,21 @@ export const FREE_MODEL_CATALOG: readonly FreeModelCatalogEntry[] = [
   ollamacloud("deepseek-v3.1:671b-cloud", "OllamaCloud: DeepSeek V3.1 671B", 131072, { tools: true, json: true }),
   ollamacloud("qwen3-coder:480b-cloud", "OllamaCloud: Qwen 3 Coder 480B", 262144, { code: true, tools: true, json: true }),
   ollamacloud("kimi-k2:1t-cloud", "OllamaCloud: Kimi K2 1T", 262144, { tools: true, json: true }),
+
+  // ── Typhoon (SCB 10X Thai LLM, free 5 RPS / 200 RPM, no card required) ──
+  typhoon("typhoon-v2.5-30b-a3b-instruct", "Typhoon: V2.5 30B A3B Instruct (TH)", 8192, { tools: true, json: true }),
+  typhoon("typhoon-v2.1-12b-instruct", "Typhoon: V2.1 12B Instruct (TH)", 8192, { tools: true, json: true }),
+
+  // ── ThaiLLM (NECTEC consortium, free launch period, no card required) ──
+  thaillm("openthaigpt-thaillm-8b-instruct-v7.2", "ThaiLLM: OpenThaiGPT 8B Instruct v7.2", 8192, { tools: true, json: true }),
+  thaillm("typhoon-s-thaillm-8b-instruct", "ThaiLLM: Typhoon-S 8B Instruct", 8192, { tools: true, json: true }),
+  thaillm("pathumma-thaillm-qwen3-8b-think-2.0.0", "ThaiLLM: Pathumma Qwen3 8B Thinking", 8192, { tools: true, reasoning: true, json: true }),
+  thaillm("thalle-0.2-thaillm-8b-fa", "ThaiLLM: Thalle 0.2 8B (Finance)", 8192, { tools: true, json: true }),
+
+  // ── SEA-LION (AI Singapore, free trial, no card required, 10 RPM/user) ──
+  sealion("aisingapore/Gemma-SEA-LION-v4-27B-IT", "SEA-LION: Gemma v4 27B IT", 8192, { tools: true, vision: true, json: true }),
+  sealion("aisingapore/Qwen-SEA-LION-v4-32B-IT", "SEA-LION: Qwen v4 32B IT", 8192, { tools: true, json: true }),
+  sealion("aisingapore/Llama-SEA-LION-v3.5-70B-R", "SEA-LION: Llama v3.5 70B Reasoning", 8192, { reasoning: true, json: true }),
 ] as const;
 
 const FREE_MODEL_KEYS = new Set(

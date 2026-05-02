@@ -44,6 +44,7 @@ const HARDCODED_ENV_MAP: Record<string, string> = {
   deepinfra: "DEEPINFRA_API_KEY", novita: "NOVITA_API_KEY",
   monsterapi: "MONSTERAPI_API_KEY", friendli: "FRIENDLI_API_KEY",
   ai21: "AI21_API_KEY",
+  sealion: "SEALION_API_KEY",
 };
 
 async function refresh(): Promise<void> {

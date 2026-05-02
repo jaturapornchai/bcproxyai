@@ -2750,8 +2750,9 @@ async function buildProxiedResponse(
     return new Response(passthrough, { status: upstream.status, headers });
   }
 
+  let text: string | null = null;
   try {
-    const text = await upstream.text();
+    text = await upstream.text();
     const json = JSON.parse(text);
 
     if (json.choices) {
@@ -2806,7 +2807,10 @@ async function buildProxiedResponse(
 
     return new Response(JSON.stringify(json), { status: upstream.status, headers });
   } catch {
-    return new Response(upstream.body, { status: upstream.status, headers });
+    if (text !== null) {
+      return new Response(text, { status: upstream.status, headers });
+    }
+    return new Response("", { status: upstream.status, headers });
   }
 }
 

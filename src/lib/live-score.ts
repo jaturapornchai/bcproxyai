@@ -6,6 +6,7 @@
  * - reorder candidates ครั้งถัดไปไม่ให้วน provider เดิมที่เพิ่ง fail
  * - penalty latency per provider + per model
  */
+import { recordRecentFailure, recordRecentSuccess } from "@/lib/learning";
 
 interface LiveScore {
   successRate: number;   // EMA 0.0-1.0
@@ -49,6 +50,9 @@ function updateEma(prev: LiveScore | undefined, success: boolean, latencyMs: num
 export function recordOutcome(provider: string, modelId: string, success: boolean, latencyMs: number): void {
   providerScores.set(provider, updateEma(providerScores.get(provider), success, latencyMs));
   modelScores.set(modelId, updateEma(modelScores.get(modelId), success, latencyMs));
+  // Feed the in-memory circuit breaker so it can throttle subsequent probes.
+  if (success) recordRecentSuccess(`${provider}:${modelId}`);
+  else recordRecentFailure(`${provider}:${modelId}`);
 }
 
 export function getProviderScore(provider: string): LiveScore {

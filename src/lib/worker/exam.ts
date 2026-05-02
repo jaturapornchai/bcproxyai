@@ -160,6 +160,22 @@ const DIFFICULTY_BY_ID: Record<string, ExamLevel> = {
   vision_brand_v1:   "university",
   vision_room_v1:    "university",
   vision_cartoon_v1: "university",
+  // Section TH+: extended Thai battery
+  thai_translate_en2th_v1: "middle",
+  thai_translate_th2en_v1: "middle",
+  thai_polite_particle_v1: "middle",
+  thai_thai_numerals_v1:   "middle",
+  thai_compass_v1:         "middle",
+  thai_synonym_v1:         "middle",
+  thai_classifier_v1:      "middle",
+  thai_day_color_v1:       "middle",
+  thai_idiom_meaning_v1:   "high",
+  thai_proverb_meaning_v1: "high",
+  thai_word_problem_v1:    "high",
+  thai_currency_words_v1:  "high",
+  thai_natural_chat_v1:    "high",
+  thai_royal_word_v1:      "university",
+  thai_tone_marker_v1:     "university",
 };
 
 // ─── ข้อสอบ 25 ข้อ — เน้นใช้งานจริง + กรอง model คุณภาพสูง ──────────────────
@@ -838,6 +854,201 @@ What is the square root of 144?`,
       if (hits.length >= 1)
         return { passed: true, reason: `read ${hits.length} names: ${hits.join(", ")}` };
       return { passed: false, reason: `no Thai text recognized: "${answer.slice(0, 80)}"` };
+    },
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  //  Section TH+: Extended Thai-language proficiency battery.
+  //  Goal — give `sml/thai` virtual alias real signal to pick the best
+  //  Thai-tuned model (Pathumma, Typhoon, OpenThaiGPT) over English-trained
+  //  ones that pass primary Thai but stumble on idiom/translation/grammar.
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  {
+    id: "thai_translate_en2th_v1",
+    category: "thai",
+    question: 'แปลประโยคนี้เป็นภาษาไทยที่เป็นธรรมชาติ ตอบเฉพาะคำแปล: "It\'s raining cats and dogs."',
+    expected: "ฝนตกหนัก / ฝนตกหนักมาก / ฝนตกเป็นบ้าเป็นหลัง",
+    check: (answer) => {
+      const clean = stripThink(answer);
+      if (/ฝน(ตก|กระหน่ำ)/.test(clean)) return { passed: true, reason: "Thai weather translation found" };
+      return { passed: false, reason: `no Thai rain phrase: "${clean.slice(0, 60)}"` };
+    },
+  },
+  {
+    id: "thai_translate_th2en_v1",
+    category: "thai",
+    question: 'แปลเป็นภาษาอังกฤษ ตอบเฉพาะคำแปล: "ขอบคุณมากครับ พรุ่งนี้เจอกันใหม่"',
+    expected: "Thank you (so much). See you tomorrow.",
+    check: (answer) => {
+      const clean = stripThink(answer).toLowerCase();
+      const hasThanks = /thank/.test(clean);
+      const hasTomorrow = /tomorrow|see you|next time/.test(clean);
+      if (hasThanks && hasTomorrow) return { passed: true, reason: "thanks + tomorrow" };
+      return { passed: false, reason: `missing thanks/tomorrow: "${clean.slice(0, 60)}"` };
+    },
+  },
+  {
+    id: "thai_idiom_meaning_v1",
+    category: "thai",
+    question: 'ความหมายของสำนวน "น้ำขึ้นให้รีบตัก" คืออะไร ตอบสั้น 1 ประโยค',
+    expected: "ฉวยโอกาสเมื่อมี / รีบทำเมื่อมีโอกาส",
+    check: (answer) => {
+      const clean = stripThink(answer);
+      if (/โอกาส|รีบ|ฉวย|ทันที|ฉันใด|ขณะที่ยัง/.test(clean)) return { passed: true, reason: "opportunity-meaning found" };
+      return { passed: false, reason: `idiom not understood: "${clean.slice(0, 80)}"` };
+    },
+  },
+  {
+    id: "thai_proverb_meaning_v1",
+    category: "thai",
+    question: 'ความหมายของสุภาษิต "ช้าๆ ได้พร้าเล่มงาม" คืออะไร ตอบสั้น 1 ประโยค',
+    expected: "ทำอะไรอย่างใจเย็น ค่อยเป็นค่อยไป จะได้ผลลัพธ์ที่ดี",
+    check: (answer) => {
+      const clean = stripThink(answer);
+      if (/ใจเย็น|ค่อย|ไม่รีบ|รอบคอบ|ละเอียด|ดี.*กว่า|ผลลัพธ์/.test(clean))
+        return { passed: true, reason: "patience meaning found" };
+      return { passed: false, reason: `proverb not understood: "${clean.slice(0, 80)}"` };
+    },
+  },
+  {
+    id: "thai_word_problem_v1",
+    category: "thai",
+    question:
+      "แม่ค้าซื้อมะม่วงมา 5 กิโล ราคากิโลละ 40 บาท ขายได้กิโลละ 60 บาท ถ้าขายหมดได้กำไรกี่บาท ตอบเป็นตัวเลขเฉยๆ",
+    expected: "100",
+    check: (answer) => {
+      const clean = stripThink(answer).replace(/[^\d-]/g, "");
+      if (clean === "100") return { passed: true, reason: "correct profit 100" };
+      return { passed: false, reason: `expected 100 baht, got "${clean.slice(0, 30)}"` };
+    },
+  },
+  {
+    id: "thai_currency_words_v1",
+    category: "thai",
+    question: "อ่านจำนวนเงิน 1,250 บาท เป็นตัวอักษรภาษาไทย ตอบสั้น",
+    expected: "หนึ่งพันสองร้อยห้าสิบบาท",
+    check: (answer) => {
+      const clean = stripThink(answer).replace(/\s/g, "");
+      const okPattern = /พัน.*สอง.*ร้อย.*ห้า.*สิบ.*บาท|หนึ่งพันสองร้อยห้าสิบบาท/;
+      if (okPattern.test(clean)) return { passed: true, reason: "spelled correctly" };
+      return { passed: false, reason: `wrong spelling: "${clean.slice(0, 80)}"` };
+    },
+  },
+  {
+    id: "thai_polite_particle_v1",
+    category: "thai",
+    question:
+      'พิมพ์คำลงท้ายภาษาไทยที่สุภาพให้ผู้ชายพูดกับลูกค้า ตอบ 1 คำเดียว ห้ามใช้รูปแบบ "ครับ/ค่ะ"',
+    expected: "ครับ",
+    check: (answer) => {
+      const clean = stripThink(answer).trim();
+      if (/^ครับ\.?$/.test(clean)) return { passed: true, reason: "exact 'ครับ'" };
+      if (/ครับ\/ค่ะ|ค่ะ\/ครับ/.test(clean))
+        return { passed: false, reason: `used disallowed slash form: "${clean}"` };
+      if (/^(ครับผม|ขอรับ|นะครับ)$/.test(clean)) return { passed: true, reason: `polite variant: "${clean}"` };
+      return { passed: false, reason: `expected just 'ครับ', got: "${clean.slice(0, 40)}"` };
+    },
+  },
+  {
+    id: "thai_thai_numerals_v1",
+    category: "thai",
+    question: "เลข 2026 เขียนเป็นตัวเลขไทยอย่างไร ตอบเฉพาะตัวเลขไทย ไม่ต้องอธิบาย",
+    expected: "๒๐๒๖",
+    check: (answer) => {
+      const clean = stripThink(answer).replace(/\s/g, "");
+      if (/๒๐๒๖/.test(clean)) return { passed: true, reason: "Thai digits found" };
+      return { passed: false, reason: `expected ๒๐๒๖, got: "${clean.slice(0, 40)}"` };
+    },
+  },
+  {
+    id: "thai_compass_v1",
+    category: "thai",
+    question:
+      "พระอาทิตย์ขึ้นทางทิศไหน ตอบเฉพาะชื่อทิศภาษาไทย 1 คำ",
+    expected: "ตะวันออก",
+    check: (answer) => {
+      const clean = stripThink(answer).trim();
+      if (/ตะวันออก/.test(clean)) return { passed: true, reason: "correct direction" };
+      return { passed: false, reason: `expected ตะวันออก, got: "${clean.slice(0, 40)}"` };
+    },
+  },
+  {
+    id: "thai_synonym_v1",
+    category: "thai",
+    question:
+      'คำว่า "สวยงาม" มีความหมายเหมือนคำใดต่อไปนี้ ตอบเฉพาะคำที่ถูกต้อง: "เลอะเทอะ" / "งดงาม" / "อ้วนกลม"',
+    expected: "งดงาม",
+    check: (answer) => {
+      const clean = stripThink(answer);
+      if (/งดงาม/.test(clean)) return { passed: true, reason: "correct synonym" };
+      return { passed: false, reason: `expected งดงาม: "${clean.slice(0, 60)}"` };
+    },
+  },
+  {
+    id: "thai_classifier_v1",
+    category: "thai",
+    question:
+      "เติมลักษณนาม (คำลักษณนาม) ที่ถูกต้อง: \"รถยนต์ 3 ___\" ตอบเฉพาะคำลักษณนามที่ขาด",
+    expected: "คัน",
+    check: (answer) => {
+      const clean = stripThink(answer).trim().replace(/[.\s"'`]/g, "");
+      if (/^คัน$/.test(clean) || /คัน/.test(clean.slice(0, 5))) return { passed: true, reason: "correct classifier" };
+      return { passed: false, reason: `expected 'คัน', got: "${clean.slice(0, 30)}"` };
+    },
+  },
+  {
+    id: "thai_day_color_v1",
+    category: "thai",
+    question:
+      "ตามตำนานไทย วันจันทร์มีสีประจำวันคือสีอะไร ตอบเฉพาะชื่อสี 1 คำ",
+    expected: "เหลือง",
+    check: (answer) => {
+      const clean = stripThink(answer);
+      if (/เหลือง/.test(clean)) return { passed: true, reason: "correct day color" };
+      return { passed: false, reason: `expected เหลือง: "${clean.slice(0, 40)}"` };
+    },
+  },
+  {
+    id: "thai_royal_word_v1",
+    category: "thai",
+    question:
+      'คำราชาศัพท์ของคำว่า "กิน" สำหรับพระมหากษัตริย์คือคำใด ตอบ 1 คำ',
+    expected: "เสวย",
+    check: (answer) => {
+      const clean = stripThink(answer);
+      if (/เสวย/.test(clean)) return { passed: true, reason: "correct royal verb" };
+      return { passed: false, reason: `expected เสวย: "${clean.slice(0, 60)}"` };
+    },
+  },
+  {
+    id: "thai_tone_marker_v1",
+    category: "thai",
+    question:
+      'คำว่า "ป่า" มีวรรณยุกต์อะไร ตอบ 1 คำ (สามัญ / เอก / โท / ตรี / จัตวา)',
+    expected: "เอก",
+    check: (answer) => {
+      const clean = stripThink(answer);
+      if (/^เอก|\bเอก\b/.test(clean)) return { passed: true, reason: "correct tone (เอก)" };
+      return { passed: false, reason: `expected เอก: "${clean.slice(0, 40)}"` };
+    },
+  },
+  {
+    id: "thai_natural_chat_v1",
+    category: "thai",
+    question:
+      "ตอบลูกค้าเป็นภาษาไทยที่เป็นธรรมชาติแบบสั้น เมื่อลูกค้าถามว่า: 'สั่งของวันนี้ พรุ่งนี้ได้รับเลยไหม' (ห้ามตอบยาวเกิน 2 ประโยค ห้ามใช้คำว่าครับ/ค่ะ ในรูปแบบทับด้วย /)",
+    expected: "ตอบสุภาพ ตรงประเด็น 1-2 ประโยค ลงท้ายด้วยครับหรือค่ะ ไม่ทับด้วย /",
+    check: (answer) => {
+      const clean = stripThink(answer);
+      if (clean.length < 5) return { passed: false, reason: "too short" };
+      if (clean.length > 220) return { passed: false, reason: `too long (${clean.length} chars)` };
+      if (/ครับ\s*\/\s*ค่ะ|ค่ะ\s*\/\s*ครับ/.test(clean))
+        return { passed: false, reason: "used disallowed ครับ/ค่ะ slash form" };
+      if (!/[฀-๿]/.test(clean)) return { passed: false, reason: "no Thai characters" };
+      const hasPolite = /(ครับ|ค่ะ|ขอรับ|จ้า)/.test(clean);
+      if (!hasPolite) return { passed: false, reason: "missing polite particle" };
+      return { passed: true, reason: `${clean.length}-char polite Thai reply` };
     },
   },
 ];

@@ -20,7 +20,7 @@ import { hasTpmHeadroom, recordTokenConsumption } from "@/lib/tpm-tracker";
 import { recordOutcome, getProviderScore, getModelScore, isRecentlyDead } from "@/lib/live-score";
 import { isProviderEnabledSync } from "@/lib/provider-toggle";
 import { canFitRequest, parseLimitHeaders, parseLimitError, recordLimit } from "@/lib/provider-limits";
-import { recordOutcomeLearning, recordFailStreak, canHandleTokens, getCategoryWinners, detectCategory, isModelUnhealthyForCategory } from "@/lib/learning";
+import { recordOutcomeLearning, recordFailStreak, canHandleTokens, getCategoryWinners, detectCategory, isModelUnhealthyForCategory, acquireCircuitProbe, releaseCircuitProbe, recordRecentFailure, recordRecentSuccess } from "@/lib/learning";
 import { upstreamAgent } from "@/lib/upstream-agent";
 import { getRpmLimit } from "@/lib/free-model-catalog";
 import { tryConsumeRpm } from "@/lib/rate-budget";
@@ -901,6 +901,23 @@ async function forwardToProvider(
     throw new Error(costPolicyBlockMessage(provider, actualModelId));
   }
 
+  // Circuit breaker: when this model has failed RECENT_FAIL_THRESHOLD times in
+  // the last 30s, only HALF_OPEN_PROBE_LIMIT concurrent probes are allowed.
+  // The rest fall back to the next candidate immediately, preventing the
+  // thundering-herd cascade after a brief upstream outage.
+  const circuitKey = `${provider}:${actualModelId}`;
+  const probe = acquireCircuitProbe(circuitKey);
+  if (!probe.allow) {
+    throw new Error(`circuit breaker half-open: ${circuitKey} probe in flight`);
+  }
+  let probeReleased = false;
+  const releaseProbeOnce = () => {
+    if (probeReleased) return;
+    probeReleased = true;
+    releaseCircuitProbe(circuitKey);
+  };
+
+  try {
   // Client-side RPM throttle: skip locally so we don't burn the upstream
   // 429 budget, which is what triggers minutes-long cooldowns.
   const rpmLimit = getRpmLimit(provider, actualModelId);
@@ -1144,10 +1161,16 @@ async function forwardToProvider(
   if (response.status === 429) {
     markKeyCooldown(provider, apiKey, 300000);
     const text = await response.text();
+    releaseProbeOnce();
     return new Response(text, { status: 429, headers: response.headers });
   }
 
-  return response;
+    releaseProbeOnce();
+    return response;
+  } catch (err) {
+    releaseProbeOnce();
+    throw err;
+  }
 }
 
 // Improvement A: parallel hedge for top-2 cloud candidates

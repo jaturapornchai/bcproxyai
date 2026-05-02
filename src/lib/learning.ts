@@ -70,44 +70,69 @@ export async function recordSuccessStreak(modelId: string): Promise<void> {
 
 // ─── Circuit breaker: 3-state with explicit half-open ─────────────────────────
 //
-// Implicit cooldown was binary (open vs closed): when cooldown expired we let
-// the *next* request through, but if 5 hot requests fired simultaneously they
-// all hit the still-broken upstream → cascading 429. Explicit half-open
-// admits N probes only; if any succeed → close, if all fail → re-open with
-// double cooldown.
+// In-memory only (no DB reads on hot path). When `recordRecentFailure` is
+// called, we tag the modelId as recently-failed; subsequent acquireCircuitProbe
+// calls limit concurrency to HALF_OPEN_PROBE_LIMIT. After RECENT_FAIL_TTL_MS
+// without a fresh failure (or one success) the state returns to closed.
 
 const HALF_OPEN_PROBE_LIMIT = 1;
+const RECENT_FAIL_TTL_MS = 30_000;
+const RECENT_FAIL_THRESHOLD = 2;
+
+interface RecentFailState {
+  count: number;
+  lastFailAt: number;
+}
+const recentFails = new Map<string, RecentFailState>();
 const halfOpenInflight = new Map<string, number>();
 
-export type CircuitState = "closed" | "open" | "half-open";
+export type CircuitState = "closed" | "half-open";
+
+/**
+ * Tag `modelId` as having just failed. Tracks a rolling fail count that
+ * decays after RECENT_FAIL_TTL_MS.
+ */
+export function recordRecentFailure(modelId: string): void {
+  const now = Date.now();
+  const cur = recentFails.get(modelId);
+  if (cur && now - cur.lastFailAt < RECENT_FAIL_TTL_MS) {
+    cur.count += 1;
+    cur.lastFailAt = now;
+  } else {
+    recentFails.set(modelId, { count: 1, lastFailAt: now });
+  }
+}
+
+/** A success closes the breaker for this modelId immediately. */
+export function recordRecentSuccess(modelId: string): void {
+  recentFails.delete(modelId);
+}
 
 /**
  * Decide if a request to `modelId` should fire. Caller MUST invoke
  * `releaseCircuitProbe()` after the upstream call regardless of outcome.
  *
- * - closed → allow, no slot tracked
- * - open   → reject (caller falls back to next candidate)
- * - half-open → allow at most HALF_OPEN_PROBE_LIMIT concurrent probes
+ * - closed   → allow, no concurrency cap
+ * - half-open → allow at most HALF_OPEN_PROBE_LIMIT concurrent probes; the
+ *              rest get `allow: false` and should fall back to next candidate
  */
-export async function acquireCircuitProbe(
-  modelId: string,
-  cooldownUntil: Date | null,
-  failStreak: number,
-): Promise<{ state: CircuitState; allow: boolean }> {
-  // Cooldown still active → open
-  if (cooldownUntil && cooldownUntil.getTime() > Date.now()) {
-    return { state: "open", allow: false };
+export function acquireCircuitProbe(modelId: string): { state: CircuitState; allow: boolean } {
+  const cur = recentFails.get(modelId);
+  const now = Date.now();
+  // State decay
+  if (cur && now - cur.lastFailAt > RECENT_FAIL_TTL_MS) {
+    recentFails.delete(modelId);
   }
-  // No active cooldown but recent failures → half-open: rate-limit probes
-  if (failStreak >= 2) {
-    const inflight = halfOpenInflight.get(modelId) ?? 0;
-    if (inflight >= HALF_OPEN_PROBE_LIMIT) {
-      return { state: "half-open", allow: false };
-    }
-    halfOpenInflight.set(modelId, inflight + 1);
-    return { state: "half-open", allow: true };
+  const fresh = recentFails.get(modelId);
+  if (!fresh || fresh.count < RECENT_FAIL_THRESHOLD) {
+    return { state: "closed", allow: true };
   }
-  return { state: "closed", allow: true };
+  const inflight = halfOpenInflight.get(modelId) ?? 0;
+  if (inflight >= HALF_OPEN_PROBE_LIMIT) {
+    return { state: "half-open", allow: false };
+  }
+  halfOpenInflight.set(modelId, inflight + 1);
+  return { state: "half-open", allow: true };
 }
 
 export function releaseCircuitProbe(modelId: string): void {

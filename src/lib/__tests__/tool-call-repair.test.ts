@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildOpenAIStyleToolCallStreamChunks, extractRequestToolNames, repairJsonToolCallLeak, repairStreamedJsonToolCallLeak } from "@/lib/tool-call-repair";
+import { buildOpenAIStyleToolCallStreamChunks, extractRequestToolNames, repairJsonToolCallLeak, repairStreamedJsonToolCallLeak, validateToolCallArguments } from "@/lib/tool-call-repair";
 
 const TOOLS = new Set(["brain_search", "send_email"]);
 
@@ -189,5 +189,64 @@ describe("buildOpenAIStyleToolCallStreamChunks", () => {
     });
     expect(events[2].choices[0].finish_reason).toBe("tool_calls");
     expect(chunks.at(-1)).toBe("data: [DONE]\n\n");
+  });
+});
+
+describe("validateToolCallArguments", () => {
+  it("accepts empty list", () => {
+    expect(validateToolCallArguments([]).ok).toBe(true);
+  });
+
+  it("accepts well-formed JSON object args", () => {
+    const tcs = [
+      { function: { arguments: '{"keyword":"x","limit":3}' } },
+      { function: { arguments: '{}' } },
+    ];
+    expect(validateToolCallArguments(tcs).ok).toBe(true);
+  });
+
+  it("treats null/empty arguments as zero-arg tools (allowed)", () => {
+    const tcs = [
+      { function: { arguments: "" } },
+      { function: {} },
+      {},
+    ];
+    expect(validateToolCallArguments(tcs).ok).toBe(true);
+  });
+
+  it("rejects unparseable JSON", () => {
+    const tcs = [{ function: { arguments: '{"a": 1, }' } }]; // trailing comma
+    const r = validateToolCallArguments(tcs);
+    expect(r.ok).toBe(false);
+    expect(r.firstError?.index).toBe(0);
+    expect(r.firstError?.reason).toContain("JSON.parse failed");
+  });
+
+  it("rejects JSON arrays at top level (must be object)", () => {
+    const tcs = [{ function: { arguments: "[1,2,3]" } }];
+    const r = validateToolCallArguments(tcs);
+    expect(r.ok).toBe(false);
+    expect(r.firstError?.reason).toBe("arguments not a JSON object");
+  });
+
+  it("rejects JSON null at top level", () => {
+    const tcs = [{ function: { arguments: "null" } }];
+    expect(validateToolCallArguments(tcs).ok).toBe(false);
+  });
+
+  it("rejects non-string arguments", () => {
+    const tcs = [{ function: { arguments: { a: 1 } as unknown as string } }];
+    const r = validateToolCallArguments(tcs);
+    expect(r.ok).toBe(false);
+    expect(r.firstError?.reason).toBe("arguments not a string");
+  });
+
+  it("returns the first failing index", () => {
+    const tcs = [
+      { function: { arguments: '{"ok": true}' } },
+      { function: { arguments: 'broken{' } },
+      { function: { arguments: '{"ok": true}' } },
+    ];
+    expect(validateToolCallArguments(tcs).firstError?.index).toBe(1);
   });
 });

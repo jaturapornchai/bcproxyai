@@ -17,20 +17,23 @@ function tierFor(contextLength: number): FreeModelCatalogEntry["tier"] {
   return "small";
 }
 
-function openrouter(
+interface ModelCaps {
+  tools?: boolean;
+  vision?: boolean;
+  reasoning?: boolean;
+  json?: boolean;
+  code?: boolean;
+}
+
+function entry(
+  provider: string,
   modelId: string,
   name: string,
   contextLength: number,
-  caps: {
-    tools?: boolean;
-    vision?: boolean;
-    reasoning?: boolean;
-    json?: boolean;
-    code?: boolean;
-  } = {},
+  caps: ModelCaps = {},
 ): FreeModelCatalogEntry {
   return {
-    provider: "openrouter",
+    provider,
     modelId,
     name,
     contextLength,
@@ -43,9 +46,27 @@ function openrouter(
   };
 }
 
-// Hardcoded no-spend catalog. Local models, provider-wide free lists, and
-// router aliases such as openrouter/free are intentionally excluded.
+const openrouter = (modelId: string, name: string, ctx: number, caps: ModelCaps = {}) =>
+  entry("openrouter", modelId, name, ctx, caps);
+const groq = (modelId: string, name: string, ctx: number, caps: ModelCaps = {}) =>
+  entry("groq", modelId, name, ctx, caps);
+const cerebras = (modelId: string, name: string, ctx: number, caps: ModelCaps = {}) =>
+  entry("cerebras", modelId, name, ctx, caps);
+const google = (modelId: string, name: string, ctx: number, caps: ModelCaps = {}) =>
+  entry("google", modelId, name, ctx, caps);
+const github = (modelId: string, name: string, ctx: number, caps: ModelCaps = {}) =>
+  entry("github", modelId, name, ctx, caps);
+const sambanova = (modelId: string, name: string, ctx: number, caps: ModelCaps = {}) =>
+  entry("sambanova", modelId, name, ctx, caps);
+const mistral = (modelId: string, name: string, ctx: number, caps: ModelCaps = {}) =>
+  entry("mistral", modelId, name, ctx, caps);
+
+// Hardcoded no-spend catalog. Each entry must come from a provider that
+// publishes a real free tier (rate-limited but not credit-trial). Local
+// models, provider-wide free lists, and router aliases such as
+// openrouter/free are intentionally excluded.
 export const FREE_MODEL_CATALOG: readonly FreeModelCatalogEntry[] = [
+  // ── OpenRouter :free models (no charge regardless of provider routing) ──
   openrouter("openai/gpt-oss-20b:free", "OpenAI: gpt-oss-20b (free)", 131072, { tools: true, reasoning: true }),
   openrouter("openai/gpt-oss-120b:free", "OpenAI: gpt-oss-120b (free)", 131072, { tools: true, reasoning: true }),
   openrouter("qwen/qwen3-coder:free", "Qwen: Qwen3 Coder 480B A35B (free)", 262000, { tools: true, code: true }),
@@ -75,6 +96,46 @@ export const FREE_MODEL_CATALOG: readonly FreeModelCatalogEntry[] = [
   openrouter("cognitivecomputations/dolphin-mistral-24b-venice-edition:free", "Venice: Uncensored (free)", 32768, { json: true }),
   openrouter("google/gemma-3n-e4b-it:free", "Google: Gemma 3n 4B (free)", 8192, { json: true }),
   openrouter("google/gemma-3n-e2b-it:free", "Google: Gemma 3n 2B (free)", 8192, { json: true }),
+
+  // ── Groq (free tier: rate-limited, no billing required) ──
+  groq("llama-3.3-70b-versatile", "Groq: Llama 3.3 70B Versatile", 131072, { tools: true, json: true }),
+  groq("llama-3.1-8b-instant", "Groq: Llama 3.1 8B Instant", 131072, { tools: true, json: true }),
+  groq("qwen/qwen3-32b", "Groq: Qwen 3 32B", 131072, { tools: true, reasoning: true, json: true }),
+  groq("openai/gpt-oss-20b", "Groq: gpt-oss-20b", 131072, { tools: true, reasoning: true, json: true }),
+  groq("openai/gpt-oss-120b", "Groq: gpt-oss-120b", 131072, { tools: true, reasoning: true, json: true }),
+  groq("moonshotai/kimi-k2-instruct", "Groq: Kimi K2 Instruct", 131072, { tools: true, json: true }),
+
+  // ── Cerebras (free tier: ~30 RPM, no billing required) ──
+  cerebras("llama-3.3-70b", "Cerebras: Llama 3.3 70B", 65536, { tools: true, json: true }),
+  cerebras("llama3.1-8b", "Cerebras: Llama 3.1 8B", 32768, { tools: true, json: true }),
+  cerebras("qwen-3-32b", "Cerebras: Qwen 3 32B", 131072, { tools: true, reasoning: true, json: true }),
+  cerebras("gpt-oss-120b", "Cerebras: gpt-oss-120b", 131072, { tools: true, reasoning: true, json: true }),
+
+  // ── Google AI Studio (Gemini free tier: 1500 req/day Flash, 50 req/day Pro) ──
+  google("gemini-2.0-flash", "Google: Gemini 2.0 Flash", 1048576, { tools: true, vision: true, json: true }),
+  google("gemini-2.0-flash-lite", "Google: Gemini 2.0 Flash Lite", 1048576, { tools: true, vision: true, json: true }),
+  google("gemini-2.5-flash", "Google: Gemini 2.5 Flash", 1048576, { tools: true, vision: true, reasoning: true, json: true }),
+  google("gemini-2.5-flash-lite", "Google: Gemini 2.5 Flash Lite", 1048576, { tools: true, vision: true, json: true }),
+
+  // ── GitHub Models (free preview, rate-limited per Microsoft account) ──
+  github("openai/gpt-4o-mini", "GitHub: GPT-4o mini", 128000, { tools: true, vision: true, json: true }),
+  github("openai/gpt-4.1-mini", "GitHub: GPT-4.1 mini", 1047576, { tools: true, vision: true, json: true }),
+  github("openai/gpt-4.1-nano", "GitHub: GPT-4.1 nano", 1047576, { tools: true, vision: true, json: true }),
+  github("meta/Llama-3.3-70B-Instruct", "GitHub: Llama 3.3 70B Instruct", 131072, { tools: true, json: true }),
+  github("microsoft/Phi-4", "GitHub: Phi-4", 16384, { tools: true, json: true }),
+  github("microsoft/Phi-3.5-mini-instruct", "GitHub: Phi-3.5 mini Instruct", 131072, { tools: true, json: true }),
+
+  // ── SambaNova (free tier: daily quota per model) ──
+  sambanova("Meta-Llama-3.3-70B-Instruct", "SambaNova: Llama 3.3 70B Instruct", 131072, { tools: true, json: true }),
+  sambanova("Meta-Llama-3.1-8B-Instruct", "SambaNova: Llama 3.1 8B Instruct", 16384, { tools: true, json: true }),
+  sambanova("Meta-Llama-3.2-3B-Instruct", "SambaNova: Llama 3.2 3B Instruct", 8192, { tools: true, json: true }),
+  sambanova("Qwen3-32B", "SambaNova: Qwen 3 32B", 32768, { tools: true, reasoning: true, json: true }),
+
+  // ── Mistral La Plateforme (free tier: open-weight models) ──
+  mistral("open-mistral-7b", "Mistral: Open Mistral 7B", 32768, { json: true }),
+  mistral("open-mixtral-8x7b", "Mistral: Open Mixtral 8x7B", 32768, { json: true }),
+  mistral("open-mixtral-8x22b", "Mistral: Open Mixtral 8x22B", 65536, { tools: true, json: true }),
+  mistral("mistral-small-latest", "Mistral: Small (free tier)", 32768, { tools: true, json: true }),
 ] as const;
 
 const FREE_MODEL_KEYS = new Set(

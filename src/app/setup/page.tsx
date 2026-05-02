@@ -60,7 +60,6 @@ export default function SetupPage() {
   const [saveResult, setSaveResult] = useState<Record<string, "ok" | "error" | undefined>>({});
   const [testing, setTesting] = useState<Record<string, boolean>>({});
   const [testResult, setTestResult] = useState<Record<string, { ok?: boolean; models?: number; error?: string; warn?: string } | undefined>>({});
-  const [scanning, setScanning] = useState(false);
   const [filter, setFilter] = useState<"all" | "active" | "no_key" | "free" | "thai" | "broken">("all");
   const [riskyProviderCount, setRiskyProviderCount] = useState(0);
   const [acceptedRisk, setAcceptedRisk] = useState<Record<string, boolean>>({});
@@ -161,25 +160,11 @@ export default function SetupPage() {
     }
   };
 
-  const handleScanNow = async () => {
-    setScanning(true);
-    try {
-      await fetch("/api/worker", { method: "POST" });
-      setTimeout(() => {
-        fetchStatuses();
-        setScanning(false);
-      }, 3000);
-    } catch {
-      setScanning(false);
-    }
-  };
-
   const activeCount = statuses.filter((s) => s.status === "active").length;
   const noKeyCount = statuses.filter((s) => s.status === "no_key").length;
   const freeCount = statuses.filter((s) => s.freeTier).length;
   const thaiCount = statuses.filter(isThaiProvider).length;
   const brokenCount = statuses.filter((s) => s.homepageOk === false || s.modelsOk === false).length;
-  const canScan = statuses.some((s) => s.hasKey);
 
   const filtered = statuses.filter((s) => {
     if (filter === "active") return s.status === "active";
@@ -210,26 +195,12 @@ export default function SetupPage() {
             <span>ตั้งค่ารหัส API</span>
           </h1>
           <span className="text-xs text-gray-500 hidden sm:inline">
-            ใส่รหัส API ของผู้ให้บริการที่อยากใช้ — ระบบจะค้นหา model ให้อัตโนมัติ
+            ใส่รหัส API ของผู้ให้บริการที่อยากใช้ — รายการ model พร้อมใช้ทันที (hardcoded ฟรีเท่านั้น)
           </span>
 
-          <div className="ml-auto flex items-center gap-2">
-            <div className="hidden sm:flex items-center gap-3 text-xs">
-              <span className="text-emerald-400 font-bold">✓ ใช้ได้ {activeCount}</span>
-              <span className="text-amber-400">ยังไม่มีรหัส {noKeyCount}</span>
-            </div>
-            <button
-              onClick={handleScanNow}
-              disabled={scanning || !canScan}
-              title={!canScan ? "ใส่รหัส API อย่างน้อย 1 ผู้ให้บริการก่อน" : "ค้นหา model จากผู้ให้บริการที่ตั้งค่าไว้ทันที"}
-              className={`px-4 py-2 rounded-lg font-semibold text-sm transition-all ${
-                canScan
-                  ? "bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-white shadow-lg shadow-amber-500/30"
-                  : "bg-gray-700/50 text-gray-500 cursor-not-allowed"
-              } disabled:opacity-60`}
-            >
-              {scanning ? "🔄 กำลังค้นหา…" : "🔍 ค้นหา model ตอนนี้"}
-            </button>
+          <div className="ml-auto flex items-center gap-3 text-xs">
+            <span className="text-emerald-400 font-bold">✓ ใช้ได้ {activeCount}</span>
+            <span className="text-amber-400">ยังไม่มีรหัส {noKeyCount}</span>
           </div>
         </div>
       </header>
@@ -249,7 +220,7 @@ export default function SetupPage() {
             </div>
             <div className="flex items-start gap-2">
               <span className="text-lg leading-none shrink-0">3️⃣</span>
-              <span>กด <strong className="text-amber-300">ค้นหา model ตอนนี้</strong> ที่มุมขวาบน → ระบบค้นหา model ให้</span>
+              <span>เสร็จแล้ว — รายการ model <strong className="text-emerald-300">พร้อมใช้ทันที</strong> ผ่าน <code className="text-xs bg-white/10 px-1 rounded">/v1/chat/completions</code></span>
             </div>
           </div>
           {riskyProviderCount > 0 && (
@@ -512,9 +483,9 @@ export default function SetupPage() {
           <div className="font-bold text-gray-300 mb-1">หมายเหตุ</div>
           <ul className="list-disc list-inside space-y-0.5">
             <li>รหัส API ทั้งหมดเก็บในฐานข้อมูล (ตาราง <code className="text-indigo-300">api_keys</code>) — ระบบไม่อ่านจากไฟล์ .env.local</li>
-            <li>รายชื่อผู้ให้บริการดึงจากฐานข้อมูล (<code className="text-indigo-300">provider_catalog</code>) — รวมผู้ให้บริการที่ระบบค้นหาเองจากอินเทอร์เน็ต</li>
+            <li>รายชื่อ model มาจาก <code className="text-indigo-300">free-model-catalog.ts</code> ที่ฝังในโค้ด — ไม่มีระบบค้นหา/discovery ที่ runtime</li>
             <li>สวิตซ์ปิด/เปิดผู้ให้บริการได้ — ปิดแล้วระบบจะไม่ส่งคำขอไปที่นั่น</li>
-            <li>ผู้ให้บริการในหน้านี้ทุกตัวมีหน้าเว็บของตัวเอง — สำหรับที่ค้นพบจาก OpenRouter ดูได้ที่ <Link href="/#provider-catalog" className="text-indigo-300 hover:text-white">รายชื่อผู้ให้บริการ</Link></li>
+            <li>เพิ่ม/ลบ model ต้องแก้ไฟล์ catalog แล้ว redeploy — ทุก model ในนี้คัดมาว่าฟรีจริง (rate-limited, ไม่ตัดบัตร)</li>
           </ul>
         </section>
       </main>

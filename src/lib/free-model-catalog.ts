@@ -46,25 +46,26 @@ function entry(
   };
 }
 
-const openrouter = (modelId: string, name: string, ctx: number, caps: ModelCaps = {}) =>
-  entry("openrouter", modelId, name, ctx, caps);
-const groq = (modelId: string, name: string, ctx: number, caps: ModelCaps = {}) =>
-  entry("groq", modelId, name, ctx, caps);
-const cerebras = (modelId: string, name: string, ctx: number, caps: ModelCaps = {}) =>
-  entry("cerebras", modelId, name, ctx, caps);
-const google = (modelId: string, name: string, ctx: number, caps: ModelCaps = {}) =>
-  entry("google", modelId, name, ctx, caps);
-const github = (modelId: string, name: string, ctx: number, caps: ModelCaps = {}) =>
-  entry("github", modelId, name, ctx, caps);
-const sambanova = (modelId: string, name: string, ctx: number, caps: ModelCaps = {}) =>
-  entry("sambanova", modelId, name, ctx, caps);
-const mistral = (modelId: string, name: string, ctx: number, caps: ModelCaps = {}) =>
-  entry("mistral", modelId, name, ctx, caps);
+const openrouter = (m: string, n: string, c: number, caps: ModelCaps = {}) => entry("openrouter", m, n, c, caps);
+const groq = (m: string, n: string, c: number, caps: ModelCaps = {}) => entry("groq", m, n, c, caps);
+const cerebras = (m: string, n: string, c: number, caps: ModelCaps = {}) => entry("cerebras", m, n, c, caps);
+const google = (m: string, n: string, c: number, caps: ModelCaps = {}) => entry("google", m, n, c, caps);
+const github = (m: string, n: string, c: number, caps: ModelCaps = {}) => entry("github", m, n, c, caps);
+const sambanova = (m: string, n: string, c: number, caps: ModelCaps = {}) => entry("sambanova", m, n, c, caps);
+const mistral = (m: string, n: string, c: number, caps: ModelCaps = {}) => entry("mistral", m, n, c, caps);
+const cohere = (m: string, n: string, c: number, caps: ModelCaps = {}) => entry("cohere", m, n, c, caps);
+const huggingface = (m: string, n: string, c: number, caps: ModelCaps = {}) => entry("huggingface", m, n, c, caps);
+const nvidia = (m: string, n: string, c: number, caps: ModelCaps = {}) => entry("nvidia", m, n, c, caps);
+const together = (m: string, n: string, c: number, caps: ModelCaps = {}) => entry("together", m, n, c, caps);
+const chutes = (m: string, n: string, c: number, caps: ModelCaps = {}) => entry("chutes", m, n, c, caps);
+const ollamacloud = (m: string, n: string, c: number, caps: ModelCaps = {}) => entry("ollamacloud", m, n, c, caps);
 
-// Hardcoded no-spend catalog. Each entry must come from a provider that
+// Hardcoded zero-spend catalog. Each entry must come from a provider that
 // publishes a real free tier (rate-limited but not credit-trial). Local
 // models, provider-wide free lists, and router aliases such as
-// openrouter/free are intentionally excluded.
+// openrouter/free are intentionally excluded. Cloudflare Workers AI is
+// excluded because its endpoint requires CLOUDFLARE_ACCOUNT_ID baked into
+// the URL, which is incompatible with the per-provider key lookup model.
 export const FREE_MODEL_CATALOG: readonly FreeModelCatalogEntry[] = [
   // ── OpenRouter :free models (no charge regardless of provider routing) ──
   openrouter("openai/gpt-oss-20b:free", "OpenAI: gpt-oss-20b (free)", 131072, { tools: true, reasoning: true }),
@@ -97,45 +98,120 @@ export const FREE_MODEL_CATALOG: readonly FreeModelCatalogEntry[] = [
   openrouter("google/gemma-3n-e4b-it:free", "Google: Gemma 3n 4B (free)", 8192, { json: true }),
   openrouter("google/gemma-3n-e2b-it:free", "Google: Gemma 3n 2B (free)", 8192, { json: true }),
 
-  // ── Groq (free tier: rate-limited, no billing required) ──
+  // ── Groq (free tier: 30 RPM / 1K-14K RPD, no billing required) ──
   groq("llama-3.3-70b-versatile", "Groq: Llama 3.3 70B Versatile", 131072, { tools: true, json: true }),
   groq("llama-3.1-8b-instant", "Groq: Llama 3.1 8B Instant", 131072, { tools: true, json: true }),
-  groq("qwen/qwen3-32b", "Groq: Qwen 3 32B", 131072, { tools: true, reasoning: true, json: true }),
-  groq("openai/gpt-oss-20b", "Groq: gpt-oss-20b", 131072, { tools: true, reasoning: true, json: true }),
+  groq("meta-llama/llama-4-scout-17b-16e-instruct", "Groq: Llama 4 Scout 17B 16E", 131072, { tools: true, vision: true, json: true }),
   groq("openai/gpt-oss-120b", "Groq: gpt-oss-120b", 131072, { tools: true, reasoning: true, json: true }),
-  groq("moonshotai/kimi-k2-instruct", "Groq: Kimi K2 Instruct", 131072, { tools: true, json: true }),
+  groq("openai/gpt-oss-20b", "Groq: gpt-oss-20b", 131072, { tools: true, reasoning: true, json: true }),
+  groq("qwen/qwen3-32b", "Groq: Qwen 3 32B", 131072, { tools: true, reasoning: true, json: true }),
+  groq("moonshotai/kimi-k2-instruct-0905", "Groq: Kimi K2 0905", 262144, { tools: true, json: true, code: true }),
 
-  // ── Cerebras (free tier: ~30 RPM, no billing required) ──
-  cerebras("llama-3.3-70b", "Cerebras: Llama 3.3 70B", 65536, { tools: true, json: true }),
-  cerebras("llama3.1-8b", "Cerebras: Llama 3.1 8B", 32768, { tools: true, json: true }),
-  cerebras("qwen-3-32b", "Cerebras: Qwen 3 32B", 131072, { tools: true, reasoning: true, json: true }),
-  cerebras("gpt-oss-120b", "Cerebras: gpt-oss-120b", 131072, { tools: true, reasoning: true, json: true }),
+  // ── Cerebras (free tier: 1M tok/day, context capped at 8K) ──
+  cerebras("llama-3.3-70b", "Cerebras: Llama 3.3 70B", 8192, { tools: true, json: true }),
+  cerebras("qwen-3-32b", "Cerebras: Qwen 3 32B", 8192, { tools: true, json: true }),
+  cerebras("qwen-3-235b-a22b-instruct-2507", "Cerebras: Qwen 3 235B Instruct", 8192, { tools: true, json: true }),
+  cerebras("qwen-3-235b-a22b-thinking-2507", "Cerebras: Qwen 3 235B Thinking", 8192, { tools: true, reasoning: true }),
+  cerebras("gpt-oss-120b", "Cerebras: gpt-oss-120b", 8192, { tools: true, reasoning: true, json: true }),
 
-  // ── Google AI Studio (Gemini free tier: 1500 req/day Flash, 50 req/day Pro) ──
-  google("gemini-2.0-flash", "Google: Gemini 2.0 Flash", 1048576, { tools: true, vision: true, json: true }),
-  google("gemini-2.0-flash-lite", "Google: Gemini 2.0 Flash Lite", 1048576, { tools: true, vision: true, json: true }),
+  // ── Google AI Studio (Gemini free tier: 5-15 RPM, 1500 req/day Flash) ──
+  google("gemini-2.5-pro", "Google: Gemini 2.5 Pro", 1048576, { tools: true, vision: true, reasoning: true, json: true }),
   google("gemini-2.5-flash", "Google: Gemini 2.5 Flash", 1048576, { tools: true, vision: true, reasoning: true, json: true }),
   google("gemini-2.5-flash-lite", "Google: Gemini 2.5 Flash Lite", 1048576, { tools: true, vision: true, json: true }),
+  google("gemini-2.0-flash", "Google: Gemini 2.0 Flash", 1048576, { tools: true, vision: true, json: true }),
+  google("gemini-2.0-flash-lite", "Google: Gemini 2.0 Flash Lite", 1048576, { tools: true, vision: true, json: true }),
+  google("gemma-3-27b-it", "Google: Gemma 3 27B IT", 131072, { json: true }),
+  google("gemma-3-12b-it", "Google: Gemma 3 12B IT", 131072, { json: true }),
 
   // ── GitHub Models (free preview, rate-limited per Microsoft account) ──
   github("openai/gpt-4o-mini", "GitHub: GPT-4o mini", 128000, { tools: true, vision: true, json: true }),
+  github("openai/gpt-4o", "GitHub: GPT-4o", 128000, { tools: true, vision: true, json: true }),
+  github("openai/gpt-4.1", "GitHub: GPT-4.1", 1047576, { tools: true, vision: true, json: true }),
   github("openai/gpt-4.1-mini", "GitHub: GPT-4.1 mini", 1047576, { tools: true, vision: true, json: true }),
   github("openai/gpt-4.1-nano", "GitHub: GPT-4.1 nano", 1047576, { tools: true, vision: true, json: true }),
+  github("openai/o1-mini", "GitHub: o1-mini", 128000, { reasoning: true }),
+  github("openai/o3-mini", "GitHub: o3-mini", 200000, { reasoning: true, json: true }),
+  github("openai/o4-mini", "GitHub: o4-mini", 200000, { tools: true, reasoning: true, json: true }),
   github("meta/Llama-3.3-70B-Instruct", "GitHub: Llama 3.3 70B Instruct", 131072, { tools: true, json: true }),
+  github("meta/Llama-4-Scout-17B-16E-Instruct", "GitHub: Llama 4 Scout 17B", 131072, { tools: true, vision: true, json: true }),
   github("microsoft/Phi-4", "GitHub: Phi-4", 16384, { tools: true, json: true }),
+  github("microsoft/Phi-4-multimodal-instruct", "GitHub: Phi-4 Multimodal", 131072, { vision: true, json: true }),
   github("microsoft/Phi-3.5-mini-instruct", "GitHub: Phi-3.5 mini Instruct", 131072, { tools: true, json: true }),
+  github("xai/grok-3-mini", "GitHub: Grok-3 mini", 131072, { tools: true, reasoning: true, json: true }),
+  github("xai/grok-code-fast-1", "GitHub: Grok Code Fast 1", 256000, { tools: true, json: true, code: true }),
+  github("mistral-ai/Mistral-Nemo", "GitHub: Mistral Nemo", 131072, { tools: true, json: true }),
+  github("mistral-ai/Codestral-2501", "GitHub: Codestral 2501", 262144, { code: true, json: true }),
+  github("cohere/cohere-command-r-plus-08-2024", "GitHub: Cohere Command R+", 128000, { tools: true, json: true }),
+  github("deepseek/DeepSeek-V3-0324", "GitHub: DeepSeek V3 0324", 131072, { tools: true, json: true }),
+  github("deepseek/DeepSeek-R1", "GitHub: DeepSeek R1", 131072, { reasoning: true }),
 
-  // ── SambaNova (free tier: daily quota per model) ──
-  sambanova("Meta-Llama-3.3-70B-Instruct", "SambaNova: Llama 3.3 70B Instruct", 131072, { tools: true, json: true }),
-  sambanova("Meta-Llama-3.1-8B-Instruct", "SambaNova: Llama 3.1 8B Instruct", 16384, { tools: true, json: true }),
-  sambanova("Meta-Llama-3.2-3B-Instruct", "SambaNova: Llama 3.2 3B Instruct", 8192, { tools: true, json: true }),
-  sambanova("Qwen3-32B", "SambaNova: Qwen 3 32B", 32768, { tools: true, reasoning: true, json: true }),
+  // ── SambaNova (free tier: 10-30 RPM, daily quota per model) ──
+  sambanova("Meta-Llama-3.3-70B-Instruct", "SambaNova: Llama 3.3 70B", 131072, { tools: true, json: true }),
+  sambanova("Meta-Llama-3.1-8B-Instruct", "SambaNova: Llama 3.1 8B", 16384, { tools: true, json: true }),
+  sambanova("Meta-Llama-3.1-405B-Instruct", "SambaNova: Llama 3.1 405B", 16384, { tools: true, json: true }),
+  sambanova("Meta-Llama-3.2-3B-Instruct", "SambaNova: Llama 3.2 3B", 8192, { tools: true, json: true }),
+  sambanova("Llama-4-Maverick-17B-128E-Instruct", "SambaNova: Llama 4 Maverick", 131072, { tools: true, vision: true, json: true }),
+  sambanova("Llama-4-Scout-17B-16E-Instruct", "SambaNova: Llama 4 Scout", 131072, { tools: true, vision: true, json: true }),
+  sambanova("DeepSeek-R1", "SambaNova: DeepSeek R1", 16384, { reasoning: true }),
+  sambanova("DeepSeek-R1-Distill-Llama-70B", "SambaNova: R1 Distill Llama 70B", 131072, { reasoning: true }),
+  sambanova("DeepSeek-V3-0324", "SambaNova: DeepSeek V3 0324", 16384, { tools: true, json: true }),
+  sambanova("Qwen3-32B", "SambaNova: Qwen 3 32B", 16384, { tools: true, reasoning: true, json: true }),
+  sambanova("QwQ-32B", "SambaNova: QwQ 32B", 16384, { reasoning: true }),
+  sambanova("gpt-oss-120b", "SambaNova: gpt-oss-120b", 131072, { tools: true, reasoning: true, json: true }),
 
-  // ── Mistral La Plateforme (free tier: open-weight models) ──
-  mistral("open-mistral-7b", "Mistral: Open Mistral 7B", 32768, { json: true }),
-  mistral("open-mixtral-8x7b", "Mistral: Open Mixtral 8x7B", 32768, { json: true }),
-  mistral("open-mixtral-8x22b", "Mistral: Open Mixtral 8x22B", 65536, { tools: true, json: true }),
-  mistral("mistral-small-latest", "Mistral: Small (free tier)", 32768, { tools: true, json: true }),
+  // ── Mistral La Plateforme (Free Experiment tier: 1G tok/month, all models) ──
+  mistral("open-mistral-nemo", "Mistral: Nemo 12B", 131072, { tools: true, json: true }),
+  mistral("mistral-small-latest", "Mistral: Small 3.2 24B", 131072, { tools: true, vision: true, json: true }),
+  mistral("ministral-8b-latest", "Mistral: Ministral 8B", 131072, { tools: true, json: true }),
+  mistral("ministral-3b-latest", "Mistral: Ministral 3B", 131072, { tools: true, json: true }),
+  mistral("codestral-latest", "Mistral: Codestral", 262144, { code: true, json: true }),
+  mistral("open-mixtral-8x22b", "Mistral: Mixtral 8x22B", 65536, { tools: true, json: true }),
+
+  // ── Cohere (trial key: 1K calls/month, non-commercial) ──
+  cohere("command-a-03-2025", "Cohere: Command A", 256000, { tools: true, json: true }),
+  cohere("command-r-plus", "Cohere: Command R+", 128000, { tools: true, json: true }),
+  cohere("command-r", "Cohere: Command R", 128000, { tools: true, json: true }),
+  cohere("command-r7b", "Cohere: Command R7B", 128000, { tools: true, json: true }),
+
+  // ── HuggingFace Inference Router (monthly free credits) ──
+  huggingface("meta-llama/Llama-3.3-70B-Instruct", "HF: Llama 3.3 70B", 131072, { tools: true, json: true }),
+  huggingface("meta-llama/Llama-3.1-8B-Instruct", "HF: Llama 3.1 8B", 131072, { tools: true, json: true }),
+  huggingface("Qwen/Qwen3-32B", "HF: Qwen 3 32B", 131072, { tools: true, reasoning: true, json: true }),
+  huggingface("deepseek-ai/DeepSeek-R1", "HF: DeepSeek R1", 131072, { reasoning: true }),
+  huggingface("openai/gpt-oss-120b", "HF: gpt-oss-120b", 131072, { tools: true, reasoning: true }),
+  huggingface("moonshotai/Kimi-K2-Instruct-0905", "HF: Kimi K2 0905", 262144, { tools: true, code: true }),
+
+  // ── NVIDIA NIM (~40 RPM, free starter credits) ──
+  nvidia("meta/llama-3.3-70b-instruct", "NVIDIA: Llama 3.3 70B", 131072, { tools: true, json: true }),
+  nvidia("meta/llama-3.1-405b-instruct", "NVIDIA: Llama 3.1 405B", 131072, { tools: true, json: true }),
+  nvidia("meta/llama-4-scout-17b-16e-instruct", "NVIDIA: Llama 4 Scout", 131072, { tools: true, vision: true, json: true }),
+  nvidia("meta/llama-4-maverick-17b-128e-instruct", "NVIDIA: Llama 4 Maverick", 131072, { tools: true, vision: true, json: true }),
+  nvidia("deepseek-ai/deepseek-r1", "NVIDIA: DeepSeek R1", 131072, { reasoning: true }),
+  nvidia("qwen/qwen3-235b-a22b", "NVIDIA: Qwen 3 235B", 131072, { tools: true, json: true }),
+  nvidia("nvidia/llama-3.3-nemotron-super-49b-v1", "NVIDIA: Nemotron Super 49B", 131072, { tools: true, reasoning: true }),
+  nvidia("openai/gpt-oss-120b", "NVIDIA: gpt-oss-120b", 131072, { tools: true, reasoning: true, json: true }),
+  nvidia("mistralai/mistral-small-3.1-24b-instruct-2503", "NVIDIA: Mistral Small 3.1", 131072, { tools: true, vision: true, json: true }),
+
+  // ── Together AI (only the explicitly Free endpoints) ──
+  together("meta-llama/Llama-3.3-70B-Instruct-Turbo-Free", "Together: Llama 3.3 70B Free", 131072, { tools: true, json: true }),
+  together("meta-llama/Llama-Vision-Free", "Together: Llama 3.2 11B Vision Free", 131072, { vision: true, json: true }),
+
+  // ── Chutes AI (donated GPU, free with API key) ──
+  chutes("deepseek-ai/DeepSeek-R1", "Chutes: DeepSeek R1", 64000, { reasoning: true }),
+  chutes("deepseek-ai/DeepSeek-V3-0324", "Chutes: DeepSeek V3 0324", 128000, { tools: true, json: true }),
+  chutes("meta-llama/Llama-3.3-70B-Instruct", "Chutes: Llama 3.3 70B", 131072, { tools: true, json: true }),
+  chutes("meta-llama/Llama-3.1-405B-Instruct", "Chutes: Llama 3.1 405B", 131072, { tools: true, json: true }),
+  chutes("Qwen/Qwen3-32B", "Chutes: Qwen 3 32B", 131072, { tools: true, json: true }),
+  chutes("Qwen/Qwen3-Coder-Plus", "Chutes: Qwen 3 Coder Plus", 262144, { code: true, tools: true, json: true }),
+  chutes("moonshotai/Kimi-K2.5", "Chutes: Kimi K2.5", 262144, { tools: true, vision: true, json: true }),
+  chutes("zai-org/GLM-5", "Chutes: GLM-5", 131072, { tools: true, reasoning: true, json: true }),
+
+  // ── Ollama Cloud (free tier: daily quota, requires API key) ──
+  ollamacloud("gpt-oss:120b-cloud", "OllamaCloud: gpt-oss 120B", 131072, { tools: true, reasoning: true, json: true }),
+  ollamacloud("gpt-oss:20b-cloud", "OllamaCloud: gpt-oss 20B", 131072, { tools: true, reasoning: true, json: true }),
+  ollamacloud("deepseek-v3.1:671b-cloud", "OllamaCloud: DeepSeek V3.1 671B", 131072, { tools: true, json: true }),
+  ollamacloud("qwen3-coder:480b-cloud", "OllamaCloud: Qwen 3 Coder 480B", 262144, { code: true, tools: true, json: true }),
+  ollamacloud("kimi-k2:1t-cloud", "OllamaCloud: Kimi K2 1T", 262144, { tools: true, json: true }),
 ] as const;
 
 const FREE_MODEL_KEYS = new Set(

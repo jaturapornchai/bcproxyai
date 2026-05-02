@@ -2478,6 +2478,17 @@ export async function POST(req: NextRequest) {
                 (preview) => { proxiedLog = preview; },
               );
               const streamLatency = Date.now() - startTime;
+              if (!isStream && !proxiedLog.content) {
+                const badReason = "empty proxied response body";
+                log.warn(`[BAD-RESPONSE] ${provider}/${actualModelId} — ${badReason}`);
+                await logCooldown(dbModelId, badReason, 0, 5);
+                await recordRoutingResult(dbModelId, provider, promptCategory, false, streamLatency);
+                recordOutcome(provider, actualModelId, false, streamLatency);
+                lastError = `${provider}/${actualModelId}: ${badReason}`;
+                lastProvider = provider;
+                lastModelId = actualModelId;
+                continue;
+              }
               await recordRoutingResult(dbModelId, provider, promptCategory, true, streamLatency);
               recordOutcome(provider, actualModelId, true, streamLatency);
           const slowThrStream = slowThresholdMs(estTokens);
@@ -2706,6 +2717,17 @@ export async function POST(req: NextRequest) {
               false,
               (preview) => { assistantLog = preview; },
             );
+            if (!isStream && !assistantLog.content) {
+              const badReason = "empty relaxed-retry response body";
+              log.warn(`[BAD-RESPONSE] ${provider}/${actualModelId} — ${badReason}`);
+              const relEmptyCd = await recordFailStreak(dbModelId);
+              await logCooldown(dbModelId, badReason, 0, Math.max(1, Math.round(relEmptyCd / 60_000)));
+              recordOutcome(provider, actualModelId, false, streamLatency);
+              lastError = `${provider}/${actualModelId}: ${badReason}`;
+              lastProvider = provider;
+              lastModelId = actualModelId;
+              continue;
+            }
             recordOutcome(provider, actualModelId, true, streamLatency);
             await logGateway(
               modelField,
@@ -2888,8 +2910,15 @@ async function buildProxiedResponse(
     autoDetectComplaint(provider, modelId, content);
 
     const usage = json.usage as { prompt_tokens?: number; completion_tokens?: number } | undefined;
+    const toolCallCount = Array.isArray(json.choices?.[0]?.message?.tool_calls)
+      ? json.choices[0].message.tool_calls.length
+      : 0;
     onNonStreamPreview?.({
-      content: typeof content === "string" && content.trim() ? content.slice(0, LOG_TEXT_LIMIT) : null,
+      content: typeof content === "string" && content.trim()
+        ? content.slice(0, LOG_TEXT_LIMIT)
+        : toolCallCount > 0
+          ? `[tool_call×${toolCallCount}]`
+          : null,
       promptTokens: usage?.prompt_tokens ?? 0,
       completionTokens: usage?.completion_tokens ?? 0,
     });

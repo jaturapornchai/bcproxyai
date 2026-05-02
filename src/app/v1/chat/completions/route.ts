@@ -1027,7 +1027,11 @@ async function forwardToProvider(
   }
 
   if (provider === "ollama") {
-    requestBody.options = { ...(requestBody.options as Record<string, unknown> ?? {}), num_ctx: 65536 };
+    const requestedCtx = Math.ceil(estimateTokens(requestBody) * 1.5);
+    const configuredMaxCtx = Number(process.env.OLLAMA_NUM_CTX_MAX ?? 4096);
+    const maxCtx = Number.isFinite(configuredMaxCtx) && configuredMaxCtx > 0 ? configuredMaxCtx : 4096;
+    const numCtx = Math.min(maxCtx, Math.max(2048, requestedCtx));
+    requestBody.options = { ...(requestBody.options as Record<string, unknown> ?? {}), num_ctx: numCtx };
   }
 
   // Per-attempt timeout — non-stream only
@@ -1038,7 +1042,10 @@ async function forwardToProvider(
   if (!stream) {
     let timeoutMs: number;
     if (provider === "ollama") {
-      timeoutMs = 30_000;
+      const configuredOllamaTimeout = Number(process.env.OLLAMA_REQUEST_TIMEOUT_MS ?? 60_000);
+      timeoutMs = Number.isFinite(configuredOllamaTimeout) && configuredOllamaTimeout > 0
+        ? configuredOllamaTimeout
+        : 60_000;
     } else if (bodySize > 40_000) {
       timeoutMs = 60_000;
     } else if (bodySize > 20_000) {

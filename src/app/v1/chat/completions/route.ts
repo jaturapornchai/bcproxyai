@@ -393,7 +393,7 @@ function estimateTokens(body: Record<string, unknown>): number {
   return Math.ceil(textLen / 3) + imageCount * 1000;
 }
 
-const VISION_PRIORITY_PROVIDERS = ["google", "groq", "ollama", "github"];
+const VISION_PRIORITY_PROVIDERS = ["openrouter"];
 
 // P2: OpenRouter free-tier models that claim supports_tools=1 in DB but 404 at runtime
 // NOTE: No hardcoded broken tool models.
@@ -468,32 +468,32 @@ async function getAvailableModels(caps: RequestCapabilities, benchmarkCategory?:
   const visionFilter = caps.hasImages ? `AND m.supports_vision = 1` : "";
   const toolsFilter = caps.hasTools ? `AND m.supports_tools = 1` : "";
   const visionBoost = caps.hasImages
-    ? `, CASE WHEN m.provider IN ('google','groq','ollama','github') THEN 0 ELSE 1 END as vision_priority`
+    ? `, CASE WHEN m.provider IN ('openrouter') THEN 0 ELSE 1 END as vision_priority`
     : "";
   const visionOrder = caps.hasImages ? "vision_priority ASC," : "";
   const toolsBoost = caps.hasTools
     ? "CASE WHEN m.context_length >= 128000 THEN 0 WHEN m.context_length >= 32000 THEN 1 ELSE 2 END ASC,"
     : "";
 
-  // ระบบสอบใหม่: ใช้ exam_attempts เป็น source of truth
-  // ต้อง passed=true ใน attempt ล่าสุดถึงจะได้ทำงาน
+  // Hardcoded free models can route before the first exam attempt. If a model
+  // later fails exams, its latest score still removes it from the candidate set.
   void benchmarkCategory; // kept for API compat (was used for per-category benchmark)
   const rows = await sql.unsafe(`
     SELECT
       m.id, m.provider, m.model_id, m.supports_tools, m.supports_vision, m.tier, m.context_length,
-      COALESCE(ex.score_pct, 0) as avg_score,
+      COALESCE(ex.score_pct, 50) as avg_score,
       COALESCE(rs.avg_lat_real, ex.total_latency_ms::float, 9999999) as avg_latency,
       h.status as health_status,
       h.cooldown_until
       ${visionBoost}
     FROM models m
-    INNER JOIN (
+    LEFT JOIN (
       SELECT DISTINCT ON (model_id)
         model_id, score_pct, passed, total_latency_ms
       FROM exam_attempts
       WHERE finished_at IS NOT NULL
       ORDER BY model_id, started_at DESC
-    ) ex ON m.id = ex.model_id AND ex.score_pct >= 50
+    ) ex ON m.id = ex.model_id
     LEFT JOIN (
       SELECT model_id, AVG(latency_ms)::float AS avg_lat_real
       FROM routing_stats
@@ -506,11 +506,12 @@ async function getAvailableModels(caps: RequestCapabilities, benchmarkCategory?:
       AND COALESCE(m.supports_embedding, 0) != 1
       AND COALESCE(m.supports_audio_output, 0) != 1
       AND COALESCE(m.supports_image_gen, 0) != 1
+      AND COALESCE(ex.score_pct, 50) >= 50
       ${visionFilter}
       ${toolsFilter}
     ORDER BY ${toolsBoost} ${visionOrder}
       ${caps.needsJsonSchema ? "CASE WHEN m.tier = 'large' THEN 0 ELSE 1 END ASC," : ""}
-      ex.score_pct DESC,
+      COALESCE(ex.score_pct, 50) DESC,
       m.context_length DESC,
       COALESCE(rs.avg_lat_real, ex.total_latency_ms::float, 9999999) ASC
   `) as ModelRow[];
@@ -716,8 +717,6 @@ function parseModelField(model: string): {
   if (model === "sml/tools") return { mode: "tools" };
   if (model === "sml/thai") return { mode: "thai" };
   if (model === "sml/consensus") return { mode: "consensus" };
-  if (model === "openrouter/free") return { mode: "direct", provider: "openrouter", modelId: "openrouter/free" };
-
   const providerMatch = model.match(/^(thaillm|typhoon|openrouter|kilo|google|groq|cerebras|sambanova|mistral|ollama|github|fireworks|cohere|cloudflare|huggingface|nvidia|chutes|llm7|scaleway|pollinations|ollamacloud|siliconflow|glhf|together|hyperbolic|zai|dashscope|reka)\/(.+)$/);
   if (providerMatch) return { mode: "direct", provider: providerMatch[1], modelId: providerMatch[2] };
 
@@ -729,7 +728,7 @@ async function getAllModelsIncludingCooldown(caps: RequestCapabilities): Promise
   const visionFilter = caps.hasImages ? "AND m.supports_vision = 1" : "";
   const toolsFilter = caps.hasTools ? "AND m.supports_tools = 1" : "";
   const orderClause = caps.hasImages
-    ? "CASE WHEN m.provider IN ('google','groq','ollama') THEN 0 ELSE 1 END ASC, RANDOM()"
+    ? "CASE WHEN m.provider IN ('openrouter') THEN 0 ELSE 1 END ASC, RANDOM()"
     : "RANDOM()";
 
   const rows = await sql.unsafe(`
@@ -767,14 +766,14 @@ async function selectModelsByMode(
     const fastRows = await sql.unsafe(`
       SELECT
         m.id, m.provider, m.model_id, m.supports_tools, m.supports_vision, m.tier, m.context_length,
-        ex.score_pct as avg_score,
+        COALESCE(ex.score_pct, 50) as avg_score,
         COALESCE(rs.avg_lat_real, ex.total_latency_ms::float, 9999999) as avg_latency,
         h.status as health_status,
         h.cooldown_until
       FROM models m
-      INNER JOIN (
+      LEFT JOIN (
         SELECT DISTINCT ON (model_id) model_id, score_pct, total_latency_ms
-        FROM exam_attempts WHERE score_pct >= 50
+        FROM exam_attempts
         ORDER BY model_id, started_at DESC
       ) ex ON m.id = ex.model_id
       LEFT JOIN (
@@ -789,12 +788,12 @@ async function selectModelsByMode(
         AND COALESCE(m.supports_embedding, 0) != 1
         AND COALESCE(m.supports_audio_output, 0) != 1
         AND COALESCE(m.supports_image_gen, 0) != 1
+        AND COALESCE(ex.score_pct, 50) >= 50
         ${visionFilter}
         ${toolsFilter}
       ORDER BY
-        CASE WHEN m.provider = 'ollama' THEN 1 ELSE 0 END ASC,
         COALESCE(rs.avg_lat_real, ex.total_latency_ms::float, 9999999) ASC,
-        ex.score_pct DESC
+        COALESCE(ex.score_pct, 50) DESC
     `) as ModelRow[];
     return fastRows.filter((row) => isModelCostAllowed(row.provider, row.model_id));
   }

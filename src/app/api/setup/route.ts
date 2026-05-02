@@ -5,20 +5,23 @@ import { triggerExamForProvider } from "@/lib/worker/exam";
 import { runWorkerCycle } from "@/lib/worker";
 import { seal as sealSecret, open as openSecret } from "@/lib/secret-vault";
 import { invalidateApiKeyCache } from "@/lib/api-keys";
+import { costPolicyBlockMessage, isProviderCostAllowed } from "@/lib/cost-policy";
 
 export const dynamic = "force-dynamic";
 
-// Validity is derived from provider_catalog (no hardcoded allowlist).
+// Provider must exist in provider_catalog and be allowed by the hardcoded
+// no-spend catalog. This blocks local/Ollama and billable provider keys.
 async function isValidProvider(provider: string): Promise<boolean> {
   if (!provider || typeof provider !== "string") return false;
+  if (!isProviderCostAllowed(provider)) return false;
   try {
     const sql = getSqlClient();
     const rows = await sql<{ count: string }[]>`
       SELECT COUNT(*) AS count FROM provider_catalog WHERE name = ${provider}
     `;
-    return Number(rows[0]?.count ?? 0) > 0;
+    return Number(rows[0]?.count ?? 0) > 0 || isProviderCostAllowed(provider);
   } catch {
-    return false;
+    return isProviderCostAllowed(provider);
   }
 }
 
@@ -52,7 +55,7 @@ export async function POST(req: NextRequest) {
     const { provider, apiKey, enabled } = body as { provider: string; apiKey?: string; enabled?: boolean };
 
     if (!(await isValidProvider(provider))) {
-      return NextResponse.json({ error: `Unknown provider: ${provider}` }, { status: 400 });
+      return NextResponse.json({ error: costPolicyBlockMessage(provider) }, { status: 400 });
     }
 
     // Toggle เปิด/ปิด provider (ไม่ต้องส่ง apiKey)

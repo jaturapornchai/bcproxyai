@@ -4,6 +4,7 @@ import { emitEvent } from "@/lib/routing-learn";
 import { invalidateModelListCache } from "@/lib/model-list-cache";
 import { isProviderEnabled } from "@/lib/provider-toggle";
 import { isModelCostAllowed } from "@/lib/cost-policy";
+import { FREE_MODEL_CATALOG } from "@/lib/free-model-catalog";
 
 interface ModelRow {
   id: string;
@@ -928,25 +929,8 @@ export async function generateNickname(): Promise<string | null> {
 }
 
 export async function scanModels(): Promise<{ found: number; new: number; disappeared: number }> {
-  await logWorker("scan", "Starting model scan");
+  await logWorker("scan", "Starting hardcoded free model sync");
   const sql = getSqlClient();
-
-  // ลบ model ของ provider ที่ไม่มี API key ออกจากระบบ (ใช้ไม่ได้)
-  try {
-    const availableProviders = getAvailableProviders();
-    const deleted = await sql<{ id: string; provider: string }[]>`
-      DELETE FROM models
-      WHERE provider NOT IN ${sql(availableProviders)}
-      RETURNING id, provider
-    `;
-    if (deleted.length > 0) {
-      const byProvider: Record<string, number> = {};
-      for (const r of deleted) byProvider[r.provider] = (byProvider[r.provider] ?? 0) + 1;
-      await logWorker("scan", `🗑️ ลบ ${deleted.length} model จาก provider ที่ไม่มี key: ${JSON.stringify(byProvider)}`, "warn");
-    }
-  } catch (err) {
-    await logWorker("scan", `ลบ model ไม่มี-key ล้มเหลว: ${err}`, "error");
-  }
 
   try {
     const existing = await sql<{ id: string; provider: string; model_id: string }[]>`
@@ -963,59 +947,26 @@ export async function scanModels(): Promise<{ found: number; new: number; disapp
     await logWorker("scan", `ลบ model นอก free whitelist ล้มเหลว: ${err}`, "error");
   }
 
-  // Helper: ข้าม provider ที่ปิดเอง
-  const guard = async <T>(name: string, fn: () => Promise<T[]>): Promise<T[]> => {
-    if (!(await isProviderEnabled(name))) return [];
-    return fn();
-  };
-
-  const [
-    orModels, kiloModels, googleModels, groqModels, cerebrasModels, sambaNovaModels,
-    mistralModels, ollamaModels, githubModels, fireworksModels, cohereModels,
-    cloudflareModels, hfModels, nvidiaModels,
-    chutesModels, llm7Models, scalewayModels, pollinationsModels, ollamaCloudModels,
-    siliconflowModels, glhfModels, togetherModels, hyperbolicModels,
-    zaiModels, dashscopeModels, rekaModels, typhoonModels, thaillmModels,
-  ] = await Promise.all([
-    guard("openrouter", fetchOpenRouterModels),
-    guard("kilo", fetchKiloModels),
-    guard("google", fetchGoogleModels),
-    guard("groq", fetchGroqModels),
-    guard("cerebras", fetchCerebrasModels),
-    guard("sambanova", fetchSambaNovaModels),
-    guard("mistral", fetchMistralModels),
-    guard("ollama", fetchOllamaModels),
-    guard("github", fetchGitHubModels),
-    guard("fireworks", fetchFireworksModels),
-    guard("cohere", fetchCohereModels),
-    guard("cloudflare", fetchCloudflareModels),
-    guard("huggingface", fetchHuggingFaceModels),
-    guard("nvidia", fetchNvidiaModels),
-    guard("chutes", fetchChutesModels),
-    guard("llm7", fetchLlm7Models),
-    guard("scaleway", fetchScalewayModels),
-    guard("pollinations", fetchPollinationsModels),
-    guard("ollamacloud", fetchOllamaCloudModels),
-    guard("siliconflow", fetchSiliconFlowModels),
-    guard("glhf", fetchGlhfModels),
-    guard("together", fetchTogetherModels),
-    guard("hyperbolic", fetchHyperbolicModels),
-    guard("zai", fetchZaiModels),
-    guard("dashscope", fetchDashScopeModels),
-    guard("reka", fetchRekaModels),
-    guard("typhoon", fetchTyphoonModels),
-    guard("thaillm", fetchThaiLLMModels),
-  ]);
-
-  const rawModels = [
-    ...orModels, ...kiloModels, ...googleModels, ...groqModels, ...cerebrasModels, ...sambaNovaModels,
-    ...mistralModels, ...ollamaModels, ...githubModels, ...fireworksModels, ...cohereModels,
-    ...cloudflareModels, ...hfModels, ...nvidiaModels,
-    ...chutesModels, ...llm7Models, ...scalewayModels, ...pollinationsModels, ...ollamaCloudModels,
-    ...siliconflowModels, ...glhfModels, ...togetherModels, ...hyperbolicModels,
-    ...zaiModels, ...dashscopeModels, ...rekaModels, ...typhoonModels, ...thaillmModels,
-  ];
-  const allModels = rawModels.filter((m) => isModelCostAllowed(m.provider, m.model_id));
+  const allModels: ModelRow[] = FREE_MODEL_CATALOG.map((m) => ({
+    id: `${m.provider}:${m.modelId}`,
+    name: m.name,
+    provider: m.provider,
+    model_id: m.modelId,
+    context_length: m.contextLength,
+    tier: m.tier,
+    description: "Hardcoded remote free model. Local/Ollama and paid models are disabled.",
+    supports_vision: m.supportsVision ? 1 : 0,
+    supports_tools: m.supportsTools ? 1 : 0,
+    supports_audio_input: 0,
+    supports_audio_output: 0,
+    supports_image_gen: 0,
+    supports_embedding: 0,
+    supports_json_mode: m.supportsJsonMode ? 1 : 0,
+    supports_reasoning: m.supportsReasoning ? 1 : 0,
+    supports_code: m.supportsCode ? 1 : 0,
+    pricing_input: 0,
+    pricing_output: 0,
+  })).filter((m) => isModelCostAllowed(m.provider, m.model_id));
   const foundIds = new Set(allModels.map(m => m.id));
   let newCount = 0;
 
@@ -1026,9 +977,15 @@ export async function scanModels(): Promise<{ found: number; new: number; disapp
     // Honor reasoning flag set by the fetcher (e.g. OpenRouter's
     // `supported_parameters: ["reasoning", ...]`) when present — cap detection
     // only uses name-regex so metadata beats guesswork.
-    const caps = detectCaps(m.model_id, m.name, {
+    const detectedCaps = detectCaps(m.model_id, m.name, {
       reasoning: m.supports_reasoning === 1 ? true : undefined,
     });
+    const caps = {
+      ...detectedCaps,
+      supports_json_mode: m.supports_json_mode ?? detectedCaps.supports_json_mode,
+      supports_reasoning: m.supports_reasoning ?? detectedCaps.supports_reasoning,
+      supports_code: m.supports_code ?? detectedCaps.supports_code,
+    };
     try {
       const result = await sql<{ xmax: string }[]>`
         INSERT INTO models (id, name, provider, model_id, context_length, tier, description,
@@ -1092,7 +1049,7 @@ export async function scanModels(): Promise<{ found: number; new: number; disapp
     }
   } catch { /* silent */ }
 
-  const msg = `Scan: พบ ${allModels.length} | OR=${orModels.length} Kilo=${kiloModels.length} GG=${googleModels.length} Groq=${groqModels.length} Cer=${cerebrasModels.length} SN=${sambaNovaModels.length} Mis=${mistralModels.length} Oll=${ollamaModels.length} GH=${githubModels.length} FW=${fireworksModels.length} Coh=${cohereModels.length} CF=${cloudflareModels.length} HF=${hfModels.length} NV=${nvidiaModels.length} Ch=${chutesModels.length} L7=${llm7Models.length} Sc=${scalewayModels.length} Pol=${pollinationsModels.length} OC=${ollamaCloudModels.length} SF=${siliconflowModels.length} GLHF=${glhfModels.length} Tg=${togetherModels.length} Hy=${hyperbolicModels.length} Z=${zaiModels.length} DS=${dashscopeModels.length} Reka=${rekaModels.length} | ใหม่ ${newCount} | หายไป ${disappearedCount}`;
+  const msg = `Hardcoded free model sync: พบ ${allModels.length} | providers=openrouter | local=disabled | auto-discovery=disabled | ใหม่ ${newCount} | หายไป ${disappearedCount}`;
   await logWorker("scan", msg);
 
   invalidateModelListCache();

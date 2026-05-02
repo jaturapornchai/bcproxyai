@@ -2,12 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSqlClient } from "@/lib/db/schema";
 import { getAllProviderToggles } from "@/lib/provider-toggle";
 import { isProviderCostAllowed } from "@/lib/cost-policy";
+import { getHardcodedFreeProviders } from "@/lib/free-model-catalog";
 
 export const dynamic = "force-dynamic";
 
-// Provider list มาจาก provider_catalog (DB) — ไม่ใช้ hardcoded
-// Special: provider เหล่านี้ใช้งานได้โดยไม่ต้อง API key
-const NO_KEY_REQUIRED = new Set(["ollama", "pollinations"]);
+// Provider list is restricted by the hardcoded no-spend model catalog.
+const NO_KEY_REQUIRED = new Set<string>();
 
 interface CatalogRow {
   name: string;
@@ -78,10 +78,33 @@ export async function GET(req: NextRequest) {
           ORDER BY source = 'seed' DESC, name
         `;
 
+    for (const provider of getHardcodedFreeProviders()) {
+      if (catalogRows.some((row) => row.name === provider)) continue;
+      catalogRows.push({
+        name: provider,
+        label: provider,
+        env_var: `${provider.toUpperCase()}_API_KEY`,
+        homepage: provider === "openrouter" ? "https://openrouter.ai/keys" : "",
+        source: "hardcoded",
+        free_tier: true,
+        notes: "Hardcoded free remote model catalog",
+        models_url: "",
+        auth_scheme: "bearer",
+        homepage_ok: null,
+        homepage_status_code: null,
+        models_ok: null,
+        models_status_code: null,
+        verify_notes: null,
+        last_verified_at: null,
+        public_models_count: null,
+      });
+    }
+
     const toggleMap = await getAllProviderToggles();
 
-    const riskyProviders = catalogRows.filter((c) => !isProviderCostAllowed(c.name)).length;
-    const providers = catalogRows.map(c => {
+    const safeCatalogRows = catalogRows.filter((c) => isProviderCostAllowed(c.name));
+    const riskyProviders = 0;
+    const providers = safeCatalogRows.map(c => {
       const provider = c.name;
       const costAllowed = isProviderCostAllowed(provider);
       const noKeyRequired = NO_KEY_REQUIRED.has(provider);

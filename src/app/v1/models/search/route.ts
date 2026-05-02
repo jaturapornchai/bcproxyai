@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSqlClient } from "@/lib/db/schema";
-import { isModelCostAllowed } from "@/lib/cost-policy";
+import { FREE_MODEL_CATALOG } from "@/lib/free-model-catalog";
 
 export const dynamic = "force-dynamic";
 
@@ -49,8 +48,6 @@ export async function GET(req: NextRequest) {
     const excludeCooldown = (searchParams.get("exclude_cooldown") ?? "1") === "1";
     const top = Math.min(Math.max(Number(searchParams.get("top") ?? 20), 1), 200);
 
-    const sql = getSqlClient();
-
     // Valid categories (defensive — SQL injection would need category to inject)
     const VALID_CATS = new Set([
       "thai", "code", "tools", "vision", "math", "reasoning", "json",
@@ -58,66 +55,41 @@ export async function GET(req: NextRequest) {
     ]);
     const cat = category && VALID_CATS.has(category) ? category : null;
 
-    // Build filter predicates
-    const filters: string[] = [];
-    if (minContext > 0) filters.push(`m.context_length >= ${minContext}`);
-    if (maxContext > 0) filters.push(`m.context_length <= ${maxContext}`);
-    if (supportsTools === "1") filters.push(`m.supports_tools = 1`);
-    if (supportsTools === "0") filters.push(`m.supports_tools = 0`);
-    if (supportsVision === "1") filters.push(`m.supports_vision = 1`);
-    if (supportsVision === "0") filters.push(`m.supports_vision = 0`);
-    if (supportsReasoning === "1") filters.push(`m.supports_reasoning = 1`);
-    if (supportsJson === "1") filters.push(`m.supports_json_mode = 1`);
-    if (provider) filters.push(`m.provider = '${provider.replace(/'/g, "''")}'`);
-    if (tier) filters.push(`m.tier = '${tier.replace(/'/g, "''")}'`);
+    void excludeCooldown;
+    let rows = FREE_MODEL_CATALOG.map((m) => ({
+      id: `${m.provider}:${m.modelId}`,
+      provider: m.provider,
+      model_id: m.modelId,
+      name: m.name,
+      context_length: m.contextLength,
+      tier: m.tier,
+      supports_tools: m.supportsTools ? 1 : 0,
+      supports_vision: m.supportsVision ? 1 : 0,
+      supports_reasoning: m.supportsReasoning ? 1 : 0,
+      supports_json_mode: m.supportsJsonMode ? 1 : 0,
+      category_score_pct: cat ? 50 : null,
+      category_passed: cat ? 0 : null,
+      category_total: cat ? 0 : null,
+      avg_latency_ms: null,
+      cooldown_until: null,
+    }));
 
-    const whereClause = filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
+    rows = rows.filter((m) => {
+      if (minContext > 0 && m.context_length < minContext) return false;
+      if (maxContext > 0 && m.context_length > maxContext) return false;
+      if (supportsTools === "1" && m.supports_tools !== 1) return false;
+      if (supportsTools === "0" && m.supports_tools !== 0) return false;
+      if (supportsVision === "1" && m.supports_vision !== 1) return false;
+      if (supportsVision === "0" && m.supports_vision !== 0) return false;
+      if (supportsReasoning === "1" && m.supports_reasoning !== 1) return false;
+      if (supportsJson === "1" && m.supports_json_mode !== 1) return false;
+      if (provider && m.provider !== provider) return false;
+      if (tier && m.tier !== tier) return false;
+      return true;
+    });
 
-    const cooldownJoin = excludeCooldown
-      ? `LEFT JOIN LATERAL (
-          SELECT cooldown_until FROM health_logs
-          WHERE model_id = m.id AND cooldown_until > now()
-          ORDER BY checked_at DESC LIMIT 1
-        ) cd ON true`
-      : "";
-    const cooldownFilter = excludeCooldown ? `AND cd.cooldown_until IS NULL` : "";
-
-    const catJoin = cat
-      ? `LEFT JOIN model_category_scores mcs ON mcs.model_id = m.id AND mcs.category = '${cat}'`
-      : "";
-    const catOrder = cat ? `mcs.score_pct DESC NULLS LAST,` : "";
-    const catScoreSel = cat
-      ? `COALESCE(mcs.score_pct, 0) AS category_score_pct,
-         COALESCE(mcs.passed_count, 0) AS category_passed,
-         COALESCE(mcs.total_count, 0) AS category_total,`
-      : `NULL::real AS category_score_pct,
-         NULL::int AS category_passed,
-         NULL::int AS category_total,`;
-
-    const latJoin = `LEFT JOIN LATERAL (
-      SELECT AVG(latency_ms)::int AS avg_lat
-      FROM routing_stats
-      WHERE model_id = m.id AND created_at >= now() - interval '24 hours'
-    ) rs ON true`;
-
-    const query = `
-      SELECT
-        m.id, m.provider, m.model_id, m.name, m.context_length, m.tier,
-        m.supports_tools, m.supports_vision, m.supports_reasoning, m.supports_json_mode,
-        ${catScoreSel}
-        rs.avg_lat AS avg_latency_ms,
-        ${excludeCooldown ? "cd.cooldown_until" : "NULL::timestamptz AS cooldown_until"}
-      FROM models m
-      ${catJoin}
-      ${cooldownJoin}
-      ${latJoin}
-      ${whereClause} ${whereClause ? "AND" : "WHERE"} 1=1 ${cooldownFilter}
-      ORDER BY ${catOrder} m.context_length DESC, rs.avg_lat ASC NULLS LAST
-      LIMIT ${top}
-    `;
-
-    const rows = (await sql.unsafe(query) as Array<Record<string, unknown>>)
-      .filter((row) => isModelCostAllowed(String(row.provider), String(row.model_id)));
+    rows.sort((a, b) => b.context_length - a.context_length || a.model_id.localeCompare(b.model_id));
+    rows = rows.slice(0, top);
 
     return NextResponse.json({
       total: rows.length,

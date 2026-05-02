@@ -19,11 +19,11 @@ interface CatalogRow {
 }
 
 export async function POST(req: NextRequest) {
-  const { provider, apiKey, acceptCostRisk } = await req.json();
+  const { provider, apiKey } = await req.json();
   if (!provider || typeof provider !== "string") {
     return NextResponse.json({ ok: false, error: "Missing provider" }, { status: 400 });
   }
-  if (!isProviderCostAllowed(provider) && acceptCostRisk !== true) {
+  if (!isProviderCostAllowed(provider)) {
     return NextResponse.json({ ok: false, error: costPolicyBlockMessage(provider) }, { status: 402 });
   }
 
@@ -35,7 +35,16 @@ export async function POST(req: NextRequest) {
     LIMIT 1
   `;
   if (rows.length === 0) {
-    return NextResponse.json({ ok: false, error: `Provider not in catalog: ${provider}` }, { status: 404 });
+    if (provider !== "openrouter") {
+      return NextResponse.json({ ok: false, error: `Provider not in catalog: ${provider}` }, { status: 404 });
+    }
+    rows.push({
+      name: "openrouter",
+      base_url: "https://openrouter.ai/api/v1/chat/completions",
+      models_url: "https://openrouter.ai/api/v1/models",
+      auth_scheme: "bearer",
+      auth_header_name: "Authorization",
+    });
   }
   const cfg = rows[0];
 

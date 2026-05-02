@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSqlClient } from "@/lib/db/schema";
 import { openAIError, toOpenAIModelObject, unixNow } from "@/lib/openai-compat";
+import { FREE_MODEL_CATALOG } from "@/lib/free-model-catalog";
 
 export const dynamic = "force-dynamic";
 
@@ -43,31 +43,21 @@ export async function GET(
       );
     }
 
-    // Real models — lookup by model_id OR fully-qualified "provider/model_id"
-    const sql = getSqlClient();
-    const rows = await sql<{ provider: string; model_id: string; first_seen: Date | null }[]>`
-      SELECT m.provider, m.model_id, m.first_seen
-      FROM models m
-      WHERE m.model_id = ${modelId}
-         OR (m.provider || '/' || m.model_id) = ${modelId}
-         OR m.id = ${modelId}
-      LIMIT 1
-    `;
+    const row = FREE_MODEL_CATALOG.find((m) =>
+      m.modelId === modelId ||
+      `${m.provider}/${m.modelId}` === modelId ||
+      `${m.provider}:${m.modelId}` === modelId
+    );
 
-    if (rows.length === 0) {
+    if (!row) {
       return openAIError(404, {
         message: `The model '${modelId}' does not exist`,
         param: "model",
       });
     }
 
-    const row = rows[0];
-    const created = row.first_seen
-      ? Math.floor(new Date(row.first_seen).getTime() / 1000)
-      : unixNow();
-
     return NextResponse.json(
-      toOpenAIModelObject(`${row.provider}/${row.model_id}`, row.provider, created),
+      toOpenAIModelObject(`${row.provider}/${row.modelId}`, row.provider, unixNow()),
       { headers: { "Access-Control-Allow-Origin": "*" } }
     );
   } catch (err) {

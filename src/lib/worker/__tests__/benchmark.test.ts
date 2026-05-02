@@ -35,6 +35,15 @@ vi.mock("@/lib/provider-resolver", () => ({
   ),
 }));
 
+vi.mock("@/lib/cost-policy", () => ({
+  isModelCostAllowed: vi.fn(() => true),
+  isProviderCostAllowed: vi.fn(() => true),
+  costPolicyBlockMessage: vi.fn((p: string, m?: string) => `blocked ${p}/${m ?? ""}`),
+  getCostAllowedProviders: vi.fn(() => ["openrouter"]),
+  getFreeModelAllowlist: vi.fn(() => []),
+  isPaidProviderOverrideEnabled: vi.fn(() => false),
+}));
+
 // Mock global fetch
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);

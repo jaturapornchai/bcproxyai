@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { getSqlClient } from "@/lib/db/schema";
-import { discoverProviders } from "@/lib/worker/provider-discovery";
 
 export const dynamic = "force-dynamic";
 
@@ -52,14 +51,11 @@ export async function GET() {
 
 /**
  * POST /api/provider-catalog
- * Manual trigger: ค้นหา provider ใหม่ทันที (ไม่ต้องรอ worker cycle)
+ * Provider discovery is disabled. The gateway uses hardcoded free models only.
  */
 export async function POST() {
-  try {
-    const result = await discoverProviders();
-    return NextResponse.json({ ok: true, ...result });
-  } catch (err) {
-    console.error("[provider-catalog] POST error:", err);
-    return NextResponse.json({ error: err instanceof Error ? err.message : "Internal error" }, { status: 500 });
-  }
+  return NextResponse.json(
+    { ok: false, error: "Provider auto-discovery is disabled; SMLGateway uses the hardcoded free remote model catalog." },
+    { status: 410 },
+  );
 }

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
 let mockModels: Array<ReturnType<typeof makeModel>> = [];
 const sqlCalls: Array<{ text: string; values: unknown[] }> = [];
@@ -31,6 +31,15 @@ vi.mock("@/lib/upstream-agent", () => ({
   upstreamAgent: undefined,
 }));
 
+vi.mock("@/lib/cost-policy", () => ({
+  isModelCostAllowed: vi.fn(() => true),
+  isProviderCostAllowed: vi.fn(() => true),
+  costPolicyBlockMessage: vi.fn((p: string, m?: string) => `blocked ${p}/${m ?? ""}`),
+  getCostAllowedProviders: vi.fn(() => ["openrouter"]),
+  getFreeModelAllowlist: vi.fn(() => []),
+  isPaidProviderOverrideEnabled: vi.fn(() => false),
+}));
+
 // Mock global fetch
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
@@ -56,14 +65,9 @@ function makeModel(provider = "openrouter", modelId = "test-model") {
 }
 
 beforeEach(() => {
-  vi.stubEnv("SML_ALLOW_PAID_PROVIDERS", "1");
   vi.clearAllMocks();
   mockModels = [];
   sqlCalls.length = 0;
-});
-
-afterEach(() => {
-  vi.unstubAllEnvs();
 });
 
 describe("isNonChatModel", () => {

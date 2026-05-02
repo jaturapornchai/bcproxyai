@@ -1,12 +1,8 @@
 /**
- * Provider Resolver — DB-first lookup ของ provider URL + env var
+ * Provider Resolver — hardcoded endpoint lookup for no-spend mode
  *
- * Cache catalog ใน memory ทุก 30s → sync API (เร็ว, ไม่ block request path)
- * Priority:
- *   1. provider_catalog (DB)  — รวม discovered providers
- *   2. PROVIDER_URLS (hardcoded fallback) — backwards compat
- *
- * เป้าหมาย: discovered provider = ใช้งานได้ทันที โดยไม่ต้องแก้ code
+ * Runtime routing must not follow discovered provider URLs. The gateway uses
+ * hardcoded endpoints and the hardcoded free model catalog only.
  */
 import { getSqlClient } from "@/lib/db/schema";
 import {
@@ -79,13 +75,9 @@ function maybeRefresh(): void {
 }
 
 /**
- * Resolve provider chat completions URL.
- * Priority: DB catalog > hardcoded PROVIDER_URLS > "" (caller treats as unknown)
+ * Resolve provider chat completions URL from hardcoded endpoints only.
  */
 export function resolveProviderUrl(provider: string): string {
-  maybeRefresh();
-  const fromDb = cache.get(provider)?.base_url;
-  if (fromDb) return fromDb;
   return HARDCODED_URLS[provider] ?? "";
 }
 
@@ -106,41 +98,23 @@ function deriveCompletionsFromChat(chatUrl: string): string | null {
 }
 
 /**
- * Resolve provider embeddings URL.
- * Priority: derive from DB chat URL > hardcoded PROVIDER_EMBEDDING_URLS > ""
+ * Resolve provider embeddings URL from hardcoded endpoints only.
  */
 export function resolveProviderEmbeddingUrl(provider: string): string {
-  maybeRefresh();
-  const dbChat = cache.get(provider)?.base_url;
-  if (dbChat) {
-    const derived = deriveEmbedFromChat(dbChat);
-    if (derived) return derived;
-  }
   return HARDCODED_EMBED_URLS[provider] ?? "";
 }
 
 /**
- * Resolve provider legacy completions URL.
- * Priority: derive from DB chat URL > hardcoded PROVIDER_COMPLETIONS_URLS > ""
+ * Resolve provider legacy completions URL from hardcoded endpoints only.
  */
 export function resolveProviderCompletionsUrl(provider: string): string {
-  maybeRefresh();
-  const dbChat = cache.get(provider)?.base_url;
-  if (dbChat) {
-    const derived = deriveCompletionsFromChat(dbChat);
-    if (derived) return derived;
-  }
   return HARDCODED_COMPL_URLS[provider] ?? "";
 }
 
 /**
  * Resolve env var name for the provider's API key.
- * Priority: DB catalog > hardcoded ENV_MAP > guessed (UPPER_SNAKE_API_KEY)
  */
 export function resolveProviderEnvVar(provider: string): string {
-  maybeRefresh();
-  const fromDb = cache.get(provider)?.env_var;
-  if (fromDb) return fromDb;
   return HARDCODED_ENV_MAP[provider] ?? `${provider.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_API_KEY`;
 }
 
@@ -150,11 +124,8 @@ export function resolveProviderEnvVar(provider: string): string {
  */
 export type AuthScheme = "bearer" | "apikey-header" | "query-key" | "none";
 export function resolveProviderAuth(provider: string): { scheme: AuthScheme; headerName: string } {
-  maybeRefresh();
-  const row = cache.get(provider);
-  const scheme = (row?.auth_scheme ?? "bearer") as AuthScheme;
-  const headerName = row?.auth_header_name ?? (scheme === "apikey-header" ? "apikey" : "Authorization");
-  return { scheme, headerName };
+  void provider;
+  return { scheme: "bearer", headerName: "Authorization" };
 }
 
 /**

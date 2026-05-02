@@ -2,9 +2,6 @@ import { getSqlClient } from "@/lib/db/schema";
 import { scanModels } from "./scanner";
 import { checkHealth } from "./health";
 import { runExams } from "./exam";
-import { discoverProviders } from "./provider-discovery";
-import { verifyAllProviders } from "./provider-verify";
-import { syncProviderRegistry } from "./provider-registry-sync";
 import { appointTeachers } from "@/lib/teacher";
 import { acquireLeader, renewLeader, releaseLeader } from "./leader";
 import { startWarmup, stopWarmup } from "./warmup";
@@ -12,7 +9,6 @@ import { startWarmup, stopWarmup } from "./warmup";
 export { scanModels } from "./scanner";
 export { checkHealth } from "./health";
 export { runExams } from "./exam";
-export { discoverProviders } from "./provider-discovery";
 
 export interface WorkerStatus {
   status: "idle" | "running" | "error";
@@ -26,12 +22,8 @@ export interface WorkerStatus {
 }
 
 let workerTimer: ReturnType<typeof setInterval> | null = null;
-let verifyTimer: ReturnType<typeof setInterval> | null = null;
-let registryTimer: ReturnType<typeof setInterval> | null = null;
 let examTimer: ReturnType<typeof setInterval> | null = null;
 let isRunning = false;
-let verifyRunning = false;
-let registryRunning = false;
 let examRunning = false;
 
 async function getState(key: string): Promise<string | null> {
@@ -122,24 +114,7 @@ export async function runWorkerCycle(): Promise<void> {
     let healthResult = { checked: 0, available: 0, cooldown: 0 };
     let examResult: { examined: number; passed: number; failed: number; level: string } = { examined: 0, passed: 0, failed: 0, level: "middle" };
 
-    // Step 0: Provider auto-discovery — ค้นหา provider ใหม่จาก internet ก่อน scan models
-    try {
-      await logWorker("worker", "Step 0: Discovering providers");
-      const disc = await discoverProviders();
-      if (disc.newFound > 0) {
-        await logWorker("worker", `🆕 พบ provider ใหม่ ${disc.newFound}: ${disc.newProviders.join(", ")}`, "success");
-      }
-    } catch (err) {
-      await logWorker("worker", `Step 0 (discovery) failed: ${err}`, "error");
-    }
-
-    // Step 0.5: Verify — ตรวจ homepage + models URL ของทุก provider (no hardcode — อ่านจาก DB)
-    try {
-      await logWorker("worker", "Step 0.5: Verifying provider homepages + models URLs");
-      await verifyAllProviders();
-    } catch (err) {
-      await logWorker("worker", `Step 0.5 (verify) failed: ${err}`, "error");
-    }
+    await logWorker("worker", "Step 0: provider/model auto-discovery disabled — using hardcoded free remote catalog");
 
     try {
       // Step 1: Scan
@@ -221,27 +196,6 @@ export function startWorker(): void {
   }, 15 * 60 * 1000);
   if (typeof workerTimer.unref === "function") workerTimer.unref();
 
-  // Dedicated verify loop every 3 minutes — lightweight probe so the dashboard
-  // always shows fresh homepage / endpoint reachability without waiting for the
-  // full 15-min cycle. Leader-locked so only one replica probes when scaled.
-  verifyTimer = setInterval(() => {
-    runStandaloneVerify().catch((err) => {
-      logWorker("verify", `Standalone verify error: ${err}`, "error");
-    });
-  }, 3 * 60 * 1000);
-  if (typeof verifyTimer.unref === "function") verifyTimer.unref();
-
-  // Registry sync — pulls cheahjs/free-llm-api-resources + LiteLLM registry
-  // every 6 hours. Only patches rows where the probe marked the homepage dead,
-  // so working URLs are never overwritten.
-  runStandaloneRegistrySync().catch(() => {}); // initial sync
-  registryTimer = setInterval(() => {
-    runStandaloneRegistrySync().catch((err) => {
-      logWorker("registry-sync", `Sync error: ${err}`, "error");
-    });
-  }, 6 * 60 * 60 * 1000);
-  if (typeof registryTimer.unref === "function") registryTimer.unref();
-
   // Exam loop every 5 minutes — clears the exam backlog faster than the main
   // 15-minute cycle alone. Leader-locked + skipped if main cycle running.
   examTimer = setInterval(() => {
@@ -262,26 +216,12 @@ export function startWorker(): void {
  */
 export async function stopWorker(): Promise<void> {
   if (workerTimer) { clearInterval(workerTimer); workerTimer = null; }
-  if (verifyTimer) { clearInterval(verifyTimer); verifyTimer = null; }
-  if (registryTimer) { clearInterval(registryTimer); registryTimer = null; }
   if (examTimer) { clearInterval(examTimer); examTimer = null; }
   try { stopWarmup(); } catch { /* ignore */ }
   // Best-effort flag flip — if isRunning is true we still release the lock
   // so the next replica can pick up immediately.
   await setState("status", "idle").catch(() => {});
   await releaseLeader().catch(() => {});
-}
-
-async function runStandaloneRegistrySync(): Promise<void> {
-  if (registryRunning) return;
-  registryRunning = true;
-  try {
-    const isLeader = await acquireLeader();
-    if (!isLeader) return;
-    await syncProviderRegistry();
-  } finally {
-    registryRunning = false;
-  }
 }
 
 async function runStandaloneExam(): Promise<void> {
@@ -293,20 +233,6 @@ async function runStandaloneExam(): Promise<void> {
     await runExams();
   } finally {
     examRunning = false;
-  }
-}
-
-async function runStandaloneVerify(): Promise<void> {
-  if (verifyRunning) return;
-  // Don't overlap with main cycle's verify step
-  if (isRunning) return;
-  verifyRunning = true;
-  try {
-    const isLeader = await acquireLeader();
-    if (!isLeader) return;
-    await verifyAllProviders();
-  } finally {
-    verifyRunning = false;
   }
 }
 

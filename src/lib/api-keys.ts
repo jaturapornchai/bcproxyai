@@ -4,16 +4,16 @@
  * **Source of truth: api_keys table in DB only.**
  * (.env.local API key entries are ignored — set keys via Setup modal in dashboard.)
  *
- * Special cases:
- *   - ollama: ไม่ต้อง key (default "ollama")
- *   - pollinations: ไม่ต้อง key
+ * No no-key upstream providers are enabled in no-spend mode. Local/Ollama is
+ * deliberately blocked; OpenRouter hardcoded free models still require an
+ * OpenRouter key from the Setup modal.
  */
 import { getSqlClient } from "@/lib/db/schema";
 import { getAllProviderNames } from "@/lib/provider-resolver";
 import { open as openSealed } from "@/lib/secret-vault";
 import { isProviderCostAllowed } from "@/lib/cost-policy";
 
-const NO_KEY_REQUIRED = new Set(["ollama", "pollinations"]);
+const NO_KEY_REQUIRED = new Set<string>();
 
 const keyIndexMap = new Map<string, number>();
 const cooldownMap = new Map<string, number>(); // "provider:key" -> cooldown until timestamp

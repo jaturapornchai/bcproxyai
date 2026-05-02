@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSqlClient } from "@/lib/db/schema";
 import { openAIError, toOpenAIModelObject, unixNow } from "@/lib/openai-compat";
-import { isModelCostAllowed } from "@/lib/cost-policy";
+import { FREE_MODEL_CATALOG } from "@/lib/free-model-catalog";
 
 export const dynamic = "force-dynamic";
 
@@ -32,35 +31,10 @@ const VIRTUAL_MODELS = [
 
 export async function GET(_req: NextRequest) {
   try {
-    const sql = getSqlClient();
-
-    const rows = await sql<ModelRow[]>`
-      SELECT
-        m.id, m.name, m.provider, m.model_id,
-        m.context_length, m.tier, m.supports_tools, m.supports_vision, m.first_seen,
-        h.status as health_status, h.cooldown_until,
-        COALESCE(b.avg_score, 0) as avg_score,
-        COALESCE(b.avg_latency, 0) as avg_latency
-      FROM models m
-      LEFT JOIN latest_model_health h ON m.id = h.model_id
-      LEFT JOIN (
-        SELECT model_id, AVG(score) as avg_score, AVG(latency_ms) as avg_latency
-        FROM benchmark_results GROUP BY model_id
-      ) b ON m.id = b.model_id
-      ORDER BY avg_score DESC, m.provider ASC, m.name ASC
-    `;
-
-    const realModels = rows.filter((row) => isModelCostAllowed(row.provider, row.model_id)).map((row) => {
-      const created = row.first_seen
-        ? Math.floor(new Date(row.first_seen).getTime() / 1000)
-        : unixNow();
-
-      return toOpenAIModelObject(
-        `${row.provider}/${row.model_id}`,
-        row.provider,
-        created
-      );
-    });
+    const created = unixNow();
+    const realModels = FREE_MODEL_CATALOG.map((row) =>
+      toOpenAIModelObject(`${row.provider}/${row.modelId}`, row.provider, created)
+    );
 
     return NextResponse.json({
       object: "list",

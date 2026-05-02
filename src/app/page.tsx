@@ -310,7 +310,7 @@ export default function Dashboard() {
               <a
                 href="/admin/providers"
                 className="px-3 py-1.5 rounded-lg text-cyan-300 hover:text-cyan-200 hover:bg-cyan-500/10 border border-cyan-500/30 transition-colors text-xs"
-                title="แก้ base URL ของ provider — เปลี่ยน Ollama port หรือชี้ไป LLM ตัวอื่น"
+                title="ดู provider config — runtime ใช้ hardcoded free catalog"
               >
                 <span className="mr-1">🔌</span>
                 Providers
@@ -405,16 +405,12 @@ export default function Dashboard() {
                   <div className="font-bold text-amber-200 text-lg mb-1">ยังไม่มี API key เลย!</div>
                   <div className="text-sm text-amber-100/80 mb-2">
                     SMLGateway ต้องมี API key อย่างน้อย 1 provider ถึงจะใช้งานได้ —
-                    สมัครฟรีที่ <strong className="text-white">OpenRouter</strong> หรือ <strong className="text-white">Groq</strong> (แนะนำ — ฟรี ใช้ง่าย)
+                    ตอนนี้อนุญาตเฉพาะ <strong className="text-white">OpenRouter :free models</strong> ใน hardcoded catalog เท่านั้น
                   </div>
                   <div className="flex items-center gap-2 flex-wrap text-xs">
                     <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer"
                        className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white border border-white/20 transition-colors">
-                      🌐 สมัคร OpenRouter (ฟรี)
-                    </a>
-                    <a href="https://console.groq.com/keys" target="_blank" rel="noopener noreferrer"
-                       className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white border border-white/20 transition-colors">
-                      🏎 สมัคร Groq (ฟรี — เร็วสุด)
+                      🌐 สมัคร OpenRouter (ใช้บัญชีไม่ผูกบัตร)
                     </a>
                   </div>
                 </div>

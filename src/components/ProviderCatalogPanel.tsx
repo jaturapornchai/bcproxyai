@@ -146,12 +146,11 @@ export function ProviderCatalogPanel() {
       {/* Action bar */}
       <div className="px-4 py-3 border-t border-white/5 bg-black/20 flex items-center gap-2 flex-wrap">
         <button
-          onClick={onDiscover}
-          disabled={discovering}
-          className="px-4 py-1.5 rounded-lg bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-          title="ค้นหาผู้ให้บริการใหม่จากอินเทอร์เน็ตทันที (ไม่ต้องรอรอบถัดไป)"
+          disabled
+          className="px-4 py-1.5 rounded-lg bg-slate-700/60 text-slate-300 text-sm font-semibold opacity-70 cursor-not-allowed"
+          title="ปิดการค้นหา provider/model อัตโนมัติแล้ว ระบบใช้ hardcoded free catalog เท่านั้น"
         >
-          {discovering ? "🔎 กำลังค้นหา…" : "🔎 ค้นหาผู้ให้บริการใหม่"}
+          📌 ใช้ hardcoded free catalog
         </button>
         <div className="flex items-center gap-1 ml-auto">
           {(["all", "active", "pending"] as const).map((f) => (

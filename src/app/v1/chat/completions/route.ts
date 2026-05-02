@@ -2427,6 +2427,7 @@ export async function POST(req: NextRequest) {
               headers.set("Content-Type", "application/json");
               headers.set("X-SMLGateway-Provider", provider);
               headers.set("X-SMLGateway-Model", actualModelId);
+              headers.set("X-SMLGateway-Request-Id", _reqId);
               if (semanticMemoryHit) headers.set("X-SMLGateway-RAG", "HIT");
               if (softBackoff) headers.set("X-Resceo-Backoff", "true");
               headers.set("Access-Control-Allow-Origin", "*");
@@ -2463,21 +2464,46 @@ export async function POST(req: NextRequest) {
             }
           }
 
-          const proxied = await buildProxiedResponse(response, provider, actualModelId, isStream, estInputTokens, softBackoff, _reqId, _reqToolNames);
-          const streamLatency = Date.now() - startTime;
-          await recordRoutingResult(dbModelId, provider, promptCategory, true, streamLatency);
-          recordOutcome(provider, actualModelId, true, streamLatency);
+              let proxiedLog = { content: isStream ? "[stream]" : null as string | null, promptTokens: 0, completionTokens: 0 };
+              const proxied = await buildProxiedResponse(
+                response,
+                provider,
+                actualModelId,
+                isStream,
+                estInputTokens,
+                softBackoff,
+                _reqId,
+                _reqToolNames,
+                Boolean(semanticMemoryHit),
+                (preview) => { proxiedLog = preview; },
+              );
+              const streamLatency = Date.now() - startTime;
+              await recordRoutingResult(dbModelId, provider, promptCategory, true, streamLatency);
+              recordOutcome(provider, actualModelId, true, streamLatency);
           const slowThrStream = slowThresholdMs(estTokens);
           if (streamLatency > slowThrStream) {
             await logCooldown(dbModelId, `slow stream: ${streamLatency}ms > ${slowThrStream}ms threshold`, 0, 2);
             recordOutcome(provider, actualModelId, false, streamLatency);
             log.warn(`[SLOW-COOLDOWN] ${provider}/${actualModelId} ${streamLatency}ms > ${slowThrStream}ms → 2min cooldown`);
-          }
-          markWinner(_reqId, provider, actualModelId, "selected:healthy");
-          await logGateway(modelField, actualModelId, provider, 200, streamLatency, 0, 0, null, userMsg, "[stream]", _reqId, ip);
-          recordBattleEvent(outcomeFromLatency(streamLatency, true)).catch(() => { /* cosmetic */ });
-          log.info(`[RES:${_reqId}] 200 | ${provider}/${actualModelId} | ${streamLatency}ms | stream | Q:"${_reqMsg}"`);
-          return proxied;
+              }
+              markWinner(_reqId, provider, actualModelId, "selected:healthy");
+              await logGateway(
+                modelField,
+                actualModelId,
+                provider,
+                200,
+                streamLatency,
+                proxiedLog.promptTokens,
+                proxiedLog.completionTokens,
+                null,
+                userMsg,
+                proxiedLog.content ?? (isStream ? "[stream]" : "[proxied:no-content]"),
+                _reqId,
+                ip,
+              );
+              recordBattleEvent(outcomeFromLatency(streamLatency, true)).catch(() => { /* cosmetic */ });
+              log.info(`[RES:${_reqId}] 200 | ${provider}/${actualModelId} | ${streamLatency}ms | proxied | Q:"${_reqMsg}"`);
+              return proxied;
         }
 
         const errText = await response.text().catch(() => "");
@@ -2667,9 +2693,19 @@ export async function POST(req: NextRequest) {
           const response = await forwardToProvider(provider, actualModelId, body, isStream, AbortSignal.timeout(relaxedRemaining));
           if (response.ok) {
             const streamLatency = Date.now() - startTime;
-            const assistantLog = isStream
-              ? { content: "[stream]", promptTokens: 0, completionTokens: 0 }
-              : await extractAssistantLogPreview(response);
+            let assistantLog = { content: isStream ? "[stream]" : null as string | null, promptTokens: 0, completionTokens: 0 };
+            const proxied = await buildProxiedResponse(
+              response,
+              provider,
+              actualModelId,
+              isStream,
+              estInputTokens,
+              softBackoff,
+              _reqId,
+              _reqToolNames,
+              false,
+              (preview) => { assistantLog = preview; },
+            );
             recordOutcome(provider, actualModelId, true, streamLatency);
             await logGateway(
               modelField,
@@ -2686,7 +2722,7 @@ export async function POST(req: NextRequest) {
               ip,
             );
             log.info(`[RES:${_reqId}] 200 | ${provider}/${actualModelId} | ${streamLatency}ms | relaxed-retry | Q:"${_reqMsg}"`);
-            return buildProxiedResponse(response, provider, actualModelId, isStream, estInputTokens, softBackoff, _reqId, _reqToolNames);
+            return proxied;
           }
           const errText = await response.text().catch(() => "");
           lastError = `${provider}/${actualModelId}: HTTP ${response.status}`;
@@ -2739,6 +2775,7 @@ async function buildProxiedResponse(
   requestId: string | null = null,
   requestToolNames: Set<string> = new Set(),
   ragHit = false,
+  onNonStreamPreview?: (preview: { content: string | null; promptTokens: number; completionTokens: number }) => void,
 ): Promise<Response> {
   const headers = new Headers();
   headers.set("Content-Type", upstream.headers.get("Content-Type") || "application/json");
@@ -2851,6 +2888,11 @@ async function buildProxiedResponse(
     autoDetectComplaint(provider, modelId, content);
 
     const usage = json.usage as { prompt_tokens?: number; completion_tokens?: number } | undefined;
+    onNonStreamPreview?.({
+      content: typeof content === "string" && content.trim() ? content.slice(0, LOG_TEXT_LIMIT) : null,
+      promptTokens: usage?.prompt_tokens ?? 0,
+      completionTokens: usage?.completion_tokens ?? 0,
+    });
     if (usage) {
       await trackTokenUsage(provider, modelId, usage.prompt_tokens ?? 0, usage.completion_tokens ?? 0);
     } else {
@@ -2861,8 +2903,14 @@ async function buildProxiedResponse(
     return new Response(JSON.stringify(json), { status: upstream.status, headers });
   } catch {
     if (text !== null) {
+      onNonStreamPreview?.({
+        content: text.trim().slice(0, LOG_TEXT_LIMIT) || null,
+        promptTokens: 0,
+        completionTokens: 0,
+      });
       return new Response(text, { status: upstream.status, headers });
     }
+    onNonStreamPreview?.({ content: null, promptTokens: 0, completionTokens: 0 });
     return new Response("", { status: upstream.status, headers });
   }
 }

@@ -255,8 +255,11 @@ export default function SetupPage() {
           {riskyProviderCount > 0 && (
             <div className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-100">
               แสดงผู้ให้บริการทั้งหมดแล้ว แต่มี {riskyProviderCount} รายการที่อยู่นอก whitelist ฟรีและอาจตัดเครดิต/คิดเงิน.
+              วิธีทำงานที่ปลอดภัยคือใช้ quota ฟรีจนหมด; เมื่อหมดหรือชน limit provider จะตอบ error/limit กลับมา
+              แล้ว SMLGateway จะ cooldown provider/model นั้นและกลับมาใช้ใหม่เองเมื่อพร้อม.
               ถ้าจะทดลอง provider เสี่ยง ให้ใช้ email/account ใหม่ที่ไม่ผูกบัตร ไม่มีเครดิตเติมเงิน และแยกจากบัญชีหลัก.
               Gateway จะไม่ route ใช้งานจริงให้ provider เสี่ยงจนกว่าจะตั้งค่า whitelist/paid mode เอง.
+              ถ้าบัญชีนั้นผูกบัตรไว้ provider บางเจ้าอาจข้ามจาก free tier ไปตัดบัตรเครดิตได้ อันตรายมาก.
             </div>
           )}
         </section>
@@ -418,6 +421,11 @@ export default function SetupPage() {
                         <div className="rounded-lg border border-red-500/25 bg-red-500/10 p-2 text-[11px] text-red-100 space-y-1">
                           <div className="font-bold text-red-200">คำเตือน: provider นี้อาจตัดเครดิต/คิดเงิน</div>
                           <div>{st.costRiskMessage}</div>
+                          <div>
+                            วิธีทำงานที่ปลอดภัยคือใช้ quota ฟรีจนหมด; ถ้าหมดหรือชน limit ระบบ provider จะบอกเอง
+                            และ SMLGateway จะ cooldown แล้วกลับมาใช้ใหม่เมื่อพร้อม.
+                          </div>
+                          <div>แต่ถ้าบัญชีนี้ผูกบัตรไว้ provider บางเจ้าอาจข้ามไปตัดบัตรเครดิตได้ อันตรายมาก.</div>
                           <div>แนะนำให้สมัครด้วย email/account ใหม่ที่ไม่ผูกบัตรและไม่มีเครดิตเติมเงิน เพื่อกันเงินรั่วจากบัญชีหลัก.</div>
                           <label className="flex items-start gap-2 pt-1 text-red-50">
                             <input

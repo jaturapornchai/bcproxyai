@@ -58,7 +58,7 @@ NEXTAUTH_URL=https://your-domain.com
 
 **DB-driven config** — Provider list และ API keys อยู่ใน database ทั้งหมด (`provider_catalog` + `api_keys` table). `.env.local` ใช้แค่ runtime config (Ollama URL, Cloudflare account ID) — **ไม่อ่าน API key จาก env**. ตั้งค่าทุกอย่างผ่าน Setup modal ในหน้า dashboard.
 
-**Cost policy** — ค่าเริ่มต้นบล็อก provider/model ที่อาจคิดเงินทั้งหมด แม้มี API key อยู่ใน DB. `SML_FREE_PROVIDER_ALLOWLIST` ใช้กับ provider ที่เชื่อว่าไม่ผูกเงินทั้ง provider เช่น `ollama,pollinations`; cloud provider ต้องผ่าน `SML_FREE_MODEL_ALLOWLIST` ราย model เท่านั้น เช่น `openrouter/*:free,openrouter/openrouter/free`. Paid deployment ต้องตั้ง `SML_ALLOW_PAID_PROVIDERS=1`.
+**Cost policy** — ค่าเริ่มต้นบล็อก provider/model ที่อาจคิดเงินทั้งหมด แม้มี API key อยู่ใน DB. `SML_FREE_PROVIDER_ALLOWLIST` ใช้กับ provider ที่เชื่อว่าไม่ผูกเงินทั้ง provider เช่น `ollama,pollinations`; cloud provider ต้องผ่าน `SML_FREE_MODEL_ALLOWLIST` ราย model เท่านั้น เช่น `openrouter/*:free,openrouter/openrouter/free`. วิธีทำงานที่ปลอดภัยคือใช้ quota ฟรีจนหมด; เมื่อหมดหรือชน limit provider จะตอบ error/limit กลับมา แล้ว SMLGateway จะ cooldown provider/model นั้นและกลับมาใช้ใหม่เองเมื่อพร้อม. ถ้าบัญชี provider ผูกบัตรไว้ provider บางเจ้าอาจข้ามจาก free tier ไปตัดบัตรเครดิตได้ อันตรายมาก. Paid deployment ต้องตั้ง `SML_ALLOW_PAID_PROVIDERS=1`.
 
 **Auto-Discovery (catalog only)** — ทุก worker cycle (15 นาที) ระบบสแกน internet หา provider ใหม่จาก 3 แหล่ง: (1) OpenRouter `/api/v1/providers`, (2) HuggingFace inference list, (3) URL pattern probe. Provider ที่พบใหม่ → INSERT `provider_catalog`. การใช้งานจริงยังต้องผ่าน cost policy ก่อนเสมอ.
 
@@ -66,7 +66,7 @@ NEXTAUTH_URL=https://your-domain.com
 
 | | |
 |---|---|
-| 🆓 No-spend default | ใช้งานจริงเฉพาะ trusted free provider (`ollama,pollinations`) และ free model rule (`openrouter/*:free`, `openrouter/openrouter/free`); cloud provider/model อื่นถูกบล็อกแม้มี key |
+| 🆓 No-spend default | ใช้งานจริงเฉพาะ trusted free provider (`ollama,pollinations`) และ free model rule (`openrouter/*:free`, `openrouter/openrouter/free`); ถ้า free quota หมด SMLGateway จะ cooldown แล้วกลับมาใช้ใหม่เอง; cloud provider/model อื่นถูกบล็อกแม้มี key |
 | 🇹🇭 Thai-native | Typhoon (SCB 10X) + ThaiLLM (NSTDA national platform — 4 models: OpenThaiGPT, Typhoon-S, Pathumma-think, THaLLE) + virtual `sml/thai` — รองรับ auth scheme `apikey-header` อัตโนมัติ (DB-driven) |
 | 🧠 Thinking mode | auto-detect จาก OpenRouter metadata + name regex → scan flag → exam ตรวจ trace จริง (`<think>` tag / `reasoning` field) → gateway forward path auto-enable (opt-out via body) |
 | 🔐 3 auth methods | Local (open) / Password cookie / Google OAuth — เลือกได้ตาม env, ใช้คู่ได้. Per-client key ออกที่ `/admin/keys` |

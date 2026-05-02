@@ -206,13 +206,73 @@ export default function SetupPage() {
       </header>
 
       <main className="max-w-6xl mx-auto px-4 py-6 space-y-4">
+        {/* MEGA WARNING — credit card safety, always visible */}
+        <section className="relative overflow-hidden rounded-2xl border-2 border-red-500/80 bg-gradient-to-br from-red-700/40 via-red-900/30 to-orange-800/30 shadow-2xl shadow-red-600/40 ring-2 ring-red-400/50">
+          {/* Diagonal hazard stripe */}
+          <div className="absolute inset-x-0 top-0 h-2 bg-[repeating-linear-gradient(45deg,#fbbf24_0,#fbbf24_12px,#000_12px,#000_24px)]" />
+          <div className="absolute inset-x-0 bottom-0 h-2 bg-[repeating-linear-gradient(45deg,#fbbf24_0,#fbbf24_12px,#000_12px,#000_24px)]" />
+
+          <div className="relative p-5 sm:p-7">
+            <div className="flex items-start gap-3 sm:gap-5">
+              <span className="text-5xl sm:text-6xl leading-none shrink-0 animate-pulse drop-shadow-[0_0_12px_rgba(248,113,113,0.8)]">⛔</span>
+              <div className="flex-1 space-y-4 min-w-0">
+                <div>
+                  <div className="inline-block px-3 py-1 mb-2 rounded-full bg-yellow-400 text-black text-xs sm:text-sm font-black tracking-wider uppercase">
+                    🚨 อันตราย ระดับกินเงิน 🚨
+                  </div>
+                  <h2 className="text-2xl sm:text-4xl font-black text-yellow-100 tracking-tight leading-tight drop-shadow-lg">
+                    ก่อนสมัคร provider — อ่านให้จบ
+                    <br className="hidden sm:block" />
+                    <span className="text-red-200">ป้องกันบัตรเครดิตโดนตัด</span>
+                  </h2>
+                </div>
+
+                <div className="text-base sm:text-xl font-bold text-yellow-50 bg-red-950/60 rounded-lg p-4 border-2 border-yellow-400/50 leading-relaxed">
+                  ⚡ provider AI หลายเจ้า <span className="underline decoration-yellow-300 decoration-4 underline-offset-2">ข้ามจาก free tier ไปตัดบัตรเครดิตเงียบๆ</span> เมื่อ quota หมด
+                  <br />
+                  ไม่เตือน · ไม่ confirm · <span className="bg-yellow-300 text-black px-2 py-0.5 rounded font-black">SMLGateway ห้ามไม่ได้</span>
+                </div>
+
+                <div className="space-y-2.5">
+                  <div className="text-sm sm:text-base font-bold text-yellow-200 uppercase tracking-wider">
+                    📋 กฎเหล็ก 4 ข้อก่อนกรอก API key:
+                  </div>
+                  <ul className="text-sm sm:text-base text-red-50 space-y-2.5 font-semibold">
+                    <li className="flex gap-3 bg-black/30 rounded-lg p-3 border-l-4 border-yellow-400">
+                      <span className="text-2xl shrink-0 leading-none">1️⃣</span>
+                      <span><strong className="text-yellow-200">ใช้ email สำรอง</strong> เท่านั้น — email/Google account ที่ <strong className="underline decoration-yellow-300 decoration-2">ไม่เคยใส่บัตรเครดิต</strong> ไม่มียอดเติมเงินค้าง ไม่ผูก Google Pay/Apple Pay</span>
+                    </li>
+                    <li className="flex gap-3 bg-black/30 rounded-lg p-3 border-l-4 border-yellow-400">
+                      <span className="text-2xl shrink-0 leading-none">2️⃣</span>
+                      <span>ถ้าตอนสมัคร provider ให้ <strong className="text-emerald-300">SKIP ใส่บัตรได้</strong> (กดข้ามได้) → <strong className="text-emerald-300">ใช้ได้</strong> ปลอดภัย</span>
+                    </li>
+                    <li className="flex gap-3 bg-black/30 rounded-lg p-3 border-l-4 border-red-500">
+                      <span className="text-2xl shrink-0 leading-none">3️⃣</span>
+                      <span>ถ้า provider <strong className="text-red-300">บังคับใส่บัตร</strong> ตั้งแต่สมัคร (verify บัตร / require payment method) → <strong className="underline decoration-red-400 decoration-2">ไม่แนะนำให้สมัคร</strong> ข้ามตัวนั้นไปเลย ใช้เจ้าอื่นแทน</span>
+                    </li>
+                    <li className="flex gap-3 bg-black/30 rounded-lg p-3 border-l-4 border-red-500">
+                      <span className="text-2xl shrink-0 leading-none">4️⃣</span>
+                      <span>ถ้าเผลอผูกบัตรไปแล้ว ให้ <strong className="text-yellow-200">ลบบัตรออก</strong> หรือตั้ง <strong className="text-yellow-200">spending limit = $0</strong> ที่หน้า billing ของ provider <strong className="text-red-300">ก่อน</strong>กรอก API key ตรงนี้</span>
+                    </li>
+                  </ul>
+                </div>
+
+                <div className="text-xs sm:text-sm text-yellow-100/90 bg-black/40 rounded-lg p-3 border border-yellow-400/30 leading-relaxed">
+                  <strong className="text-yellow-200">SMLGateway จะ cooldown provider</strong> เมื่อ free tier หมด/ชน limit/error
+                  แต่ <strong className="text-red-300">ไม่ได้คุย billing API กับ provider</strong> — ถ้า provider เลือกเก็บเงินกับบัตร gateway ห้ามไม่ได้
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
         {/* Quick start guide */}
         <section className="rounded-xl border border-indigo-500/20 bg-gradient-to-r from-indigo-500/5 to-cyan-500/5 p-4">
-          <div className="text-sm font-bold text-indigo-300 mb-2">เริ่มต้นง่ายๆ 3 ขั้น (โหมดฟรีเท่านั้น)</div>
+          <div className="text-sm font-bold text-indigo-300 mb-2">เริ่มต้นง่ายๆ 3 ขั้น (หลังอ่านคำเตือนข้างบนแล้ว)</div>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs text-gray-300">
             <div className="flex items-start gap-2">
               <span className="text-lg leading-none shrink-0">1️⃣</span>
-              <span>กด <strong className="text-cyan-300">เปิดหน้าเว็บ</strong> ของผู้ให้บริการ แล้วสมัครรับรหัส API ฟรี</span>
+              <span>กด <strong className="text-cyan-300">เปิดหน้าเว็บ</strong> ของผู้ให้บริการ แล้วสมัครด้วย <strong className="text-yellow-300">email สำรอง</strong> รับรหัส API ฟรี</span>
             </div>
             <div className="flex items-start gap-2">
               <span className="text-lg leading-none shrink-0">2️⃣</span>
@@ -225,12 +285,8 @@ export default function SetupPage() {
           </div>
           {riskyProviderCount > 0 && (
             <div className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-100">
-              แสดงผู้ให้บริการทั้งหมดแล้ว แต่มี {riskyProviderCount} รายการที่อยู่นอก whitelist ฟรีและอาจตัดเครดิต/คิดเงิน.
-              วิธีทำงานที่ปลอดภัยคือใช้ quota ฟรีจนหมด; เมื่อหมดหรือชน limit provider จะตอบ error/limit กลับมา
-              แล้ว SMLGateway จะ cooldown provider/model นั้นและกลับมาใช้ใหม่เองเมื่อพร้อม.
-              ถ้าจะทดลอง provider เสี่ยง ให้ใช้ email/account ใหม่ที่ไม่ผูกบัตร ไม่มีเครดิตเติมเงิน และแยกจากบัญชีหลัก.
-              Gateway จะไม่ route ใช้งานจริงให้ provider เสี่ยงจนกว่าจะตั้งค่า whitelist/paid mode เอง.
-              ถ้าบัญชีนั้นผูกบัตรไว้ provider บางเจ้าอาจข้ามจาก free tier ไปตัดบัตรเครดิตได้ อันตรายมาก.
+              มี {riskyProviderCount} รายการที่อยู่นอก whitelist ฟรีและอาจตัดเครดิต/คิดเงิน
+              ดูคำเตือนข้างบนก่อนตัดสินใจสมัคร
             </div>
           )}
         </section>

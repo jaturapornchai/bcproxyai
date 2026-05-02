@@ -1260,6 +1260,43 @@ function extractSemanticContent(response: unknown): string | null {
   return null;
 }
 
+async function extractAssistantLogPreview(response: Response): Promise<{
+  content: string | null;
+  promptTokens: number;
+  completionTokens: number;
+}> {
+  try {
+    const text = await response.clone().text();
+    if (!text.trim()) return { content: null, promptTokens: 0, completionTokens: 0 };
+    try {
+      const json = JSON.parse(text) as {
+        choices?: Array<{ message?: { content?: unknown; reasoning?: unknown; reasoning_content?: unknown } }>;
+        usage?: { prompt_tokens?: number; completion_tokens?: number };
+      };
+      let content = extractSemanticContent(json);
+      const firstMsg = json.choices?.[0]?.message;
+      if (!content && typeof firstMsg?.reasoning === "string") content = firstMsg.reasoning.trim();
+      if (!content && typeof firstMsg?.reasoning_content === "string") content = firstMsg.reasoning_content.trim();
+      if (!content && Array.isArray(firstMsg?.content)) {
+        content = (firstMsg.content as Array<{ type?: string; text?: string }>)
+          .filter((p) => p.type === "text" && p.text)
+          .map((p) => p.text)
+          .join("")
+          .trim();
+      }
+      return {
+        content: content ? content.slice(0, LOG_TEXT_LIMIT) : null,
+        promptTokens: json.usage?.prompt_tokens ?? 0,
+        completionTokens: json.usage?.completion_tokens ?? 0,
+      };
+    } catch {
+      return { content: text.trim().slice(0, LOG_TEXT_LIMIT) || null, promptTokens: 0, completionTokens: 0 };
+    }
+  } catch {
+    return { content: null, promptTokens: 0, completionTokens: 0 };
+  }
+}
+
 function shouldUseSemanticMemory(body: Record<string, unknown>, caps: RequestCapabilities, userMessage: string, optOut: boolean): boolean {
   if (process.env.SEMANTIC_CACHE_ENABLED === "0") return false;
   if (optOut || body.stream === true) return false;
@@ -2630,9 +2667,25 @@ export async function POST(req: NextRequest) {
           const response = await forwardToProvider(provider, actualModelId, body, isStream, AbortSignal.timeout(relaxedRemaining));
           if (response.ok) {
             const streamLatency = Date.now() - startTime;
+            const assistantLog = isStream
+              ? { content: "[stream]", promptTokens: 0, completionTokens: 0 }
+              : await extractAssistantLogPreview(response);
             recordOutcome(provider, actualModelId, true, streamLatency);
-            await logGateway(modelField, actualModelId, provider, 200, streamLatency, 0, 0, null, userMsg, "[relaxed-retry]", _reqId, ip);
-            log.info(`[RES:${_reqId}] 200 | ${provider}/${actualModelId} | ${streamLatency}ms | relaxed-retry stream | Q:"${_reqMsg}"`);
+            await logGateway(
+              modelField,
+              actualModelId,
+              provider,
+              200,
+              streamLatency,
+              assistantLog.promptTokens,
+              assistantLog.completionTokens,
+              null,
+              userMsg,
+              assistantLog.content ?? "[relaxed-retry:no-content]",
+              _reqId,
+              ip,
+            );
+            log.info(`[RES:${_reqId}] 200 | ${provider}/${actualModelId} | ${streamLatency}ms | relaxed-retry | Q:"${_reqMsg}"`);
             return buildProxiedResponse(response, provider, actualModelId, isStream, estInputTokens, softBackoff, _reqId, _reqToolNames);
           }
           const errText = await response.text().catch(() => "");

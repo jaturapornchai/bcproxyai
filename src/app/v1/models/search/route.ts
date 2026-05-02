@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { FREE_MODEL_CATALOG } from "@/lib/free-model-catalog";
+import { getActiveFreeModelCatalog } from "@/lib/free-model-catalog";
 
 export const dynamic = "force-dynamic";
 
@@ -56,7 +56,7 @@ export async function GET(req: NextRequest) {
     const cat = category && VALID_CATS.has(category) ? category : null;
 
     void excludeCooldown;
-    let rows = FREE_MODEL_CATALOG.map((m) => ({
+    let rows = getActiveFreeModelCatalog().map((m) => ({
       id: `${m.provider}:${m.modelId}`,
       provider: m.provider,
       model_id: m.modelId,

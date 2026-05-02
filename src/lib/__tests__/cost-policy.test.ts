@@ -20,7 +20,10 @@ describe("cost policy", () => {
     ]);
     expect(getFreeModelAllowlist()).toContain("openrouter/openai/gpt-oss-20b:free");
     expect(getFreeModelAllowlist()).toContain("groq/llama-3.3-70b-versatile");
-    expect(getFreeModelAllowlist()).toContain("cerebras/llama-3.3-70b");
+    expect(getFreeModelAllowlist()).toContain("cerebras/qwen-3-32b");
+    // Deprecation watcher should hide models past their deprecatedAfter date
+    expect(getFreeModelAllowlist()).not.toContain("cerebras/llama-3.3-70b");
+    expect(isModelCostAllowed("cerebras", "llama-3.3-70b")).toBe(false);
     expect(getFreeModelAllowlist()).toContain("google/gemini-2.5-flash");
     expect(getFreeModelAllowlist()).toContain("github/openai/gpt-4o-mini");
     expect(getFreeModelAllowlist()).toContain("sambanova/Meta-Llama-3.3-70B-Instruct");

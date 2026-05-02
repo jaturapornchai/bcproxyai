@@ -22,8 +22,10 @@ import { isProviderEnabledSync } from "@/lib/provider-toggle";
 import { canFitRequest, parseLimitHeaders, parseLimitError, recordLimit } from "@/lib/provider-limits";
 import { recordOutcomeLearning, recordFailStreak, canHandleTokens, getCategoryWinners, detectCategory, isModelUnhealthyForCategory } from "@/lib/learning";
 import { upstreamAgent } from "@/lib/upstream-agent";
+import { getRpmLimit } from "@/lib/free-model-catalog";
+import { tryConsumeRpm } from "@/lib/rate-budget";
 import { emptyExplain, recordCandidate, stashExplain, consumeExplain, markWinner, type RoutingExplain } from "@/lib/routing-explain";
-import { buildOpenAIStyleToolCallStreamChunks, extractRequestToolNames, repairJsonToolCallLeak, repairStreamedJsonToolCallLeak } from "@/lib/tool-call-repair";
+import { buildOpenAIStyleToolCallStreamChunks, extractRequestToolNames, repairJsonToolCallLeak, repairStreamedJsonToolCallLeak, validateToolCallArguments, type ToolCallLike } from "@/lib/tool-call-repair";
 import { shouldSuppressToolsForSimpleChat } from "@/lib/tool-use-policy";
 import { analyzeRequestProfile, rankCandidatesByRequestProfile, scoreCandidateForRequest } from "@/lib/request-intelligence";
 import { costPolicyBlockMessage, isModelCostAllowed, isPaidProviderOverrideEnabled } from "@/lib/cost-policy";
@@ -528,14 +530,39 @@ function reorderForLatency(rows: ModelRow[], estTokens?: number): ModelRow[] {
   const ollamaRows = rows.filter(r => r.provider === "ollama");
   let reorderedRows = cloudRows.length > 0 ? [...cloudRows, ...ollamaRows] : rows;
 
-  // Improvement D: fast-stream provider boost — subtract 500ms from effective latency for sorting
-  const FAST_STREAM_PROVIDERS = new Set(["groq", "cerebras", "together"]);
+  // Improvement D: fast-stream provider boost — subtract 500ms from effective latency for sorting.
+  // SambaNova/Cerebras run on dedicated AI silicon (RDU/wafer-scale) with sub-second
+  // first-token latency; Groq's LPU is in the same class. These providers consistently
+  // win the latency race even before EWMA data accumulates.
+  const FAST_STREAM_PROVIDERS = new Set(["groq", "cerebras", "sambanova", "together"]);
+  // Default latency hint per provider when avg_latency is missing — used so that
+  // a provider with no production data yet still gets ranked roughly correctly
+  // instead of being pinned at 9999999 and scheduled last forever.
+  const PROVIDER_LATENCY_HINT_MS: Record<string, number> = {
+    groq: 400,
+    cerebras: 500,
+    sambanova: 600,
+    together: 800,
+    google: 900,
+    mistral: 1100,
+    cohere: 1200,
+    typhoon: 1500,
+    thaillm: 1800,
+    sealion: 2000,
+    openrouter: 2500,
+  };
   if (reorderedRows.length > 1) {
     reorderedRows = [...reorderedRows].sort((a, b) => {
-      const adjA = (a.avg_latency ?? 9999999)
+      const baseA = a.avg_latency != null && a.avg_latency < 9999999
+        ? a.avg_latency
+        : (PROVIDER_LATENCY_HINT_MS[a.provider] ?? 5000);
+      const baseB = b.avg_latency != null && b.avg_latency < 9999999
+        ? b.avg_latency
+        : (PROVIDER_LATENCY_HINT_MS[b.provider] ?? 5000);
+      const adjA = baseA
         - (FAST_STREAM_PROVIDERS.has(a.provider) ? 500 : 0)
         + (estTokens != null && estTokens > 10_000 && a.provider === "mistral" ? 5_000 : 0);
-      const adjB = (b.avg_latency ?? 9999999)
+      const adjB = baseB
         - (FAST_STREAM_PROVIDERS.has(b.provider) ? 500 : 0)
         + (estTokens != null && estTokens > 10_000 && b.provider === "mistral" ? 5_000 : 0);
       // Keep Ollama at end regardless
@@ -545,13 +572,49 @@ function reorderForLatency(rows: ModelRow[], estTokens?: number): ModelRow[] {
     });
   }
 
+  // Provider diversity in top-K: if the latency-sorted list starts with 5
+  // models from the same provider, a single provider outage stalls the whole
+  // fallback chain. Interleave so each of the first ~6 candidates comes from
+  // a different provider, while preserving overall latency order beyond that.
+  if (reorderedRows.length > 6) {
+    const TOP_K = 6;
+    const buckets = new Map<string, ModelRow[]>();
+    for (const r of reorderedRows) {
+      const arr = buckets.get(r.provider);
+      if (arr) arr.push(r);
+      else buckets.set(r.provider, [r]);
+    }
+    const head: ModelRow[] = [];
+    const seen = new Set<string>();
+    // Round-robin one per provider until TOP_K filled
+    while (head.length < TOP_K && seen.size < buckets.size) {
+      for (const [prov, arr] of buckets.entries()) {
+        if (head.length >= TOP_K) break;
+        if (seen.has(prov)) continue;
+        const next = arr.shift();
+        if (next) {
+          head.push(next);
+          seen.add(prov);
+        }
+      }
+      // After one full round, allow same-provider seconds to fill remaining slots
+      if (head.length < TOP_K) {
+        seen.clear();
+      }
+    }
+    // Tail keeps original latency order minus what's already in head
+    const taken = new Set(head);
+    const tail = reorderedRows.filter((r) => !taken.has(r));
+    reorderedRows = [...head, ...tail];
+  }
+
   if (process.env.LOG_LEVEL === "debug") {
     const providerCount: Record<string, number> = {};
     for (const r of reorderedRows) providerCount[r.provider] = (providerCount[r.provider] || 0) + 1;
     console.log(`[DEBUG] mode=auto candidates=${reorderedRows.length} providers=${JSON.stringify(providerCount)}`);
     if (reorderedRows.length > 0) {
-      const top3 = reorderedRows.slice(0, 3).map(r => `${r.provider}/${r.model_id}(${r.avg_latency}ms)`);
-      console.log(`[DEBUG] after boost: candidates=${reorderedRows.length} top3=[${top3}]`);
+      const top6 = reorderedRows.slice(0, 6).map(r => `${r.provider}/${r.model_id}(${r.avg_latency}ms)`);
+      console.log(`[DEBUG] diversified top6=[${top6.join(", ")}]`);
     }
   }
 
@@ -836,6 +899,18 @@ async function forwardToProvider(
 ): Promise<Response> {
   if (!isModelCostAllowed(provider, actualModelId)) {
     throw new Error(costPolicyBlockMessage(provider, actualModelId));
+  }
+
+  // Client-side RPM throttle: skip locally so we don't burn the upstream
+  // 429 budget, which is what triggers minutes-long cooldowns.
+  const rpmLimit = getRpmLimit(provider, actualModelId);
+  if (rpmLimit && rpmLimit > 0) {
+    const budget = await tryConsumeRpm(provider, actualModelId, rpmLimit);
+    if (!budget.ok) {
+      throw new Error(
+        `local RPM throttle: ${provider}/${actualModelId} ${budget.usage}/${budget.limit} req/min, retry in ${budget.retryInMs}ms`,
+      );
+    }
   }
 
   const url = resolveProviderUrl(provider);
@@ -1193,7 +1268,12 @@ const XML_TOOL_CALL_RE = /<tool_call>|<functioncall>|<function_calls>/i;
 const THINK_TAG_RE = /<think>[\s\S]*?<\/think>/g;
 const CODE_FENCE_RE = /^\s*```(?:json|tool_call|function_call)?\s*\n?([\s\S]*?)\n?```\s*$/i;
 
-function isResponseBad(content: string, hadTools: boolean, hasToolCalls = false): string | null {
+function isResponseBad(
+  content: string,
+  hadTools: boolean,
+  hasToolCalls = false,
+  toolCalls?: ReadonlyArray<ToolCallLike>,
+): string | null {
   // Empty content is acceptable ONLY if the model produced real tool_calls.
   // If hadTools=true but content is empty AND no tool_calls, the model returned
   // nothing useful — n้องกุ้ง (OpenClaw) agents will stall on this, so we reject
@@ -1202,6 +1282,12 @@ function isResponseBad(content: string, hadTools: boolean, hasToolCalls = false)
   if (!content && !hadTools) return "empty content";
   if (hadTools && XML_TOOL_CALL_RE.test(content)) return "tool_call XML leak";
   if (content.length > 0 && content.length < 3) return "response too short";
+  if (hasToolCalls && toolCalls && toolCalls.length > 0) {
+    const v = validateToolCallArguments(toolCalls);
+    if (!v.ok && v.firstError) {
+      return `tool_call args invalid (#${v.firstError.index}: ${v.firstError.reason})`;
+    }
+  }
   return null;
 }
 
@@ -2053,7 +2139,7 @@ export async function POST(req: NextRequest) {
               log.warn(`[HEDGE-TC-REPAIR] ${winner.provider}/${winner.model_id} — moved ${repaired.length} JSON tool_call(s) from content→tool_calls`);
             }
           }
-          const badReason = isResponseBad(content, caps.hasTools, hasToolCalls);
+          const badReason = isResponseBad(content, caps.hasTools, hasToolCalls, firstMsg?.tool_calls as ToolCallLike[] | undefined);
           if (badReason) {
             log.warn(`[HEDGE-BAD] ${winner.provider}/${winner.model_id} — ${badReason}`);
             // Reset to 0 so sequential retry doesn't skip intermediate same-provider candidates
@@ -2373,7 +2459,7 @@ export async function POST(req: NextRequest) {
                 }
               }
 
-              const badReason = isResponseBad(content, caps.hasTools, hasToolCalls);
+              const badReason = isResponseBad(content, caps.hasTools, hasToolCalls, firstMsg?.tool_calls as ToolCallLike[] | undefined);
               if (badReason) {
                 log.warn(`[BAD-RESPONSE] ${provider}/${actualModelId} — ${badReason}: "${content.slice(0, 100)}"`);
                 await logCooldown(dbModelId, badReason, 0, 5);

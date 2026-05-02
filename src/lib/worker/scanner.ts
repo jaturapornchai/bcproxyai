@@ -4,7 +4,7 @@ import { emitEvent } from "@/lib/routing-learn";
 import { invalidateModelListCache } from "@/lib/model-list-cache";
 import { isProviderEnabled } from "@/lib/provider-toggle";
 import { isModelCostAllowed } from "@/lib/cost-policy";
-import { FREE_MODEL_CATALOG } from "@/lib/free-model-catalog";
+import { getActiveFreeModelCatalog, getModelsDeprecatingSoon } from "@/lib/free-model-catalog";
 
 interface ModelRow {
   id: string;
@@ -947,7 +947,16 @@ export async function scanModels(): Promise<{ found: number; new: number; disapp
     await logWorker("scan", `ลบ model นอก free whitelist ล้มเหลว: ${err}`, "error");
   }
 
-  const allModels: ModelRow[] = FREE_MODEL_CATALOG.map((m) => ({
+  const expiringSoon = getModelsDeprecatingSoon();
+  for (const { entry, daysLeft } of expiringSoon) {
+    await logWorker(
+      "scan",
+      `⏰ Deprecation watch: ${entry.provider}/${entry.modelId} EOL in ${daysLeft} day(s) (${entry.deprecatedAfter})`,
+      "warn",
+    );
+  }
+
+  const allModels: ModelRow[] = getActiveFreeModelCatalog().map((m) => ({
     id: `${m.provider}:${m.modelId}`,
     name: m.name,
     provider: m.provider,

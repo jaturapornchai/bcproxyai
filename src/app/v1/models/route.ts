@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { openAIError, toOpenAIModelObject, unixNow } from "@/lib/openai-compat";
-import { FREE_MODEL_CATALOG } from "@/lib/free-model-catalog";
+import { getActiveFreeModelCatalog } from "@/lib/free-model-catalog";
 
 export const dynamic = "force-dynamic";
 
@@ -32,7 +32,7 @@ const VIRTUAL_MODELS = [
 export async function GET(_req: NextRequest) {
   try {
     const created = unixNow();
-    const realModels = FREE_MODEL_CATALOG.map((row) =>
+    const realModels = getActiveFreeModelCatalog().map((row) =>
       toOpenAIModelObject(`${row.provider}/${row.modelId}`, row.provider, created)
     );
 

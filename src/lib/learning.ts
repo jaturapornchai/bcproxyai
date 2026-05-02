@@ -68,6 +68,55 @@ export async function recordSuccessStreak(modelId: string): Promise<void> {
   } catch { /* silent */ }
 }
 
+// ─── Circuit breaker: 3-state with explicit half-open ─────────────────────────
+//
+// Implicit cooldown was binary (open vs closed): when cooldown expired we let
+// the *next* request through, but if 5 hot requests fired simultaneously they
+// all hit the still-broken upstream → cascading 429. Explicit half-open
+// admits N probes only; if any succeed → close, if all fail → re-open with
+// double cooldown.
+
+const HALF_OPEN_PROBE_LIMIT = 1;
+const halfOpenInflight = new Map<string, number>();
+
+export type CircuitState = "closed" | "open" | "half-open";
+
+/**
+ * Decide if a request to `modelId` should fire. Caller MUST invoke
+ * `releaseCircuitProbe()` after the upstream call regardless of outcome.
+ *
+ * - closed → allow, no slot tracked
+ * - open   → reject (caller falls back to next candidate)
+ * - half-open → allow at most HALF_OPEN_PROBE_LIMIT concurrent probes
+ */
+export async function acquireCircuitProbe(
+  modelId: string,
+  cooldownUntil: Date | null,
+  failStreak: number,
+): Promise<{ state: CircuitState; allow: boolean }> {
+  // Cooldown still active → open
+  if (cooldownUntil && cooldownUntil.getTime() > Date.now()) {
+    return { state: "open", allow: false };
+  }
+  // No active cooldown but recent failures → half-open: rate-limit probes
+  if (failStreak >= 2) {
+    const inflight = halfOpenInflight.get(modelId) ?? 0;
+    if (inflight >= HALF_OPEN_PROBE_LIMIT) {
+      return { state: "half-open", allow: false };
+    }
+    halfOpenInflight.set(modelId, inflight + 1);
+    return { state: "half-open", allow: true };
+  }
+  return { state: "closed", allow: true };
+}
+
+export function releaseCircuitProbe(modelId: string): void {
+  const cur = halfOpenInflight.get(modelId);
+  if (!cur) return;
+  if (cur <= 1) halfOpenInflight.delete(modelId);
+  else halfOpenInflight.set(modelId, cur - 1);
+}
+
 // ─── Phase 1: Capacity Learning ───────────────────────────────────────────────
 
 /**
@@ -188,6 +237,62 @@ export async function canHandleTokens(modelId: string, tokens: number): Promise<
     return { ok: true };
   } catch {
     return { ok: true };
+  }
+}
+
+// ─── Regression detection ─────────────────────────────────────────────────────
+
+const REGRESSION_DROP_THRESHOLD = 0.20; // 20-pp drop in success rate
+const REGRESSION_WINDOW_HOURS = 24;
+const REGRESSION_MIN_SAMPLES = 10;
+
+/**
+ * Compare success rate of last 1h vs prior 23h. If the 1h slice dropped by
+ * REGRESSION_DROP_THRESHOLD or more, log a warning so operators can react.
+ *
+ * Cheap to run (single query). Caller invokes after each request — internal
+ * cache prevents spam (one warning per modelId per 10 minutes).
+ */
+const lastWarnedAt = new Map<string, number>();
+const WARN_COOLDOWN_MS = 10 * 60_000;
+
+export async function checkRegressionWarning(modelId: string): Promise<{
+  warned: boolean;
+  recentRate?: number;
+  baselineRate?: number;
+  dropPp?: number;
+}> {
+  try {
+    const lastWarn = lastWarnedAt.get(modelId) ?? 0;
+    if (Date.now() - lastWarn < WARN_COOLDOWN_MS) return { warned: false };
+
+    const sql = getSqlClient();
+    const rows = await sql<{ recent_success: number; recent_total: number; baseline_success: number; baseline_total: number }[]>`
+      SELECT
+        COUNT(*) FILTER (WHERE success = true AND created_at >= now() - interval '1 hour')::int AS recent_success,
+        COUNT(*) FILTER (WHERE created_at >= now() - interval '1 hour')::int AS recent_total,
+        COUNT(*) FILTER (WHERE success = true AND created_at >= now() - interval '${sql.unsafe(String(REGRESSION_WINDOW_HOURS))} hours' AND created_at < now() - interval '1 hour')::int AS baseline_success,
+        COUNT(*) FILTER (WHERE created_at >= now() - interval '${sql.unsafe(String(REGRESSION_WINDOW_HOURS))} hours' AND created_at < now() - interval '1 hour')::int AS baseline_total
+      FROM model_samples
+      WHERE model_id = ${modelId}
+    `;
+    const r = rows[0];
+    if (!r || r.recent_total < REGRESSION_MIN_SAMPLES || r.baseline_total < REGRESSION_MIN_SAMPLES) {
+      return { warned: false };
+    }
+    const recentRate = r.recent_success / r.recent_total;
+    const baselineRate = r.baseline_success / r.baseline_total;
+    const dropPp = baselineRate - recentRate;
+    if (dropPp >= REGRESSION_DROP_THRESHOLD) {
+      lastWarnedAt.set(modelId, Date.now());
+      console.warn(
+        `[REGRESSION] ${modelId} — last 1h success ${(recentRate * 100).toFixed(0)}% vs baseline ${(baselineRate * 100).toFixed(0)}% (drop ${(dropPp * 100).toFixed(0)}pp, n=${r.recent_total}/${r.baseline_total})`,
+      );
+      return { warned: true, recentRate, baselineRate, dropPp };
+    }
+    return { warned: false, recentRate, baselineRate, dropPp };
+  } catch {
+    return { warned: false };
   }
 }
 
@@ -435,6 +540,11 @@ export async function recordOutcomeLearning(ctx: OutcomeContext): Promise<void> 
 
   if (!ctx.success && isCapacityFail(ctx.failReason)) {
     await recordFailedPattern(ctx.userMessage, category);
+  }
+
+  // Fire-and-forget regression check (cooldown-throttled internally)
+  if (!ctx.success && !quotaFail) {
+    void checkRegressionWarning(ctx.modelId);
   }
 }
 

@@ -51,6 +51,40 @@ function coerceArgs(v: unknown): string {
   try { return JSON.stringify(v); } catch { return "{}"; }
 }
 
+/**
+ * Validate that every tool call's `arguments` is parseable JSON.
+ *
+ * Some upstream models emit tool calls with broken JSON (trailing commas,
+ * unterminated strings, single quotes). Downstream agents fail silently
+ * when JSON.parse throws. Returns true if every argument string parses,
+ * false otherwise — caller can retry/fallback.
+ */
+export interface ToolCallLike {
+  function?: { arguments?: string };
+}
+
+export function validateToolCallArguments(
+  toolCalls: ReadonlyArray<ToolCallLike>,
+): { ok: boolean; firstError?: { index: number; raw: string; reason: string } } {
+  for (let i = 0; i < toolCalls.length; i++) {
+    const raw = toolCalls[i]?.function?.arguments;
+    // Empty arguments are allowed by OpenAI spec for zero-arg tools.
+    if (raw == null || raw === "") continue;
+    if (typeof raw !== "string") {
+      return { ok: false, firstError: { index: i, raw: String(raw), reason: "arguments not a string" } };
+    }
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return { ok: false, firstError: { index: i, raw, reason: "arguments not a JSON object" } };
+      }
+    } catch (err) {
+      return { ok: false, firstError: { index: i, raw, reason: `JSON.parse failed: ${(err as Error).message}` } };
+    }
+  }
+  return { ok: true };
+}
+
 function objectToToolCall(obj: Record<string, unknown>, toolNames: Set<string>): RepairedToolCall | null {
   const name = obj.name ?? obj.tool ?? obj.function;
   const args = obj.parameters ?? obj.arguments ?? obj.args ?? obj.input;

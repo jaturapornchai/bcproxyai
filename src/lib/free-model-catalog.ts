@@ -9,6 +9,10 @@ export interface FreeModelCatalogEntry {
   supportsReasoning: boolean;
   supportsJsonMode: boolean;
   supportsCode?: boolean;
+  /** ISO date 'YYYY-MM-DD'. Filtered out from /v1/models on/after this day; warned 7 days before. */
+  deprecatedAfter?: string;
+  /** Approximate provider-side requests-per-minute limit. Used for client-side throttle. */
+  rpmLimit?: number;
 }
 
 function tierFor(contextLength: number): FreeModelCatalogEntry["tier"] {
@@ -24,6 +28,27 @@ interface ModelCaps {
   json?: boolean;
   code?: boolean;
 }
+
+// Conservative provider-wide RPM defaults per documented free-tier limits.
+// Per-model overrides on the entry win; otherwise this default applies.
+const PROVIDER_DEFAULT_RPM: Record<string, number> = {
+  groq: 30,
+  cerebras: 30,
+  google: 15,
+  github: 15,
+  sambanova: 30,
+  mistral: 60,
+  cohere: 20,
+  huggingface: 30,
+  nvidia: 40,
+  together: 60,
+  chutes: 60,
+  ollamacloud: 60,
+  typhoon: 200,
+  thaillm: 200,
+  sealion: 10,
+  openrouter: 60,
+};
 
 function entry(
   provider: string,
@@ -43,7 +68,15 @@ function entry(
     supportsReasoning: caps.reasoning ?? false,
     supportsJsonMode: caps.json ?? false,
     supportsCode: caps.code ?? /coder|code|poolside|laguna/i.test(modelId),
+    rpmLimit: PROVIDER_DEFAULT_RPM[provider],
   };
+}
+
+export function getRpmLimit(provider: string, modelId: string): number | undefined {
+  const e = FREE_MODEL_CATALOG.find(
+    (m) => m.provider === provider && m.modelId === modelId,
+  );
+  return e?.rpmLimit ?? PROVIDER_DEFAULT_RPM[provider];
 }
 
 const openrouter = (m: string, n: string, c: number, caps: ModelCaps = {}) => entry("openrouter", m, n, c, caps);
@@ -111,9 +144,9 @@ export const FREE_MODEL_CATALOG: readonly FreeModelCatalogEntry[] = [
   groq("moonshotai/kimi-k2-instruct-0905", "Groq: Kimi K2 0905", 262144, { tools: true, json: true, code: true }),
 
   // ── Cerebras (free tier: 1M tok/day, context capped at 8K) ──
-  cerebras("llama-3.3-70b", "Cerebras: Llama 3.3 70B", 8192, { tools: true, json: true }),
+  { ...cerebras("llama-3.3-70b", "Cerebras: Llama 3.3 70B", 8192, { tools: true, json: true }), deprecatedAfter: "2026-02-16" },
   cerebras("qwen-3-32b", "Cerebras: Qwen 3 32B", 8192, { tools: true, json: true }),
-  cerebras("qwen-3-235b-a22b-instruct-2507", "Cerebras: Qwen 3 235B Instruct", 8192, { tools: true, json: true }),
+  { ...cerebras("qwen-3-235b-a22b-instruct-2507", "Cerebras: Qwen 3 235B Instruct", 8192, { tools: true, json: true }), deprecatedAfter: "2026-05-27" },
   cerebras("qwen-3-235b-a22b-thinking-2507", "Cerebras: Qwen 3 235B Thinking", 8192, { tools: true, reasoning: true }),
   cerebras("gpt-oss-120b", "Cerebras: gpt-oss-120b", 8192, { tools: true, reasoning: true, json: true }),
 
@@ -236,15 +269,52 @@ const FREE_MODEL_KEYS = new Set(
   FREE_MODEL_CATALOG.map((m) => `${m.provider}/${m.modelId}`.toLowerCase()),
 );
 
+const DEPRECATION_WARN_DAYS = 7;
+const MS_PER_DAY = 86_400_000;
+
+export function isModelDeprecated(entry: FreeModelCatalogEntry, now = Date.now()): boolean {
+  if (!entry.deprecatedAfter) return false;
+  const t = Date.parse(entry.deprecatedAfter);
+  return Number.isFinite(t) && t <= now;
+}
+
+export function daysUntilDeprecation(entry: FreeModelCatalogEntry, now = Date.now()): number | null {
+  if (!entry.deprecatedAfter) return null;
+  const t = Date.parse(entry.deprecatedAfter);
+  if (!Number.isFinite(t)) return null;
+  return Math.ceil((t - now) / MS_PER_DAY);
+}
+
+/** Catalog with EOL models filtered out — use this for serving / routing. */
+export function getActiveFreeModelCatalog(now = Date.now()): FreeModelCatalogEntry[] {
+  return FREE_MODEL_CATALOG.filter((m) => !isModelDeprecated(m, now));
+}
+
+/** Models within DEPRECATION_WARN_DAYS of EOL — surface in worker logs. */
+export function getModelsDeprecatingSoon(now = Date.now()): Array<{ entry: FreeModelCatalogEntry; daysLeft: number }> {
+  const out: Array<{ entry: FreeModelCatalogEntry; daysLeft: number }> = [];
+  for (const m of FREE_MODEL_CATALOG) {
+    const d = daysUntilDeprecation(m, now);
+    if (d !== null && d > 0 && d <= DEPRECATION_WARN_DAYS) out.push({ entry: m, daysLeft: d });
+  }
+  return out;
+}
+
 export function getHardcodedFreeModelRules(): string[] {
-  return FREE_MODEL_CATALOG.map((m) => `${m.provider}/${m.modelId}`);
+  return getActiveFreeModelCatalog().map((m) => `${m.provider}/${m.modelId}`);
 }
 
 export function getHardcodedFreeProviders(): string[] {
-  return [...new Set(FREE_MODEL_CATALOG.map((m) => m.provider))];
+  return [...new Set(getActiveFreeModelCatalog().map((m) => m.provider))];
 }
 
 export function isHardcodedFreeModel(provider: string, modelId: string | null | undefined): boolean {
   if (!modelId) return false;
-  return FREE_MODEL_KEYS.has(`${provider}/${modelId}`.toLowerCase());
+  const key = `${provider}/${modelId}`.toLowerCase();
+  if (!FREE_MODEL_KEYS.has(key)) return false;
+  // Reject deprecated models even if listed
+  const entry = FREE_MODEL_CATALOG.find(
+    (m) => `${m.provider}/${m.modelId}`.toLowerCase() === key,
+  );
+  return entry ? !isModelDeprecated(entry) : false;
 }

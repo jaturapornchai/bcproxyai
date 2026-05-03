@@ -229,14 +229,10 @@ export const FREE_MODEL_CATALOG: readonly FreeModelCatalogEntry[] = [
   together("meta-llama/Llama-3.3-70B-Instruct-Turbo-Free", "Together: Llama 3.3 70B Free", 131072, { tools: true, json: true }),
   together("meta-llama/Llama-Vision-Free", "Together: Llama 3.2 11B Vision Free", 131072, { vision: true, json: true }),
 
-  // ── Chutes AI (donated GPU, free with API key) ──
-  chutes("deepseek-ai/DeepSeek-R1", "Chutes: DeepSeek R1", 64000, { reasoning: true }),
-  chutes("deepseek-ai/DeepSeek-V3-0324", "Chutes: DeepSeek V3 0324", 128000, { tools: true, json: true }),
-  chutes("meta-llama/Llama-3.3-70B-Instruct", "Chutes: Llama 3.3 70B", 131072, { tools: true, json: true }),
-  chutes("meta-llama/Llama-3.1-405B-Instruct", "Chutes: Llama 3.1 405B", 131072, { tools: true, json: true }),
-  chutes("Qwen/Qwen3-32B", "Chutes: Qwen 3 32B", 131072, { tools: true, json: true }),
-  chutes("Qwen/Qwen3-Coder-Plus", "Chutes: Qwen 3 Coder Plus", 262144, { code: true, tools: true, json: true }),
-  chutes("zai-org/GLM-5", "Chutes: GLM-5", 131072, { tools: true, reasoning: true, json: true }),
+  // ── Chutes AI removed: production probe revealed it is not actually free.
+  //    The endpoint demands paying the account balance with TAO crypto
+  //    ("Quota exceeded and account balance is $0.0, please pay with fiat or
+  //    send tao to ..."), and several model_ids 404 outright.
 
   // ── Ollama Cloud (free tier: daily quota, requires API key) ──
   ollamacloud("gpt-oss:120b-cloud", "OllamaCloud: gpt-oss 120B", 131072, { tools: true, reasoning: true, json: true }),

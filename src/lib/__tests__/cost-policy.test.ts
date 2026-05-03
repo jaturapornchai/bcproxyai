@@ -14,7 +14,7 @@ afterEach(() => {
 describe("cost policy", () => {
   it("allows only hardcoded remote free models across whitelisted providers", () => {
     expect(getCostAllowedProviders().sort()).toEqual([
-      "cerebras", "chutes", "cohere", "github", "google", "groq", "huggingface",
+      "cerebras", "cohere", "github", "google", "groq", "huggingface",
       "mistral", "nvidia", "ollamacloud", "openrouter", "sambanova", "sealion",
       "thaillm", "together", "typhoon",
     ]);
@@ -32,7 +32,7 @@ describe("cost policy", () => {
     expect(getFreeModelAllowlist()).toContain("huggingface/Qwen/Qwen3-32B");
     expect(getFreeModelAllowlist()).toContain("nvidia/meta/llama-3.3-70b-instruct");
     expect(getFreeModelAllowlist()).toContain("together/meta-llama/Llama-3.3-70B-Instruct-Turbo-Free");
-    expect(getFreeModelAllowlist()).toContain("chutes/deepseek-ai/DeepSeek-R1");
+    expect(isProviderCostAllowed("chutes")).toBe(false); // removed (paywall via TAO crypto)
     expect(getFreeModelAllowlist()).toContain("ollamacloud/gpt-oss:120b-cloud");
     expect(getFreeModelAllowlist()).toContain("typhoon/typhoon-v2.5-30b-a3b-instruct");
     expect(getFreeModelAllowlist()).toContain("thaillm/openthaigpt-thaillm-8b-instruct-v7.2");
@@ -62,8 +62,7 @@ describe("cost policy", () => {
     expect(isModelCostAllowed("together", "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free")).toBe(true);
     expect(isModelCostAllowed("together", "meta-llama/Llama-3.3-70B-Instruct-Turbo")).toBe(false);
     expect(isModelCostAllowed("nvidia", "deepseek-ai/deepseek-r1")).toBe(true);
-    expect(isModelCostAllowed("chutes", "deepseek-ai/DeepSeek-R1")).toBe(true);
-    expect(isModelCostAllowed("chutes", "moonshotai/Kimi-K2.5")).toBe(false); // removed: 404 from upstream
+    expect(isModelCostAllowed("chutes", "deepseek-ai/DeepSeek-R1")).toBe(false); // chutes provider removed
   });
 
   it("ignores runtime allowlist env vars", () => {

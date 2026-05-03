@@ -9,6 +9,7 @@
  * ─ Phase 3: Auto-discover rate limits + question bank expansion
  */
 import { getSqlClient } from "@/lib/db/schema";
+import { ensureRedisConnected } from "@/lib/redis";
 
 // ─── Phase 1: Fail Streak + Exponential Cooldown ──────────────────────────────
 
@@ -84,7 +85,11 @@ const HALF_OPEN_PROBE_LIMIT = 1;
 const RECENT_FAIL_TTL_MS = 30_000;
 const RECENT_FAIL_TTL_SEC = Math.ceil(RECENT_FAIL_TTL_MS / 1000);
 const RECENT_FAIL_THRESHOLD = 2;
-const HALF_OPEN_PROBE_TTL_SEC = 12;
+// Probe slot must outlive the longest possible request (60s for the largest
+// payloads — see chat/completions timeoutMs ladder). Otherwise the slot frees
+// while the first probe is still in flight, letting another pod fire a parallel
+// "thundering herd" probe before the first finishes.
+const HALF_OPEN_PROBE_TTL_SEC = 65;
 
 interface RecentFailState {
   count: number;
@@ -110,27 +115,31 @@ export function recordRecentFailure(modelId: string): void {
   } else {
     recentFails.set(modelId, { count: 1, lastFailAt: now });
   }
-  // Mirror to Redis (best-effort; lazy import so unit tests don't pull in ioredis)
-  void import("@/lib/redis").then(async ({ ensureRedisConnected }) => {
-    try {
-      const r = await ensureRedisConnected();
-      const key = CB_FAIL_PREFIX + modelId;
-      const v = await r.incr(key);
-      if (v === 1) await r.expire(key, RECENT_FAIL_TTL_SEC);
-    } catch { /* fail-open */ }
-  }).catch(() => { /* fail-open */ });
+  // Mirror to Redis (best-effort, fire-and-forget)
+  void mirrorFailToRedis(modelId);
+}
+
+async function mirrorFailToRedis(modelId: string): Promise<void> {
+  try {
+    const r = await ensureRedisConnected();
+    const key = CB_FAIL_PREFIX + modelId;
+    const v = await r.incr(key);
+    if (v === 1) await r.expire(key, RECENT_FAIL_TTL_SEC);
+  } catch { /* fail-open */ }
 }
 
 /** A success closes the breaker for this modelId across all pods. */
 export function recordRecentSuccess(modelId: string): void {
   recentFails.delete(modelId);
   halfOpenInflight.delete(modelId);
-  void import("@/lib/redis").then(async ({ ensureRedisConnected }) => {
-    try {
-      const r = await ensureRedisConnected();
-      await r.del(CB_FAIL_PREFIX + modelId, CB_PROBE_PREFIX + modelId);
-    } catch { /* fail-open */ }
-  }).catch(() => { /* fail-open */ });
+  void clearBreakerInRedis(modelId);
+}
+
+async function clearBreakerInRedis(modelId: string): Promise<void> {
+  try {
+    const r = await ensureRedisConnected();
+    await r.del(CB_FAIL_PREFIX + modelId, CB_PROBE_PREFIX + modelId);
+  } catch { /* fail-open */ }
 }
 
 /**
@@ -168,7 +177,6 @@ export async function acquireCircuitProbeShared(modelId: string): Promise<{ stat
   if (!local.allow || local.state === "closed") return local;
   // Half-open: race in Redis to claim the global probe slot
   try {
-    const { ensureRedisConnected } = await import("@/lib/redis");
     const r = await ensureRedisConnected();
     const key = CB_PROBE_PREFIX + modelId;
     const ok = await r.set(key, "1", "EX", HALF_OPEN_PROBE_TTL_SEC, "NX");
@@ -186,12 +194,14 @@ export function releaseCircuitProbe(modelId: string): void {
   const cur = halfOpenInflight.get(modelId);
   if (cur && cur > 1) halfOpenInflight.set(modelId, cur - 1);
   else halfOpenInflight.delete(modelId);
-  void import("@/lib/redis").then(async ({ ensureRedisConnected }) => {
-    try {
-      const r = await ensureRedisConnected();
-      await r.del(CB_PROBE_PREFIX + modelId);
-    } catch { /* fail-open */ }
-  }).catch(() => { /* fail-open */ });
+  void releaseProbeInRedis(modelId);
+}
+
+async function releaseProbeInRedis(modelId: string): Promise<void> {
+  try {
+    const r = await ensureRedisConnected();
+    await r.del(CB_PROBE_PREFIX + modelId);
+  } catch { /* fail-open */ }
 }
 
 // ─── Phase 1: Capacity Learning ───────────────────────────────────────────────
@@ -362,14 +372,43 @@ export async function checkRegressionWarning(modelId: string): Promise<{
     const dropPp = baselineRate - recentRate;
     if (dropPp >= REGRESSION_DROP_THRESHOLD) {
       lastWarnedAt.set(modelId, Date.now());
-      console.warn(
-        `[REGRESSION] ${modelId} — last 1h success ${(recentRate * 100).toFixed(0)}% vs baseline ${(baselineRate * 100).toFixed(0)}% (drop ${(dropPp * 100).toFixed(0)}pp, n=${r.recent_total}/${r.baseline_total})`,
-      );
+      const msg = `[REGRESSION] ${modelId} — last 1h success ${(recentRate * 100).toFixed(0)}% vs baseline ${(baselineRate * 100).toFixed(0)}% (drop ${(dropPp * 100).toFixed(0)}pp, n=${r.recent_total}/${r.baseline_total})`;
+      console.warn(msg);
+      void postRegressionWebhook(modelId, recentRate, baselineRate, dropPp, r.recent_total, r.baseline_total);
       return { warned: true, recentRate, baselineRate, dropPp };
     }
     return { warned: false, recentRate, baselineRate, dropPp };
   } catch {
     return { warned: false };
+  }
+}
+
+/**
+ * POST a Slack-compatible payload to GATEWAY_REGRESSION_WEBHOOK if set.
+ * Works with Slack incoming webhooks, Discord webhooks (Discord accepts the
+ * `text` field as the message body), and any endpoint that takes a JSON
+ * `text` payload. No-op when the env var is unset.
+ */
+async function postRegressionWebhook(
+  modelId: string,
+  recentRate: number,
+  baselineRate: number,
+  dropPp: number,
+  recentN: number,
+  baselineN: number,
+): Promise<void> {
+  const url = process.env.GATEWAY_REGRESSION_WEBHOOK;
+  if (!url) return;
+  try {
+    const text = `:rotating_light: SMLGateway regression\n*model*: \`${modelId}\`\n*recent 1h*: ${(recentRate * 100).toFixed(0)}% (n=${recentN})\n*baseline 23h*: ${(baselineRate * 100).toFixed(0)}% (n=${baselineN})\n*drop*: ${(dropPp * 100).toFixed(0)}pp`;
+    await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, content: text }),
+      signal: AbortSignal.timeout(5_000),
+    });
+  } catch (err) {
+    console.warn(`[REGRESSION-WEBHOOK] post failed: ${(err as Error).message}`);
   }
 }
 

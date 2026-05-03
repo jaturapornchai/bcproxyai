@@ -176,6 +176,14 @@ const DIFFICULTY_BY_ID: Record<string, ExamLevel> = {
   thai_natural_chat_v1:    "high",
   thai_royal_word_v1:      "university",
   thai_tone_marker_v1:     "university",
+  // Section TH+ extras
+  thai_count_to_thai_v1:   "middle",
+  thai_phone_format_v1:    "middle",
+  thai_buddhist_year_v1:   "middle",
+  thai_isan_dialect_v1:    "high",
+  thai_code_switch_v1:     "high",
+  thai_address_order_v1:   "high",
+  thai_short_summary_v1:   "university",
 };
 
 // ─── ข้อสอบ 25 ข้อ — เน้นใช้งานจริง + กรอง model คุณภาพสูง ──────────────────
@@ -1049,6 +1057,104 @@ What is the square root of 144?`,
       const hasPolite = /(ครับ|ค่ะ|ขอรับ|จ้า)/.test(clean);
       if (!hasPolite) return { passed: false, reason: "missing polite particle" };
       return { passed: true, reason: `${clean.length}-char polite Thai reply` };
+    },
+  },
+
+  // ───── Section TH+ extras: code-switch, dialect, temporal, format ─────
+  {
+    id: "thai_code_switch_v1",
+    category: "thai",
+    question:
+      "ลูกค้าถามว่า 'order วันนี้ delivery กี่วันครับ' ตอบเป็นภาษาไทยล้วน ๆ ไม่ใช้คำอังกฤษ 1-2 ประโยค",
+    expected: "ตอบสุภาพ ภาษาไทยล้วน",
+    check: (answer) => {
+      const clean = stripThink(answer);
+      if (clean.length < 5) return { passed: false, reason: "too short" };
+      if (clean.length > 220) return { passed: false, reason: `too long (${clean.length})` };
+      // Reject if any Latin alphabet word appears (numbers OK)
+      if (/[A-Za-z]{2,}/.test(clean))
+        return { passed: false, reason: `contains English: "${clean.slice(0, 80)}"` };
+      if (!/[฀-๿]/.test(clean)) return { passed: false, reason: "no Thai chars" };
+      return { passed: true, reason: "Thai-only reply" };
+    },
+  },
+  {
+    id: "thai_isan_dialect_v1",
+    category: "thai",
+    question:
+      'คำว่า "บักหุ่ง" ในภาษาอีสานแปลว่าอะไรในภาษาไทยกลาง ตอบ 1 คำ',
+    expected: "มะละกอ",
+    check: (answer) => {
+      const clean = stripThink(answer);
+      if (/มะละกอ/.test(clean)) return { passed: true, reason: "correct dialect mapping" };
+      return { passed: false, reason: `expected มะละกอ: "${clean.slice(0, 60)}"` };
+    },
+  },
+  {
+    id: "thai_buddhist_year_v1",
+    category: "thai",
+    question:
+      "ปี พ.ศ. 2569 ตรงกับ ค.ศ. ปีอะไร ตอบเฉพาะตัวเลข ค.ศ.",
+    expected: "2026",
+    check: (answer) => {
+      const clean = stripThink(answer).replace(/[^\d]/g, "");
+      if (clean === "2026") return { passed: true, reason: "correct CE conversion" };
+      return { passed: false, reason: `expected 2026, got: "${clean.slice(0, 30)}"` };
+    },
+  },
+  {
+    id: "thai_phone_format_v1",
+    category: "thai",
+    question:
+      'จัดรูปแบบเบอร์โทรไทย "0812345678" เป็นรูปแบบมาตรฐาน 3-3-4 ที่คนไทยใช้ ตอบเฉพาะเบอร์ที่จัดรูปแบบแล้ว',
+    expected: "081-234-5678",
+    check: (answer) => {
+      const clean = stripThink(answer).replace(/[^0-9-]/g, "");
+      if (clean === "081-234-5678") return { passed: true, reason: "correct 3-3-4 format" };
+      return { passed: false, reason: `expected 081-234-5678, got: "${clean.slice(0, 30)}"` };
+    },
+  },
+  {
+    id: "thai_count_to_thai_v1",
+    category: "thai",
+    question: "เขียนเลข 25 เป็นคำอ่านภาษาไทย ตอบเฉพาะคำอ่าน",
+    expected: "ยี่สิบห้า",
+    check: (answer) => {
+      const clean = stripThink(answer).replace(/\s/g, "");
+      if (/ยี่สิบห้า/.test(clean)) return { passed: true, reason: "correct Thai number word" };
+      return { passed: false, reason: `expected ยี่สิบห้า, got: "${clean.slice(0, 40)}"` };
+    },
+  },
+  {
+    id: "thai_address_order_v1",
+    category: "thai",
+    question:
+      'ลำดับการเขียนที่อยู่ไทยที่ถูกต้องคืออะไร ตอบเรียงลำดับ 4 หน่วย: บ้านเลขที่ / ตำบล / อำเภอ / จังหวัด (เขียนคั่นด้วย " > ")',
+    expected: "บ้านเลขที่ > ตำบล > อำเภอ > จังหวัด",
+    check: (answer) => {
+      const clean = stripThink(answer).replace(/\s+/g, " ");
+      const reThai = /บ้านเลขที่.*ตำบล.*อำเภอ.*จังหวัด/;
+      const reGeneric = /เลขที่.*ตำบล.*อำเภอ.*จังหวัด/;
+      if (reThai.test(clean) || reGeneric.test(clean))
+        return { passed: true, reason: "correct address hierarchy" };
+      return { passed: false, reason: `wrong order: "${clean.slice(0, 100)}"` };
+    },
+  },
+  {
+    id: "thai_short_summary_v1",
+    category: "thai",
+    question:
+      'สรุปข้อความนี้เป็นภาษาไทย 1 ประโยคไม่เกิน 25 คำ: "วันนี้ฝ่ายขายแจ้งว่ายอดสั่งซื้อจากภาคเหนือลดลง 30% เมื่อเทียบกับเดือนที่แล้ว ส่วนใหญ่เป็นกลุ่มสินค้าเครื่องใช้ในบ้าน ลูกค้าสะท้อนว่าราคาขึ้นและจัดส่งช้า"',
+    expected: "สรุปได้ใจความหลัก ภายใน 25 คำ",
+    check: (answer) => {
+      const clean = stripThink(answer).trim().replace(/\s+/g, " ");
+      if (clean.length < 10) return { passed: false, reason: "too short" };
+      const wordCount = clean.split(/\s+/).length;
+      if (wordCount > 35) return { passed: false, reason: `over 25-word target (${wordCount} words)` };
+      if (!/[฀-๿]/.test(clean)) return { passed: false, reason: "no Thai chars" };
+      const mentionsKey = /(ยอด|สั่ง|เหนือ|ลด|30|ราคา|ส่ง|ช้า)/.test(clean);
+      if (!mentionsKey) return { passed: false, reason: "missing key facts" };
+      return { passed: true, reason: `${wordCount}-word Thai summary` };
     },
   },
 ];

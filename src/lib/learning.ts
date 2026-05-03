@@ -70,14 +70,21 @@ export async function recordSuccessStreak(modelId: string): Promise<void> {
 
 // ─── Circuit breaker: 3-state with explicit half-open ─────────────────────────
 //
-// In-memory only (no DB reads on hot path). When `recordRecentFailure` is
-// called, we tag the modelId as recently-failed; subsequent acquireCircuitProbe
-// calls limit concurrency to HALF_OPEN_PROBE_LIMIT. After RECENT_FAIL_TTL_MS
-// without a fresh failure (or one success) the state returns to closed.
+// Two-tier state:
+//   1) In-memory (per-pod): fail count + half-open inflight — fast, no
+//      cross-pod traffic on the hot path
+//   2) Redis (cross-pod): mirror of fail count + inflight slot — used so a
+//      multi-pod cluster doesn't admit `pods × HALF_OPEN_PROBE_LIMIT` concurrent
+//      probes against the same broken model
+//
+// Both layers fail-open: if Redis is unhealthy, the in-memory layer alone
+// still gives single-pod protection.
 
 const HALF_OPEN_PROBE_LIMIT = 1;
 const RECENT_FAIL_TTL_MS = 30_000;
+const RECENT_FAIL_TTL_SEC = Math.ceil(RECENT_FAIL_TTL_MS / 1000);
 const RECENT_FAIL_THRESHOLD = 2;
+const HALF_OPEN_PROBE_TTL_SEC = 12;
 
 interface RecentFailState {
   count: number;
@@ -86,11 +93,13 @@ interface RecentFailState {
 const recentFails = new Map<string, RecentFailState>();
 const halfOpenInflight = new Map<string, number>();
 
+const CB_FAIL_PREFIX = "cb:fail:";
+const CB_PROBE_PREFIX = "cb:probe:";
+
 export type CircuitState = "closed" | "half-open";
 
 /**
- * Tag `modelId` as having just failed. Tracks a rolling fail count that
- * decays after RECENT_FAIL_TTL_MS.
+ * Tag `modelId` as having just failed. Bumps both in-memory + Redis counters.
  */
 export function recordRecentFailure(modelId: string): void {
   const now = Date.now();
@@ -101,25 +110,39 @@ export function recordRecentFailure(modelId: string): void {
   } else {
     recentFails.set(modelId, { count: 1, lastFailAt: now });
   }
+  // Mirror to Redis (best-effort; lazy import so unit tests don't pull in ioredis)
+  void import("@/lib/redis").then(async ({ ensureRedisConnected }) => {
+    try {
+      const r = await ensureRedisConnected();
+      const key = CB_FAIL_PREFIX + modelId;
+      const v = await r.incr(key);
+      if (v === 1) await r.expire(key, RECENT_FAIL_TTL_SEC);
+    } catch { /* fail-open */ }
+  }).catch(() => { /* fail-open */ });
 }
 
-/** A success closes the breaker for this modelId immediately. */
+/** A success closes the breaker for this modelId across all pods. */
 export function recordRecentSuccess(modelId: string): void {
   recentFails.delete(modelId);
+  halfOpenInflight.delete(modelId);
+  void import("@/lib/redis").then(async ({ ensureRedisConnected }) => {
+    try {
+      const r = await ensureRedisConnected();
+      await r.del(CB_FAIL_PREFIX + modelId, CB_PROBE_PREFIX + modelId);
+    } catch { /* fail-open */ }
+  }).catch(() => { /* fail-open */ });
 }
 
 /**
  * Decide if a request to `modelId` should fire. Caller MUST invoke
  * `releaseCircuitProbe()` after the upstream call regardless of outcome.
  *
- * - closed   → allow, no concurrency cap
- * - half-open → allow at most HALF_OPEN_PROBE_LIMIT concurrent probes; the
- *              rest get `allow: false` and should fall back to next candidate
+ * The check is intentionally synchronous against the in-memory state — Redis
+ * mirroring is best-effort/eventual. This keeps the hot path zero-async.
  */
 export function acquireCircuitProbe(modelId: string): { state: CircuitState; allow: boolean } {
   const cur = recentFails.get(modelId);
   const now = Date.now();
-  // State decay
   if (cur && now - cur.lastFailAt > RECENT_FAIL_TTL_MS) {
     recentFails.delete(modelId);
   }
@@ -135,11 +158,40 @@ export function acquireCircuitProbe(modelId: string): { state: CircuitState; all
   return { state: "half-open", allow: true };
 }
 
+/**
+ * Cross-pod variant: also reserves a probe slot in Redis, so multiple pods
+ * don't all admit one probe simultaneously. Falls back to local-only when
+ * Redis is down.
+ */
+export async function acquireCircuitProbeShared(modelId: string): Promise<{ state: CircuitState; allow: boolean }> {
+  const local = acquireCircuitProbe(modelId);
+  if (!local.allow || local.state === "closed") return local;
+  // Half-open: race in Redis to claim the global probe slot
+  try {
+    const { ensureRedisConnected } = await import("@/lib/redis");
+    const r = await ensureRedisConnected();
+    const key = CB_PROBE_PREFIX + modelId;
+    const ok = await r.set(key, "1", "EX", HALF_OPEN_PROBE_TTL_SEC, "NX");
+    if (ok !== "OK") {
+      releaseCircuitProbe(modelId);
+      return { state: "half-open", allow: false };
+    }
+  } catch {
+    // Redis down — fall back to local-only; local already accepted
+  }
+  return local;
+}
+
 export function releaseCircuitProbe(modelId: string): void {
   const cur = halfOpenInflight.get(modelId);
-  if (!cur) return;
-  if (cur <= 1) halfOpenInflight.delete(modelId);
-  else halfOpenInflight.set(modelId, cur - 1);
+  if (cur && cur > 1) halfOpenInflight.set(modelId, cur - 1);
+  else halfOpenInflight.delete(modelId);
+  void import("@/lib/redis").then(async ({ ensureRedisConnected }) => {
+    try {
+      const r = await ensureRedisConnected();
+      await r.del(CB_PROBE_PREFIX + modelId);
+    } catch { /* fail-open */ }
+  }).catch(() => { /* fail-open */ });
 }
 
 // ─── Phase 1: Capacity Learning ───────────────────────────────────────────────

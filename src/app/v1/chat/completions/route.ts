@@ -20,7 +20,7 @@ import { hasTpmHeadroom, recordTokenConsumption } from "@/lib/tpm-tracker";
 import { recordOutcome, getProviderScore, getModelScore, isRecentlyDead } from "@/lib/live-score";
 import { isProviderEnabledSync } from "@/lib/provider-toggle";
 import { canFitRequest, parseLimitHeaders, parseLimitError, recordLimit } from "@/lib/provider-limits";
-import { recordOutcomeLearning, recordFailStreak, canHandleTokens, getCategoryWinners, detectCategory, isModelUnhealthyForCategory, acquireCircuitProbe, releaseCircuitProbe, recordRecentFailure, recordRecentSuccess } from "@/lib/learning";
+import { recordOutcomeLearning, recordFailStreak, canHandleTokens, getCategoryWinners, detectCategory, isModelUnhealthyForCategory, acquireCircuitProbeShared, releaseCircuitProbe } from "@/lib/learning";
 import { upstreamAgent } from "@/lib/upstream-agent";
 import { getRpmLimit } from "@/lib/free-model-catalog";
 import { tryConsumeRpm } from "@/lib/rate-budget";
@@ -902,11 +902,12 @@ async function forwardToProvider(
   }
 
   // Circuit breaker: when this model has failed RECENT_FAIL_THRESHOLD times in
-  // the last 30s, only HALF_OPEN_PROBE_LIMIT concurrent probes are allowed.
-  // The rest fall back to the next candidate immediately, preventing the
-  // thundering-herd cascade after a brief upstream outage.
+  // the last 30s, only HALF_OPEN_PROBE_LIMIT concurrent probes are allowed
+  // across the whole cluster (Redis SET NX). The rest fall back to the next
+  // candidate immediately, preventing the thundering-herd cascade after a
+  // brief upstream outage.
   const circuitKey = `${provider}:${actualModelId}`;
-  const probe = acquireCircuitProbe(circuitKey);
+  const probe = await acquireCircuitProbeShared(circuitKey);
   if (!probe.allow) {
     throw new Error(`circuit breaker half-open: ${circuitKey} probe in flight`);
   }

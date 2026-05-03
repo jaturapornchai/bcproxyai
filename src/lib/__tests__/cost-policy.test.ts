@@ -62,7 +62,8 @@ describe("cost policy", () => {
     expect(isModelCostAllowed("together", "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free")).toBe(true);
     expect(isModelCostAllowed("together", "meta-llama/Llama-3.3-70B-Instruct-Turbo")).toBe(false);
     expect(isModelCostAllowed("nvidia", "deepseek-ai/deepseek-r1")).toBe(true);
-    expect(isModelCostAllowed("chutes", "moonshotai/Kimi-K2.5")).toBe(true);
+    expect(isModelCostAllowed("chutes", "deepseek-ai/DeepSeek-R1")).toBe(true);
+    expect(isModelCostAllowed("chutes", "moonshotai/Kimi-K2.5")).toBe(false); // removed: 404 from upstream
   });
 
   it("ignores runtime allowlist env vars", () => {

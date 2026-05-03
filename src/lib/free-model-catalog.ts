@@ -38,7 +38,7 @@ const PROVIDER_DEFAULT_RPM: Record<string, number> = {
   github: 15,
   sambanova: 30,
   mistral: 60,
-  cohere: 20,
+  cohere: 1, // trial key cap is 1000 calls/MONTH; throttle aggressively
   huggingface: 30,
   nvidia: 40,
   together: 60,
@@ -141,7 +141,6 @@ export const FREE_MODEL_CATALOG: readonly FreeModelCatalogEntry[] = [
   groq("openai/gpt-oss-120b", "Groq: gpt-oss-120b", 131072, { tools: true, reasoning: true, json: true }),
   groq("openai/gpt-oss-20b", "Groq: gpt-oss-20b", 131072, { tools: true, reasoning: true, json: true }),
   groq("qwen/qwen3-32b", "Groq: Qwen 3 32B", 131072, { tools: true, reasoning: true, json: true }),
-  groq("moonshotai/kimi-k2-instruct-0905", "Groq: Kimi K2 0905", 262144, { tools: true, json: true, code: true }),
 
   // ── Cerebras (free tier: 1M tok/day, context capped at 8K) ──
   { ...cerebras("llama-3.3-70b", "Cerebras: Llama 3.3 70B", 8192, { tools: true, json: true }), deprecatedAfter: "2026-02-16" },
@@ -223,10 +222,8 @@ export const FREE_MODEL_CATALOG: readonly FreeModelCatalogEntry[] = [
   nvidia("meta/llama-4-scout-17b-16e-instruct", "NVIDIA: Llama 4 Scout", 131072, { tools: true, vision: true, json: true }),
   nvidia("meta/llama-4-maverick-17b-128e-instruct", "NVIDIA: Llama 4 Maverick", 131072, { tools: true, vision: true, json: true }),
   nvidia("deepseek-ai/deepseek-r1", "NVIDIA: DeepSeek R1", 131072, { reasoning: true }),
-  nvidia("qwen/qwen3-235b-a22b", "NVIDIA: Qwen 3 235B", 131072, { tools: true, json: true }),
   nvidia("nvidia/llama-3.3-nemotron-super-49b-v1", "NVIDIA: Nemotron Super 49B", 131072, { tools: true, reasoning: true }),
   nvidia("openai/gpt-oss-120b", "NVIDIA: gpt-oss-120b", 131072, { tools: true, reasoning: true, json: true }),
-  nvidia("mistralai/mistral-small-3.1-24b-instruct-2503", "NVIDIA: Mistral Small 3.1", 131072, { tools: true, vision: true, json: true }),
 
   // ── Together AI (only the explicitly Free endpoints) ──
   together("meta-llama/Llama-3.3-70B-Instruct-Turbo-Free", "Together: Llama 3.3 70B Free", 131072, { tools: true, json: true }),
@@ -239,7 +236,6 @@ export const FREE_MODEL_CATALOG: readonly FreeModelCatalogEntry[] = [
   chutes("meta-llama/Llama-3.1-405B-Instruct", "Chutes: Llama 3.1 405B", 131072, { tools: true, json: true }),
   chutes("Qwen/Qwen3-32B", "Chutes: Qwen 3 32B", 131072, { tools: true, json: true }),
   chutes("Qwen/Qwen3-Coder-Plus", "Chutes: Qwen 3 Coder Plus", 262144, { code: true, tools: true, json: true }),
-  chutes("moonshotai/Kimi-K2.5", "Chutes: Kimi K2.5", 262144, { tools: true, vision: true, json: true }),
   chutes("zai-org/GLM-5", "Chutes: GLM-5", 131072, { tools: true, reasoning: true, json: true }),
 
   // ── Ollama Cloud (free tier: daily quota, requires API key) ──

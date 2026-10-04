@@ -1,5 +1,5 @@
 /**
- * quality.js — SMLGateway Answer Quality Test
+ * quality.js — BCAiRouter Answer Quality Test
  *
  * ทดสอบคุณภาพคำตอบจริง ไม่ใช่แค่ HTTP 200
  * สุ่มคำถามหลายประเภท ตรวจคำตอบด้วย regex/keyword
@@ -346,8 +346,8 @@ export default function () {
   // Parse response
   let json = null;
   let content = "";
-  let provider = res.headers["X-Smlgateway-Provider"] || "?";
-  let model = res.headers["X-Smlgateway-Model"] || "?";
+  let provider = res.headers["X-Bcairouter-Provider"] || "?";
+  let model = res.headers["X-Bcairouter-Model"] || "?";
 
   try {
     json = JSON.parse(res.body);

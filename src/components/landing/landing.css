@@ -1,0 +1,182 @@
+/* Landing-only motion + fallback scene. Everything is lp-prefixed so it cannot leak into the dashboard.
+   prefers-reduced-motion is already neutralised globally in globals.css (durations → ~0, no loops). */
+
+.lp-stage { --lp-violet: #8b7bff; --lp-cyan: #38d6f5; --lp-pink: #f2a6ff; }
+
+/* ── HUD entrance: hidden until the engine reports ready, then each piece rises on its own delay (--d, ms) ── */
+.lp-rise { opacity: 0; }
+.lp-stage[data-ready="true"] .lp-rise {
+  animation: lp-rise 1s var(--ease-out) both;
+  animation-delay: calc(var(--d, 0) * 1ms);
+}
+@keyframes lp-rise {
+  from { opacity: 0; transform: translateY(18px) scale(0.985); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* ── loading veil ─────────────────────────────────────────── */
+.lp-veil { transition: opacity 0.9s var(--ease-out), visibility 0s linear 0.9s; }
+.lp-veil[data-off="true"] { opacity: 0; visibility: hidden; }
+.lp-ring-spin {
+  width: 64px; height: 64px; border-radius: 50%;
+  background: conic-gradient(from 0deg, transparent 0 55%, var(--lp-violet) 80%, var(--lp-cyan) 100%);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
+  animation: lp-spin 1.1s linear infinite;
+}
+@keyframes lp-spin { to { transform: rotate(360deg); } }
+
+/* ── scrim: keeps the top bar / ticker legible without dimming the galaxy ── */
+.lp-scrim {
+  background:
+    linear-gradient(180deg, rgba(5, 6, 10, 0.62) 0, rgba(5, 6, 10, 0) 150px),
+    linear-gradient(0deg, rgba(5, 6, 10, 0.55) 0, rgba(5, 6, 10, 0) 130px);
+}
+
+/* ── windows / feed / ticker motion ── */
+.lp-win { animation: lp-win-in 0.22s var(--ease-out) both; }
+@keyframes lp-win-in { from { opacity: 0; scale: 0.97; } }
+.lp-feed-row { animation: lp-feed-in 0.55s var(--ease-out) both; }
+@keyframes lp-feed-in { from { opacity: 0; transform: translateY(-8px); background: rgba(139, 123, 255, 0.2); } }
+.lp-tick { animation: lp-tick-in 0.45s var(--ease-out) both; }
+@keyframes lp-tick-in { from { opacity: 0; transform: translateY(10px) scale(0.97); } }
+.lp-hint-fade { animation: lp-hint-fade 5s ease 1s forwards; }
+@keyframes lp-hint-fade { 0%, 70% { opacity: 1; } 100% { opacity: 0; } }
+
+/* ── provider tooltip ── */
+.lp-tip { animation: lp-tip 0.18s var(--ease-out) both; }
+@keyframes lp-tip { from { opacity: 0; scale: 0.94; } to { opacity: 1; scale: 1; } }
+
+/* ── CSS-only fallback scene (no WebGL2 / context lost / engine slow) ── */
+.lp-fallback { transition: opacity 1s var(--ease-out), visibility 0s linear 1s; }
+.lp-fallback[data-off="true"] { opacity: 0; visibility: hidden; }
+.lp-fallback[data-off="true"] * { animation-play-state: paused !important; }
+
+.lp-orb { position: absolute; border-radius: 50%; will-change: transform; }
+.lp-orb-a { width: 62vmax; height: 62vmax; left: -18vmax; top: -22vmax; background: radial-gradient(circle, rgba(139, 123, 255, 0.34), transparent 62%); animation: lp-drift 22s ease-in-out infinite alternate; }
+.lp-orb-b { width: 56vmax; height: 56vmax; right: -16vmax; bottom: -24vmax; background: radial-gradient(circle, rgba(56, 214, 245, 0.28), transparent 62%); animation: lp-drift 26s ease-in-out -9s infinite alternate-reverse; }
+.lp-orb-c { width: 40vmax; height: 40vmax; left: 38%; top: 8%; background: radial-gradient(circle, rgba(242, 166, 255, 0.2), transparent 62%); animation: lp-drift 30s ease-in-out -4s infinite alternate; }
+@keyframes lp-drift {
+  0% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(6vmax, 4vmax, 0) scale(1.14); }
+  100% { transform: translate3d(-5vmax, 7vmax, 0) scale(0.94); }
+}
+
+.lp-nexus {
+  --size: min(86vmin, 780px);
+  position: absolute; width: var(--size); height: var(--size);
+  left: 50%; top: 50%; translate: -50% -50%;
+}
+.lp-sweep {
+  position: absolute; inset: 6%; border-radius: 50%;
+  background: conic-gradient(from 0deg, transparent 0 78%, rgba(56, 214, 245, 0.14) 94%, rgba(139, 123, 255, 0.34) 100%);
+  -webkit-mask: radial-gradient(circle, transparent 0 8%, #000 9%); mask: radial-gradient(circle, transparent 0 8%, #000 9%);
+  animation: lp-spin 9s linear infinite;
+}
+.lp-ring { position: absolute; border-radius: 50%; border: 1px solid rgba(255, 255, 255, 0.1); animation: lp-spin var(--t, 40s) linear infinite; }
+.lp-ring-1 { inset: 0; --t: 70s; }
+.lp-ring-2 { inset: 15%; --t: 46s; animation-direction: reverse; border-style: dashed; border-color: rgba(139, 123, 255, 0.28); }
+.lp-ring-3 { inset: 31%; --t: 30s; border-color: rgba(56, 214, 245, 0.22); }
+.lp-dot {
+  position: absolute; left: 50%; top: 50%; width: 9px; height: 9px; margin: -4.5px 0 0 -4.5px; border-radius: 50%;
+  background: var(--c); box-shadow: 0 0 14px 2px var(--c), 0 0 2px 1px #fff inset;
+  transform: rotate(var(--a)) translateX(calc(var(--size) * var(--k) / 2));
+}
+.lp-core {
+  position: absolute; left: 50%; top: 50%; width: 22%; height: 22%; translate: -50% -50%; border-radius: 50%;
+  background: radial-gradient(circle at 38% 34%, #fff 0%, #cfc8ff 14%, var(--lp-violet) 42%, rgba(56, 214, 245, 0.35) 72%, transparent 100%);
+  box-shadow: 0 0 80px 20px rgba(139, 123, 255, 0.45), 0 0 200px 60px rgba(56, 214, 245, 0.18);
+  animation: lp-core 4.2s ease-in-out infinite;
+}
+@keyframes lp-core { 0%, 100% { scale: 1; } 50% { scale: 1.1; } }
+
+/* ── control room: one glass surface for windows, ribbon, dock and sheet ──
+   Unlayered CSS outranks Tailwind utilities, so glass elements take their border from here, never from classes. */
+.lp-glass {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.015) 38%), rgba(10, 12, 22, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 24px 60px -20px rgba(0, 0, 0, 0.85);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  backdrop-filter: blur(20px) saturate(140%);
+}
+.lp-glass::before {
+  content: ""; position: absolute; top: 0; left: 12%; right: 12%; height: 1px; pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(139, 123, 255, 0.75) 30%, rgba(56, 214, 245, 0.6) 70%, transparent);
+}
+.lp-glass[data-active="true"] {
+  border-color: rgba(196, 181, 253, 0.3);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 24px 60px -20px rgba(0, 0, 0, 0.85), 0 0 40px -10px rgba(139, 123, 255, 0.55);
+}
+.lp-sheet { border-width: 1px 0 0; border-top-color: rgba(255, 255, 255, 0.12); }
+
+/* window chrome: min/close sit back until the window is hovered or focused */
+.lp-win-btns { opacity: 0.55; transition: opacity 0.2s; }
+.lp-glass:hover .lp-win-btns, .lp-glass:focus-within .lp-win-btns { opacity: 1; }
+
+/* first-paint entrance: 600 ms after data-ready, 70 ms stagger per column slot (--d), from each window's own side.
+   Opacity + transform only: a blur filter on ~10 backdrop-filtered layers at once costs a visible first-raster hitch. */
+.lp-win-enter { opacity: 0; }
+.lp-stage[data-ready="true"] .lp-win-enter {
+  animation: lp-win-enter 0.7s var(--ease-out) both;
+  animation-delay: calc(600ms + var(--d, 0) * 1ms);
+}
+.lp-win-enter[data-side="R"] { --lp-from: 12px; }
+@keyframes lp-win-enter {
+  from { opacity: 0; transform: translateX(var(--lp-from, -12px)); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* control mode: darken the edges so glass reads well, keep the galaxy core bright */
+.lp-stage[data-mode="control"] .lp-scrim {
+  background:
+    radial-gradient(ellipse 72% 68% at 50% 50%, rgba(5, 6, 10, 0) 52%, rgba(5, 6, 10, 0.5) 100%),
+    linear-gradient(180deg, rgba(5, 6, 10, 0.62) 0, rgba(5, 6, 10, 0) 150px),
+    linear-gradient(0deg, rgba(5, 6, 10, 0.55) 0, rgba(5, 6, 10, 0) 130px);
+}
+
+/* numbers flash once when they change (the element re-mounts via key) */
+.lp-flash { animation: lp-flash 0.5s var(--ease-out); }
+@keyframes lp-flash { from { text-shadow: 0 0 14px rgba(169, 155, 255, 0.95), 0 0 2px rgba(255, 255, 255, 0.8); } }
+
+/* atoms */
+.lp-ring-arc { stroke-dashoffset: var(--len); animation: draw 0.9s var(--ease-out) forwards; transition: stroke-dasharray 0.6s var(--ease-out), stroke 0.3s; }
+.lp-blink { animation: lp-blink 1.1s ease-in-out infinite; }
+@keyframes lp-blink { 50% { opacity: 0.3; } }
+.lp-countdown {
+  border-radius: 50%;
+  background: conic-gradient(var(--c) calc(var(--p) * 1turn), rgba(255, 255, 255, 0.08) 0);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 3.5px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 3.5px));
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--c) 45%, transparent));
+}
+.lp-countdown[data-spin="true"] { animation: lp-spin 1.6s linear infinite; }
+.lp-radar { animation: lp-radar 0.9s var(--ease-out) both; }
+@keyframes lp-radar { from { opacity: 0; transform: scale(0.6); } }
+.lp-bars rect, .lp-bars path { transition: y 0.5s var(--ease-out), height 0.5s var(--ease-out), d 0.5s var(--ease-out); }
+
+/* dock + sheet */
+.lp-dock-chip { transition: transform 0.2s var(--ease-out), background-color 0.2s, color 0.2s; }
+.lp-dock-chip:hover { transform: translateY(-2px); }
+.lp-tab-line { transition: transform 0.3s var(--ease-out), width 0.3s var(--ease-out); }
+.lp-fade-x {
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 10px, #000 calc(100% - 32px), transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 10px, #000 calc(100% - 32px), transparent);
+}
+/* scroll bodies: a bottom fade while there is more below (scroll-driven; no fade when the body does not scroll,
+   and browsers without scroll timelines simply show no fade) */
+@property --lp-fade { syntax: "<length>"; inherits: false; initial-value: 0px; }
+.lp-fade-b {
+  -webkit-mask-image: linear-gradient(#000 calc(100% - var(--lp-fade)), transparent);
+  mask-image: linear-gradient(#000 calc(100% - var(--lp-fade)), transparent);
+  animation: lp-fade-b linear both;
+  animation-timeline: scroll(self);
+}
+@keyframes lp-fade-b { from { --lp-fade: 24px; } 96% { --lp-fade: 24px; } to { --lp-fade: 0px; } }
+.lp-fade-r {
+  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 22px), transparent);
+  mask-image: linear-gradient(90deg, #000 calc(100% - 22px), transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lp-rise, .lp-win-enter { animation-delay: 0s !important; }
+}

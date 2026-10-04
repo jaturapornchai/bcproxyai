@@ -1,7 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import { PROVIDER_COLORS } from "./shared";
+import { Badge, Card, CardHeader, CountUp, EmptyState, LinkButton, Reveal, Stat } from "./ui/ui";
+import type { Tone } from "./ui/ui";
+import { IconArrowRight, IconSparkle } from "./ui/icons";
 
 interface ProviderCost {
   provider: string;
@@ -45,11 +49,24 @@ function fmtTokens(n: number): string {
   return String(n);
 }
 
-const PRIORITY_STYLES = {
-  high: "bg-red-500/20 border-red-500/40 text-red-300",
-  medium: "bg-amber-500/20 border-amber-500/40 text-amber-300",
-  low: "bg-blue-500/20 border-blue-500/40 text-blue-300",
+const PRIORITY_META: Record<Suggestion["priority"], { label: string; tone: Tone; box: string }> = {
+  high: { label: "สำคัญ", tone: "danger", box: "border-rose-400/25 bg-rose-400/[0.06]" },
+  medium: { label: "แนะนำ", tone: "warning", box: "border-amber-400/25 bg-amber-400/[0.06]" },
+  low: { label: "ทั่วไป", tone: "info", box: "border-cyan-400/20 bg-cyan-400/[0.05]" },
 };
+
+function Shell({ children }: { children: ReactNode }) {
+  return (
+    <Card>
+      <CardHeader
+        icon={<IconSparkle />}
+        title="ต้นทุนและการประหยัด"
+        subtitle="ค่าใช้จ่ายของ token ย้อนหลัง 30 วัน แยกตามผู้ให้บริการและโมเดล พร้อมคำแนะนำให้ใช้จ่ายน้อยลง"
+      />
+      {children}
+    </Card>
+  );
+}
 
 export function CostOptimizerPanel() {
   const [data, setData] = useState<CostData | null>(null);
@@ -59,8 +76,9 @@ export function CostOptimizerPanel() {
     try {
       const res = await fetch("/api/cost-optimizer");
       if (res.ok) setData(await res.json());
-    } catch { /* silent */ }
-    setLoading(false);
+    } catch { /* silent */ } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -69,13 +87,28 @@ export function CostOptimizerPanel() {
     return () => clearInterval(t);
   }, [fetchData]);
 
-  if (loading) return <div className="text-gray-500 text-center py-8">กำลังวิเคราะห์ต้นทุน...</div>;
+  if (loading) {
+    return (
+      <Shell>
+        <div className="space-y-4 p-5" aria-busy="true" aria-label="กำลังวิเคราะห์ต้นทุน">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            {[0, 1, 2, 3].map(i => <div key={i} className="skeleton h-28" />)}
+          </div>
+          <div className="skeleton h-40" />
+        </div>
+      </Shell>
+    );
+  }
   if (!data || data.summary.totalRequests === 0) {
     return (
-      <div className="glass rounded-2xl p-8 text-center text-gray-500">
-        <div className="text-4xl mb-3">💰</div>
-        <p>ยังไม่มีใบเสร็จ — เริ่มใช้งานก่อน แล้วครูจะคิดค่าเทอมให้!</p>
-      </div>
+      <Shell>
+        <EmptyState
+          icon={<IconSparkle size={22} />}
+          title="ยังไม่มีข้อมูลการใช้งาน"
+          description="เริ่มส่งคำขอผ่านเกตเวย์ก่อน แล้วระบบจะคำนวณต้นทุนและแนะนำวิธีประหยัดให้ที่นี่"
+          action={<LinkButton href="/playground" variant="primary" size="sm">ลองส่งแชท <IconArrowRight size={14} /></LinkButton>}
+        />
+      </Shell>
     );
   }
 
@@ -83,101 +116,99 @@ export function CostOptimizerPanel() {
   const maxTokens = Math.max(...providerCosts.map(p => p.total_input + p.total_output), 1);
 
   return (
-    <div className="space-y-4">
-      {/* Summary Cards */}
-      <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3">
-        <div className="bg-gray-800/50 rounded-lg p-3 text-center">
-          <div className="text-2xl font-bold text-emerald-400">${summary.totalCost.toFixed(4)}</div>
-          <div className="text-xs text-gray-400">ค่าเทอม 30 วัน</div>
+    <Shell>
+      <div className="space-y-6 p-5">
+        {/* Summary */}
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <Reveal i={0}>
+            <Stat label="ค่าใช้จ่าย 30 วัน" tone="success" value={<>$<CountUp value={summary.totalCost} decimals={4} /></>} hint="สกุลเงิน USD" />
+          </Reveal>
+          <Reveal i={1}>
+            <Stat label="Token ทั้งหมด" tone="info" value={fmtTokens(summary.totalTokens)} hint="input + output" />
+          </Reveal>
+          <Reveal i={2}>
+            <Stat label="ใช้ฟรี" tone="warning" value={<CountUp value={summary.freePct} suffix="%" />} hint="สัดส่วนที่ไม่เสียเงิน" />
+          </Reveal>
+          <Reveal i={3}>
+            <Stat label="คำขอทั้งหมด" tone="accent" value={<CountUp value={summary.totalRequests} />} hint="requests" />
+          </Reveal>
         </div>
-        <div className="bg-gray-800/50 rounded-lg p-3 text-center">
-          <div className="text-2xl font-bold text-cyan-400">{fmtTokens(summary.totalTokens)}</div>
-          <div className="text-xs text-gray-400">tokens ทั้งหมด</div>
-        </div>
-        <div className="bg-gray-800/50 rounded-lg p-3 text-center">
-          <div className="text-2xl font-bold text-amber-400">{summary.freePct.toFixed(0)}%</div>
-          <div className="text-xs text-gray-400">ใช้ฟรี</div>
-        </div>
-        <div className="bg-gray-800/50 rounded-lg p-3 text-center">
-          <div className="text-2xl font-black text-indigo-400">{summary.totalRequests}</div>
-          <div className="text-xs text-gray-400">requests ทั้งหมด</div>
-        </div>
-      </div>
 
-      {/* Suggestions */}
-      {suggestions.length > 0 && (
-        <div className="space-y-2">
-          <h4 className="text-sm font-bold text-amber-400">ครูแนะนำวิธีประหยัดค่าเทอม</h4>
-          {suggestions.map((s, i) => (
-            <div key={i} className={`rounded-lg border p-3 text-sm ${PRIORITY_STYLES[s.priority]}`}>
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-bold uppercase px-1.5 py-0.5 rounded bg-black/20">
-                  {s.priority === "high" ? "สำคัญ" : s.priority === "medium" ? "แนะนำ" : "ทั่วไป"}
-                </span>
-                <span>{s.message}</span>
-              </div>
+        {/* Suggestions */}
+        {suggestions.length > 0 && (
+          <section className="space-y-2.5">
+            <h4 className="text-[13px] font-semibold text-white">คำแนะนำประหยัดค่าใช้จ่าย</h4>
+            {suggestions.map((s, i) => {
+              const meta = PRIORITY_META[s.priority];
+              return (
+                <div key={i} className={`flex items-start gap-3 rounded-xl border px-4 py-3 text-[13px] leading-relaxed text-gray-200 ${meta.box}`}>
+                  <Badge tone={meta.tone} className="mt-0.5 shrink-0">{meta.label}</Badge>
+                  <span className="min-w-0">{s.message}</span>
+                </div>
+              );
+            })}
+          </section>
+        )}
+
+        <div className="grid gap-4 lg:grid-cols-2">
+          {/* Provider cost breakdown */}
+          <section className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
+            <h4 className="text-[13px] font-semibold text-white">ต้นทุนแยกตามผู้ให้บริการ</h4>
+            <p className="mb-4 mt-0.5 text-[12px] text-[var(--muted)]">คิดเป็น USD แม้ผู้ให้บริการจะฟรี — เก็บไว้เทียบค่าใช้จ่ายจริง</p>
+            <div className="space-y-4">
+              {providerCosts.map(p => {
+                const colors = PROVIDER_COLORS[p.provider] ?? PROVIDER_COLORS.openrouter;
+                const totalTokens = p.total_input + p.total_output;
+                const pct = (totalTokens / maxTokens) * 100;
+                return (
+                  <div key={p.provider}>
+                    <div className="mb-1.5 flex items-center justify-between gap-2">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span className={`truncate text-[13px] font-semibold ${colors.text}`}>{p.provider}</span>
+                        {p.free && <Badge tone="success">FREE</Badge>}
+                      </div>
+                      <div className="flex shrink-0 items-center gap-3 text-[12px] tabular-nums">
+                        <span className="text-[var(--muted)]">{fmtTokens(totalTokens)} token</span>
+                        <span className="font-semibold text-gray-100">${p.cost.toFixed(4)}</span>
+                      </div>
+                    </div>
+                    <div className="h-2 overflow-hidden rounded-full bg-white/5">
+                      <div
+                        className="animate-bar h-full rounded-full"
+                        style={{ width: `${pct}%`, background: PROVIDER_COLORS[p.provider]?.glow ?? "#6366f1" }}
+                      />
+                    </div>
+                    <div className="mt-1 text-[11px] tabular-nums text-[var(--muted)]">{p.requests} คำขอ</div>
+                  </div>
+                );
+              })}
             </div>
-          ))}
-        </div>
-      )}
+          </section>
 
-      <div className="grid grid-cols-[repeat(auto-fit,minmax(360px,1fr))] gap-4">
-        {/* Provider Cost Breakdown */}
-        <div className="glass rounded-xl p-4">
-          <h4 className="text-sm font-black text-white mb-2" title="แยกต้นทุน token ตามผู้ให้บริการ (คิดเป็น USD ถึงแม้ฟรี gateway เก็บไว้เทียบค่า)">ต้นทุนแยกตามผู้ให้บริการ</h4>
-          <div className="space-y-3">
-            {providerCosts.map(p => {
-              const colors = PROVIDER_COLORS[p.provider] ?? PROVIDER_COLORS.openrouter;
-              const totalTokens = p.total_input + p.total_output;
-              const pct = (totalTokens / maxTokens) * 100;
-              return (
-                <div key={p.provider}>
-                  <div className="flex items-center justify-between mb-1">
-                    <div className="flex items-center gap-2">
-                      <span className={`text-sm font-bold ${colors.text}`}>{p.provider}</span>
-                      {p.free && <span className="text-[10px] bg-emerald-500/20 text-emerald-400 px-1 rounded">FREE</span>}
+          {/* Top models by token usage */}
+          <section className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
+            <h4 className="text-[13px] font-semibold text-white">โมเดลที่ใช้ token มากสุด</h4>
+            <p className="mb-4 mt-0.5 text-[12px] text-[var(--muted)]">รวม input + output สูงสุด 8 อันดับ</p>
+            <ol className="space-y-2.5">
+              {modelUsage.slice(0, 8).map((m, i) => {
+                const colors = PROVIDER_COLORS[m.provider] ?? PROVIDER_COLORS.openrouter;
+                const total = m.total_input + m.total_output;
+                return (
+                  <li key={`${m.provider}-${m.model_id}`} className="flex items-center gap-3">
+                    <span className="grid h-6 w-6 shrink-0 place-items-center rounded-lg bg-white/5 text-[11px] font-semibold tabular-nums text-[var(--muted)]">{i + 1}</span>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate font-mono text-[12.5px] text-gray-200">{m.model_id}</div>
+                      <div className={`text-[11px] ${colors.text}`}>{m.provider}</div>
                     </div>
-                    <div className="flex items-center gap-3 text-xs">
-                      <span className="text-gray-400">{fmtTokens(totalTokens)} token</span>
-                      <span className="text-gray-300 font-bold">${p.cost.toFixed(4)}</span>
-                    </div>
-                  </div>
-                  <div className="h-2 bg-gray-800/60 rounded-full overflow-hidden">
-                    <div
-                      className="h-full rounded-full transition-all duration-500"
-                      style={{ width: `${pct}%`, background: PROVIDER_COLORS[p.provider]?.glow ?? "#6366f1" }}
-                    />
-                  </div>
-                  <div className="text-[10px] text-gray-500 mt-0.5">{p.requests} คำขอ</div>
-                </div>
-              );
-            })}
-          </div>
+                    <div className="shrink-0 text-[13px] font-medium tabular-nums text-gray-100">{fmtTokens(total)}</div>
+                  </li>
+                );
+              })}
+            </ol>
+          </section>
         </div>
 
-        {/* Top Models by Token Usage */}
-        <div className="glass rounded-xl p-4">
-          <h4 className="text-sm font-black text-white mb-2" title="model ที่ใช้ token รวม (input + output) มากสุด 8 อันดับ">โมเดลที่ใช้ token มากสุด</h4>
-          <div className="space-y-2">
-            {modelUsage.slice(0, 8).map((m, i) => {
-              const colors = PROVIDER_COLORS[m.provider] ?? PROVIDER_COLORS.openrouter;
-              const total = m.total_input + m.total_output;
-              return (
-                <div key={`${m.provider}-${m.model_id}`} className="flex items-center gap-2 text-xs">
-                  <span className="text-gray-600 w-4 text-right shrink-0">{i + 1}</span>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-gray-200 truncate">{m.model_id}</div>
-                    <div className={`text-[10px] ${colors.text}`}>{m.provider}</div>
-                  </div>
-                  <div className="text-right shrink-0">
-                    <div className="text-gray-300">{fmtTokens(total)}</div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
       </div>
-    </div>
+    </Shell>
   );
 }

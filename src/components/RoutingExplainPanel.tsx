@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { getAdminAccess } from "./admin-access";
+import { Badge, Card, CardHeader, EmptyState } from "./ui/ui";
+import { IconCheck, IconCompass } from "./ui/icons";
 
 interface Candidate {
   provider: string;
@@ -54,6 +56,12 @@ function normalizeResp(value: Resp): Resp {
   };
 }
 
+const FILTERS = [
+  { id: "all", label: "ทั้งหมด" },
+  { id: "fallback", label: "ใช้ตัวสำรอง" },
+  { id: "error", label: "ผิดพลาด" },
+] as const;
+
 export function RoutingExplainPanel() {
   const [data, setData] = useState<Resp | null>(null);
   const [filter, setFilter] = useState<"all" | "fallback" | "error">("all");
@@ -82,84 +90,84 @@ export function RoutingExplainPanel() {
     return () => { cancelled = true; clearInterval(t); };
   }, [filter]);
 
-  if (!data) {
-    return (
-      <div className="glass rounded-xl p-4 border border-violet-500/15 text-sm text-gray-400">
-        กำลังโหลด routing explain...
-      </div>
-    );
-  }
-
   return (
-    <div className="glass rounded-xl p-4 border border-violet-500/15 space-y-3">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="text-2xl">🧭</span>
-          <div>
-            <h2 className="text-xl font-black text-white leading-tight">Smart Routing Explain</h2>
-            <p className="text-xs text-gray-400">{data.total} decisions · ทุก 15 วิ</p>
+    <Card>
+      <CardHeader
+        icon={<IconCompass size={18} />}
+        title="Smart Routing Explain"
+        subtitle={data ? `เหตุผลที่ระบบเลือกโมเดลในแต่ละคำขอ · ${data.total} รายการ · อัปเดตทุก 15 วินาที` : "กำลังโหลดเหตุผลการเลือกโมเดล..."}
+        action={
+          <div className="flex gap-1" role="group" aria-label="กรองรายการ">
+            {FILTERS.map((f) => (
+              <button
+                key={f.id}
+                onClick={() => setFilter(f.id)}
+                aria-pressed={filter === f.id}
+                className={`rounded-lg border px-2.5 py-1 text-[12px] transition-colors ${
+                  filter === f.id
+                    ? "border-violet-400/40 bg-violet-400/15 text-white"
+                    : "border-white/10 bg-white/[0.03] text-[var(--muted)] hover:text-gray-200"
+                }`}
+              >
+                {f.label}
+              </button>
+            ))}
           </div>
-        </div>
-        <div className="flex gap-1">
-          {(["all", "fallback", "error"] as const).map((f) => (
-            <button
-              key={f}
-              onClick={() => setFilter(f)}
-              className={`text-xs px-2 py-1 rounded border ${filter === f ? "bg-violet-500/20 border-violet-500/40 text-white" : "bg-black/20 border-white/10 text-gray-400"}`}
-            >
-              {f}
-            </button>
-          ))}
-        </div>
-      </div>
+        }
+      />
 
-      <div className="space-y-1 max-h-96 overflow-y-auto">
-        {data.entries.length === 0 && (
-          <div className="text-sm text-gray-500 py-4 text-center">ไม่มีข้อมูล</div>
+      <div className="max-h-[28rem] space-y-2 overflow-y-auto p-5">
+        {!data && <div className="skeleton h-12" />}
+        {data && data.entries.length === 0 && (
+          <EmptyState title="ยังไม่มีข้อมูล" description="เมื่อมีคำขอผ่าน gateway เหตุผลการเลือกโมเดลจะแสดงที่นี่" />
         )}
-        {data.entries.map((e) => {
+        {data?.entries.map((e) => {
           const id = e.requestId ?? "";
           const isOpen = openId === id;
           const candidates = Array.isArray(e.explain?.candidates) ? e.explain.candidates : [];
           return (
-            <div key={id || e.at} className="border border-white/5 rounded-lg overflow-hidden">
+            <div key={id || e.at} className="overflow-hidden rounded-xl border border-white/10 bg-white/[0.02]">
               <button
                 onClick={() => setOpenId(isOpen ? null : id)}
-                className="w-full text-left px-3 py-2 hover:bg-white/5 flex items-center gap-2 text-xs"
+                aria-expanded={isOpen}
+                className="flex w-full items-center gap-2.5 px-3.5 py-2.5 text-left text-[13px] transition-colors hover:bg-white/5"
               >
-                <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${e.status >= 400 ? "bg-red-500/20 text-red-300" : "bg-emerald-500/20 text-emerald-300"}`}>
-                  {e.status}
-                </span>
-                <span className="text-gray-300 truncate flex-1">
+                <Badge tone={e.status >= 400 ? "danger" : "success"}>{e.status}</Badge>
+                <span className="min-w-0 flex-1 truncate text-gray-200">
                   {e.provider}/{e.resolvedModel ?? e.requestModel}
                 </span>
-                <span className="text-gray-500 text-[10px]">
+                <span className="hidden shrink-0 text-[12px] text-[var(--muted)] sm:inline">
                   {e.explain?.mode ?? "—"}
-                  {e.explain?.fallbackUsed && <span className="text-amber-400"> ⚠️ fallback</span>}
                 </span>
-                <span className="text-gray-500 text-[10px]">{e.latencyMs}ms</span>
+                {e.explain?.fallbackUsed && <Badge tone="warning">fallback</Badge>}
+                <span className="shrink-0 text-[12px] tabular-nums text-[var(--muted)]">{e.latencyMs} ms</span>
               </button>
               {isOpen && e.explain && (
-                <div className="px-3 py-2 bg-black/20 text-xs space-y-1.5">
-                  <div className="text-gray-400">
+                <div className="space-y-2 border-t border-white/5 bg-black/20 px-3.5 py-3 text-[13px]">
+                  <div className="text-[var(--muted)]">
                     mode=<span className="text-gray-200">{e.explain.mode}</span>{" "}
                     category=<span className="text-gray-200">{e.explain.category ?? "—"}</span>{" "}
                     selected=<span className="text-emerald-300">{e.explain.selected?.reason ?? "—"}</span>
                   </div>
                   <div>
-                    <div className="text-gray-500">Candidates ({candidates.length}):</div>
-                    <ol className="space-y-0.5 ml-3">
+                    <div className="mb-1 text-[var(--muted)]">Candidates ({candidates.length})</div>
+                    <ol className="ml-1 space-y-1">
                       {candidates.map((c, i) => (
-                        <li key={i} className="text-gray-300">
-                          {c.accepted ? "✅" : "·"} {c.provider}/{c.model}{" "}
-                          <span className="text-gray-500">— {c.reason}{c.detail ? ` (${c.detail})` : ""}</span>
+                        <li key={i} className="flex items-start gap-1.5 text-gray-300">
+                          <span className={`mt-0.5 shrink-0 ${c.accepted ? "text-emerald-300" : "text-gray-600"}`}>
+                            {c.accepted ? <IconCheck size={14} /> : <span aria-hidden>·</span>}
+                          </span>
+                          <span className="min-w-0 break-words">
+                            {c.provider}/{c.model}{" "}
+                            <span className="text-[var(--muted)]">— {c.reason}{c.detail ? ` (${c.detail})` : ""}</span>
+                          </span>
                         </li>
                       ))}
                     </ol>
                   </div>
                   {id && (
-                    <div className="text-gray-500">
-                      Trace: <a href={`/v1/trace/${id}`} target="_blank" rel="noreferrer" className="text-violet-400 hover:underline">{id}</a>
+                    <div className="break-all text-[var(--muted)]">
+                      Trace: <a href={`/v1/trace/${id}`} target="_blank" rel="noreferrer" className="text-violet-300 hover:underline">{id}</a>
                     </div>
                   )}
                 </div>
@@ -168,6 +176,6 @@ export function RoutingExplainPanel() {
           );
         })}
       </div>
-    </div>
+    </Card>
   );
 }

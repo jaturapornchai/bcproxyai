@@ -1,16 +1,16 @@
-name: sml-gateway
+name: bcai-router
 services:
-  sml-gateway:
-    image: sml-gateway
+  bcai-router:
+    image: bcai-router
     build: .
     expose:
       - "3000"
     env_file:
       - .env.local
     environment:
-      DATABASE_URL: postgres://sml:sml@postgres:5432/smlgateway
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in .env (see .env.example)}
       REDIS_URL: redis://redis:6379
-      # Ollama runs on the Docker host, not inside the sml-gateway container.
+      # Ollama runs on the Docker host, not inside the bcai-router container.
       # host.docker.internal resolves to the host on Docker Desktop / Linux 20.10+.
       OLLAMA_BASE_URL: http://host.docker.internal:11434
     extra_hosts:
@@ -21,7 +21,7 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      - sml-gateway-data:/app/data
+      - bcai-router-data:/app/data
       - ./exam-images:/app/exam-images:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health || exit 1"]
@@ -37,7 +37,7 @@ services:
     volumes:
       - ./caddy-docker.Caddyfile:/etc/caddy/Caddyfile:ro
     depends_on:
-      sml-gateway:
+      bcai-router:
         condition: service_healthy
     restart: unless-stopped
 
@@ -46,9 +46,9 @@ services:
     ports:
       - "5434:5432"
     environment:
-      POSTGRES_USER: sml
-      POSTGRES_PASSWORD: sml
-      POSTGRES_DB: smlgateway
+      POSTGRES_USER: bcai
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
+      POSTGRES_DB: bcairouter
     command:
       - "postgres"
       - "-c"
@@ -64,9 +64,9 @@ services:
       - "-c"
       - "shared_preload_libraries=pg_stat_statements"
     volumes:
-      - sml-gateway-pg:/var/lib/postgresql/data
+      - bcai-router-pg:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U sml -d smlgateway"]
+      test: ["CMD-SHELL", "pg_isready -U bcai -d bcairouter"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -92,7 +92,7 @@ services:
       - --tcp-keepalive
       - "60"
     volumes:
-      - sml-gateway-redis:/data
+      - bcai-router-redis:/data
     healthcheck:
       test: ["CMD", "valkey-cli", "ping"]
       interval: 5s
@@ -100,6 +100,6 @@ services:
       retries: 10
 
 volumes:
-  sml-gateway-data:
-  sml-gateway-pg:
-  sml-gateway-redis:
+  bcai-router-data:
+  bcai-router-pg:
+  bcai-router-redis:

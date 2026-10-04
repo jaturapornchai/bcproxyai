@@ -20,13 +20,13 @@ interface ModelRow {
   avg_latency: number | null;
 }
 
-// Virtual sml/* models
+// Virtual bcai/* models
 const VIRTUAL_MODELS = [
-  toOpenAIModelObject("sml/auto", "sml"),
-  toOpenAIModelObject("sml/fast", "sml"),
-  toOpenAIModelObject("sml/tools", "sml"),
-  toOpenAIModelObject("sml/thai", "sml"),
-  toOpenAIModelObject("sml/consensus", "sml"),
+  toOpenAIModelObject("bcai/auto", "bcai"),
+  toOpenAIModelObject("bcai/fast", "bcai"),
+  toOpenAIModelObject("bcai/tools", "bcai"),
+  toOpenAIModelObject("bcai/thai", "bcai"),
+  toOpenAIModelObject("bcai/consensus", "bcai"),
 ];
 
 export async function GET(_req: NextRequest) {

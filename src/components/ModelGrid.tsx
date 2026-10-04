@@ -1,39 +1,64 @@
 "use client";
 
+import { useMemo, useState } from "react";
 import {
   GlowDot,
-  Skeleton,
-  PROVIDER_COLORS,
+  ProviderBadge,
   TIER_LABELS,
-  TIER_COLORS,
   fmtCooldown,
   fmtCtx,
   fmtMs,
 } from "./shared";
 import type { ModelData } from "./shared";
+import { Badge, Button, Card, EmptyState, Reveal } from "./ui/ui";
+import type { Tone } from "./ui/ui";
 
-// ─── Fun Status ───────────────────────────────────────────────────────────────
-
-function getFunStatus(model: ModelData): { text: string; emoji: string } {
-  if (model.health.status === "cooldown") {
-    return { text: "พักแป๊บ", emoji: "😴" };
-  }
-  if (model.health.status === "unknown") {
-    return { text: "รอสแกน", emoji: "✏️" };
-  }
-  return { text: "พร้อมรับงาน", emoji: "💪" };
+function IconSearch({ size = 18, className }: { size?: number; className?: string }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" aria-hidden className={className}>
+      <circle cx="11" cy="11" r="7" />
+      <path d="m20 20-3.5-3.5" />
+    </svg>
+  );
 }
 
-function getSpeedLabel(ms: number): { text: string; emoji: string } {
-  if (ms <= 200) return { text: "สายฟ้า", emoji: "⚡" };
-  if (ms <= 500) return { text: "เร็วมาก", emoji: "🚀" };
-  if (ms <= 1000) return { text: "เร็ว", emoji: "🏃" };
-  if (ms <= 3000) return { text: "ปกติ", emoji: "🚶" };
-  if (ms <= 5000) return { text: "ช้าหน่อย", emoji: "🐢" };
-  return { text: "ช้ามาก", emoji: "🦥" };
+// ─── Status helpers ───────────────────────────────────────────────────────────
+
+type StatusFilter = "all" | ModelData["health"]["status"];
+
+const STATUS_TEXT: Record<ModelData["health"]["status"], string> = {
+  available: "พร้อมรับงาน",
+  cooldown: "พักชั่วคราว",
+  unknown: "ยังไม่ได้ตรวจ",
+};
+
+const STATUS_CARD: Record<ModelData["health"]["status"], string> = {
+  available: "",
+  cooldown: "opacity-70",
+  unknown: "opacity-55",
+};
+
+function getSpeedLabel(ms: number): string {
+  if (ms <= 200) return "สายฟ้า";
+  if (ms <= 500) return "เร็วมาก";
+  if (ms <= 1000) return "เร็ว";
+  if (ms <= 3000) return "ปกติ";
+  if (ms <= 5000) return "ช้าหน่อย";
+  return "ช้ามาก";
+}
+
+function scoreTone(score: number): Tone {
+  return score >= 8 ? "success" : score >= 5 ? "warning" : "danger";
+}
+
+function categoryTone(score: number): Tone {
+  return score >= 80 ? "success" : score >= 60 ? "info" : score >= 40 ? "warning" : "danger";
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
+
+// Each card has a blur surface, so render in pages instead of hundreds at once
+const PAGE_SIZE = 48;
 
 interface ModelGridProps {
   sortedModels: ModelData[];
@@ -44,139 +69,169 @@ interface ModelGridProps {
 }
 
 export function ModelGrid({ sortedModels, availableCount, cooldownCount, unknownCount, loading }: ModelGridProps) {
+  const [query, setQuery] = useState("");
+  const [status, setStatus] = useState<StatusFilter>("all");
+  const [limit, setLimit] = useState(PAGE_SIZE);
+
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return sortedModels.filter(
+      (m) =>
+        (status === "all" || m.health.status === status) &&
+        (!q || `${m.name} ${m.provider} ${m.modelId}`.toLowerCase().includes(q)),
+    );
+  }, [sortedModels, query, status]);
+
+  const filters: Array<{ id: StatusFilter; label: string; count: number; dot?: ModelData["health"]["status"] }> = [
+    { id: "all", label: "ทั้งหมด", count: sortedModels.length },
+    { id: "available", label: "พร้อมใช้", count: availableCount, dot: "available" },
+    { id: "cooldown", label: "พักชั่วคราว", count: cooldownCount, dot: "cooldown" },
+    { id: "unknown", label: "ยังไม่ตรวจ", count: unknownCount, dot: "unknown" },
+  ];
+
   return (
-    <section id="all-models" className="animate-fade-in-up stagger-3">
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="text-2xl font-black text-white flex items-center gap-3">
-          <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-cyan-500/20 text-cyan-400">
-            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
-            </svg>
-          </span>
-          ห้องเรียน AI
-        </h2>
-        <div className="flex items-center gap-3 text-xs">
-          <span className="flex items-center gap-1.5 text-emerald-400"><GlowDot status="available" /> มาเรียน ({availableCount})</span>
-          <span className="flex items-center gap-1.5 text-amber-400"><GlowDot status="cooldown" /> ลาพัก ({cooldownCount})</span>
-          <span className="flex items-center gap-1.5 text-gray-500"><GlowDot status="unknown" /> ขาดเรียน ({unknownCount})</span>
+    <div className="space-y-4">
+      {/* Toolbar: search + status filter */}
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <label className="relative block w-full lg:max-w-sm">
+          <span className="sr-only">ค้นหาโมเดล</span>
+          <IconSearch size={16} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-[var(--muted)]" />
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => { setQuery(e.target.value); setLimit(PAGE_SIZE); }}
+            placeholder="ค้นหาชื่อโมเดล หรือผู้ให้บริการ…"
+            className="w-full rounded-xl border border-white/10 bg-white/[0.04] py-2.5 pl-10 pr-3 text-[13px] text-white placeholder:text-[var(--muted)] transition-colors focus:border-violet-400/60 focus:bg-white/[0.07] focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/40"
+          />
+        </label>
+        <div className="flex flex-wrap gap-2" role="group" aria-label="กรองตามสถานะ">
+          {filters.map((f) => {
+            const active = status === f.id;
+            return (
+              <button
+                key={f.id}
+                type="button"
+                aria-pressed={active}
+                onClick={() => { setStatus(f.id); setLimit(PAGE_SIZE); }}
+                className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[12px] font-medium transition-all duration-300 ${
+                  active
+                    ? "border-violet-400/40 bg-violet-400/15 text-white"
+                    : "border-white/10 bg-white/[0.03] text-[var(--muted)] hover:border-white/20 hover:text-gray-200"
+                }`}
+              >
+                {f.dot && <GlowDot status={f.dot} />}
+                {f.label}
+                <span className="tabular-nums opacity-80">{f.count}</span>
+              </button>
+            );
+          })}
         </div>
       </div>
 
       {loading ? (
-        <div className="grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-4">
-          {Array.from({ length: 8 }).map((_, i) => (
-            <Skeleton key={i} className="h-40 rounded-xl" />
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="skeleton h-40" />
           ))}
         </div>
-      ) : sortedModels.length === 0 ? (
-        <div className="glass rounded-2xl p-12 text-center text-gray-500">
-          <div className="text-5xl mb-3">🏫</div>
-          <p>ยังไม่มีนักเรียน — กด &quot;รันตอนนี้&quot; เพื่อเปิดรับสมัคร</p>
-        </div>
+      ) : visible.length === 0 ? (
+        <Card>
+          <EmptyState
+            icon={<IconSearch size={22} />}
+            title={sortedModels.length === 0 ? "ยังไม่มีโมเดลในระบบ" : "ไม่พบโมเดลที่ตรงกับเงื่อนไข"}
+            description={
+              sortedModels.length === 0
+                ? "ใส่ API key ของผู้ให้บริการอย่างน้อย 1 เจ้า แล้วรอให้ระบบสแกนโมเดลรอบแรก"
+                : "ลองเปลี่ยนคำค้นหา หรือเลือกสถานะ “ทั้งหมด”"
+            }
+          />
+        </Card>
       ) : (
-        <div className="grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-4">
-          {sortedModels.map((model) => {
-            const pc = PROVIDER_COLORS[model.provider] ?? PROVIDER_COLORS.openrouter;
-            const cooldownText = fmtCooldown(model.health.cooldownUntil);
-            const funStatus = getFunStatus(model);
-            const speedInfo = model.health.latencyMs > 0 ? getSpeedLabel(model.health.latencyMs) : null;
+        <>
+          <p className="text-[12px] text-[var(--muted)]">
+            แสดง <span className="tabular-nums text-gray-200">{Math.min(limit, visible.length)}</span> จาก{" "}
+            <span className="tabular-nums">{visible.length}</span> โมเดล
+          </p>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {visible.slice(0, limit).map((model, idx) => {
+              const cooldownText = fmtCooldown(model.health.cooldownUntil);
+              const speed = model.health.latencyMs > 0 ? getSpeedLabel(model.health.latencyMs) : null;
+              const cats = model.categoryScores
+                ? Object.entries(model.categoryScores).sort(([, a], [, b]) => b - a)
+                : [];
 
-            return (
-              <div
-                key={model.id}
-                className={`card-3d glass rounded-xl p-4 cursor-default transition-all ${
-                  model.health.status === "available" ? "border border-emerald-500/20 hover:border-emerald-400/40" :
-                  model.health.status === "cooldown"  ? "border border-amber-500/20 hover:border-amber-400/40 opacity-60" :
-                  "border border-white/5 opacity-40"
-                }`}
-              >
-                {/* Header: name + tier badge */}
-                <div className="flex items-start justify-between gap-2 mb-2">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <GlowDot status={model.health.status} />
-                    <div className="min-w-0">
-                      <span className="text-sm text-gray-100 font-medium truncate block leading-tight">{model.provider}</span>
-                      <span className="text-xs text-gray-500 truncate block leading-tight font-mono">{model.modelId}</span>
+              return (
+                <Reveal key={model.id} i={Math.min(idx, 8)} className="h-full">
+                  <Card hover className={`h-full p-4 ${STATUS_CARD[model.health.status]}`}>
+                    {/* Header: name + tier */}
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex min-w-0 items-start gap-2.5">
+                        <span className="mt-1.5 shrink-0"><GlowDot status={model.health.status} /></span>
+                        <div className="min-w-0">
+                          <div className="truncate text-[14px] font-medium leading-tight text-white" title={model.name}>{model.name}</div>
+                          <div className="mt-0.5 truncate font-mono text-[11px] text-[var(--muted)]" title={model.modelId}>{model.modelId}</div>
+                        </div>
+                      </div>
+                      <Badge tone={model.tier === "large" ? "accent" : model.tier === "medium" ? "info" : "neutral"}>
+                        {TIER_LABELS[model.tier] ?? "S"}
+                      </Badge>
                     </div>
-                  </div>
-                  <div className="flex items-center gap-1 shrink-0">
-                    <span className={`text-xs px-1.5 py-0.5 rounded font-bold ${TIER_COLORS[model.tier] ?? TIER_COLORS.small}`}>
-                      {TIER_LABELS[model.tier] ?? "S"}
-                    </span>
-                  </div>
-                </div>
 
-                {/* Provider + context + capabilities */}
-                <div className="flex items-center gap-1.5 mb-2 flex-wrap">
-                  <span className={`text-xs px-1.5 py-0.5 rounded font-semibold ${pc.text} ${pc.bg} border ${pc.border}`}>
-                    {model.provider}
-                  </span>
-                  <span className="text-xs text-gray-600">{fmtCtx(model.contextLength)}</span>
-                  {model.supportsVision && (
-                    <span className="text-[10px] px-1 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30" title="อ่านรูปภาพได้">👁 ดูรูปได้</span>
-                  )}
-                  {model.supportsTools && (
-                    <span className="text-[10px] px-1 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30" title="รองรับ Tool Calling">🔧 tools</span>
-                  )}
-                  {speedInfo && (
-                    <span className="text-xs text-gray-600">{speedInfo.emoji} {fmtMs(model.health.latencyMs)}</span>
-                  )}
-                </div>
-
-                {/* Fun status line + benchmark score */}
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs text-gray-500">
-                    {funStatus.emoji} {funStatus.text}
-                  </span>
-                  {model.benchmark ? (
-                    <span
-                      className={`text-xs font-bold px-1.5 py-0.5 rounded ${
-                        model.benchmark.avgScore >= 8 ? "bg-emerald-500/20 text-emerald-300" :
-                        model.benchmark.avgScore >= 5 ? "bg-amber-500/20 text-amber-300" :
-                        "bg-red-500/20 text-red-300"
-                      }`}
-                      title={`${model.benchmark.questionsAnswered}/${model.benchmark.totalQuestions} ข้อ`}
-                    >
-                      ★ {model.benchmark.avgScore.toFixed(1)}
-                    </span>
-                  ) : (
-                    <span className="text-[10px] text-gray-700">ยังไม่ได้สอบ</span>
-                  )}
-                </div>
-
-                {/* Category scores */}
-                {model.categoryScores && Object.keys(model.categoryScores).length > 0 && (
-                  <div className="flex flex-wrap gap-1 mt-1">
-                    {Object.entries(model.categoryScores)
-                      .sort(([,a], [,b]) => b - a)
-                      .map(([cat, score]) => (
-                        <span
-                          key={cat}
-                          className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
-                            score >= 80 ? "bg-emerald-500/20 text-emerald-300" :
-                            score >= 60 ? "bg-cyan-500/20 text-cyan-300" :
-                            score >= 40 ? "bg-amber-500/20 text-amber-300" :
-                            "bg-red-500/20 text-red-300"
-                          }`}
-                          title={`${cat}: ${score}%`}
-                        >
-                          {cat} {score}%
+                    {/* Provider + context + capabilities */}
+                    <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                      <ProviderBadge provider={model.provider} />
+                      <span className="text-[11px] tabular-nums text-[var(--muted)]">{fmtCtx(model.contextLength)} ctx</span>
+                      {model.supportsVision && <Badge tone="accent">ดูรูปได้</Badge>}
+                      {model.supportsTools && <Badge tone="info">tools</Badge>}
+                      {speed && (
+                        <span className="text-[11px] tabular-nums text-[var(--muted)]">
+                          {speed} · {fmtMs(model.health.latencyMs)}
                         </span>
-                      ))}
-                  </div>
-                )}
+                      )}
+                    </div>
 
-                {/* Cooldown */}
-                {cooldownText && (
-                  <div className="mt-2 text-xs text-amber-400 bg-amber-500/10 rounded px-2 py-1">
-                    😴 {cooldownText}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
+                    {/* Status line + benchmark score */}
+                    <div className="mt-3 flex items-center justify-between gap-2">
+                      <span className="text-[12px] text-[var(--muted)]">{STATUS_TEXT[model.health.status]}</span>
+                      {model.benchmark ? (
+                        <span title={`${model.benchmark.questionsAnswered}/${model.benchmark.totalQuestions} ข้อ`}>
+                          <Badge tone={scoreTone(model.benchmark.avgScore)}>
+                            คะแนน {model.benchmark.avgScore.toFixed(1)}
+                          </Badge>
+                        </span>
+                      ) : (
+                        <span className="text-[11px] text-[var(--muted)]">ยังไม่ได้สอบ</span>
+                      )}
+                    </div>
+
+                    {/* Category scores */}
+                    {cats.length > 0 && (
+                      <div className="mt-2.5 flex flex-wrap gap-1">
+                        {cats.map(([cat, score]) => (
+                          <span key={cat} title={`${cat}: ${score}%`}>
+                            <Badge tone={categoryTone(score)}>{cat} {score}%</Badge>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+
+                    {cooldownText && (
+                      <div className="mt-3 rounded-lg bg-amber-400/10 px-2.5 py-1.5 text-[12px] text-amber-300">
+                        {cooldownText}
+                      </div>
+                    )}
+                  </Card>
+                </Reveal>
+              );
+            })}
+          </div>
+          {visible.length > limit && (
+            <div className="flex justify-center pt-2">
+              <Button onClick={() => setLimit((n) => n + PAGE_SIZE)}>แสดงเพิ่ม (เหลืออีก {visible.length - limit} โมเดล)</Button>
+            </div>
+          )}
+        </>
       )}
-    </section>
+    </div>
   );
 }

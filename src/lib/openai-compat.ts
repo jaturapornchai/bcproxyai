@@ -14,7 +14,7 @@ export function generateChatId(): string {
 
 // Generate system fingerprint
 export function generateFingerprint(): string {
-  return `fp_sml_${crypto.randomBytes(4).toString("hex")}`;
+  return `fp_bcai_${crypto.randomBytes(4).toString("hex")}`;
 }
 
 // Unix timestamp (seconds)

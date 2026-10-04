@@ -1,6 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { CountUp, Stat } from "./ui/ui";
+import type { Tone } from "./ui/ui";
+import { IconAlert, IconCheck, IconCube, IconPulse, IconRefresh, IconServer, IconSparkle } from "./ui/icons";
 
 interface PerfInsights {
   windowHours: number;
@@ -18,31 +21,25 @@ interface PerfInsights {
   errorRate: number;
 }
 
-function fmtPct(v: number): string {
-  return `${(v * 100).toFixed(0)}%`;
+/** Display-only: animates a 0..1 rate as a whole percent. */
+function Pct({ v }: { v: number }) {
+  return <CountUp value={v * 100} suffix="%" />;
+}
+
+/** Display-only: ms below 1s, seconds above. */
+function Ms({ v }: { v: number }) {
+  return v < 1000 ? <CountUp value={v} suffix=" ms" /> : <CountUp value={v / 1000} decimals={1} suffix=" วินาที" />;
 }
 
 function fmtMs(v: number): string {
-  if (v < 1000) return `${v} ms`;
-  return `${(v / 1000).toFixed(1)} วินาที`;
+  return v < 1000 ? `${v} ms` : `${(v / 1000).toFixed(1)} วินาที`;
 }
 
-function StatCard({
-  emoji, label, value, subtext, color, title,
-}: {
-  emoji: string; label: string; value: string; subtext?: string; color: string; title?: string;
-}) {
+/** Stat with a native tooltip that explains the metric in plain Thai. */
+function Metric({ title, ...stat }: { title: string; label: string; value: React.ReactNode; hint?: string; icon: React.ReactNode; tone: Tone; loading: boolean }) {
   return (
-    <div
-      className={`rounded-lg border ${color} px-3 py-2 flex flex-col gap-0.5`}
-      title={title}
-    >
-      <div className="flex items-center gap-1.5 text-[11px] text-gray-400 leading-tight">
-        <span className="text-sm">{emoji}</span>
-        <span>{label}</span>
-      </div>
-      <div className="text-2xl font-black text-white leading-tight">{value}</div>
-      {subtext && <div className="text-[11px] text-gray-500 leading-tight">{subtext}</div>}
+    <div title={title}>
+      <Stat {...stat} />
     </div>
   );
 }
@@ -64,94 +61,95 @@ export function PerfInsightsPanel() {
     return () => clearInterval(t);
   }, []);
 
-  if (!data) {
-    return (
-      <div className="glass rounded-xl p-4 border border-indigo-500/15 text-sm text-gray-400">
-        กำลังโหลดตัวชี้วัดประสิทธิภาพ...
-      </div>
-    );
-  }
-
-  const c = data.counts;
+  const c = data?.counts ?? {};
+  const loading = !data;
+  const healthy = (data?.errorRate ?? 0) < 0.05;
 
   return (
-    <div className="glass rounded-xl p-4 border border-indigo-500/15 space-y-3">
-      <div className="flex items-center gap-2">
-        <span className="text-2xl">⚡</span>
-        <div>
-          <h2 className="text-xl font-black text-white leading-tight">ประสิทธิภาพ (1 ชม.ล่าสุด)</h2>
-          <p className="text-xs text-gray-400 leading-tight">
-            รวม {data.requestsLastHour.toLocaleString()} คำขอ · เฉลี่ย {fmtMs(data.avgLatencyMs)} · p50 {fmtMs(data.p50LatencyMs)} · p95 {fmtMs(data.p95LatencyMs)} · ผิดพลาด {fmtPct(data.errorRate)}
-          </p>
-        </div>
+    <section aria-label="ประสิทธิภาพ 1 ชั่วโมงล่าสุด">
+      <div className="mb-4">
+        <h2 className="text-[17px] font-semibold tracking-tight text-white">ประสิทธิภาพ (1 ชม.ล่าสุด)</h2>
+        <p className="mt-1 text-[13px] text-[var(--muted)]">
+          {data
+            ? `รวม ${data.requestsLastHour.toLocaleString()} คำขอ · เฉลี่ย ${fmtMs(data.avgLatencyMs)} · p50 ${fmtMs(data.p50LatencyMs)} · p95 ${fmtMs(data.p95LatencyMs)}`
+            : "กำลังโหลดตัวชี้วัดประสิทธิภาพ..."}
+        </p>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
-        <StatCard
-          emoji="💾"
-          label="แคชตอบทันที"
-          value={fmtPct(data.rates.cacheHitRate)}
-          subtext={`${c["cache:hit"] ?? 0}/${(c["cache:hit"] ?? 0) + (c["cache:miss"] ?? 0)} ครั้ง`}
-          color="border-emerald-500/30 bg-emerald-500/5"
-          title="อัตราที่คำขอหาใน cache แล้วได้เลย (ไม่ต้องถาม upstream)"
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Metric
+          title="สัดส่วนคำขอที่ตอบสำเร็จ (status ต่ำกว่า 400)"
+          label="ตอบสำเร็จ"
+          value={data ? <Pct v={1 - data.errorRate} /> : null}
+          hint={healthy ? "สุขภาพดี" : "ตรวจ provider"}
+          icon={healthy ? <IconCheck size={16} /> : <IconAlert size={16} />}
+          tone={healthy ? "success" : "danger"}
+          loading={loading}
         />
-        <StatCard
-          emoji="🏁"
-          label="ยิงขนาน 3 ชนะ"
-          value={fmtPct(data.rates.hedgeWinRate)}
-          subtext={`${c["hedge:win"] ?? 0}/${(c["hedge:win"] ?? 0) + (c["hedge:loss"] ?? 0)} ครั้ง`}
-          color="border-cyan-500/30 bg-cyan-500/5"
-          title="Hedge top-3: ยิงไป 3 provider พร้อมกัน ตัวที่ตอบก่อนชนะ"
-        />
-        <StatCard
-          emoji="⚡"
-          label="สำรองช่วย"
-          value={c["spec:fire"] && c["spec:fire"] > 0 ? fmtPct(data.rates.speculativeWinRate) : "—"}
-          subtext={`ยิง ${c["spec:fire"] ?? 0} · ชนะ ${c["spec:win"] ?? 0}`}
-          color="border-violet-500/30 bg-violet-500/5"
-          title="Speculative hedge: ถ้าตัวแรกไม่ตอบใน 1.5 วินาที ยิงสำรองแข่งคู่กัน"
-        />
-        <StatCard
-          emoji="📌"
-          label="จำลูกค้าเก่า"
-          value={`${c["sticky:hit"] ?? 0}`}
-          subtext={`${fmtPct(data.rates.stickyPinRate)} ของคำขอ`}
-          color="border-indigo-500/30 bg-indigo-500/5"
-          title="Sticky routing: จำว่า IP + หมวดนี้ เคยใช้ model ไหน ในช่วง 30 วินาทีที่แล้ว"
-        />
-        <StatCard
-          emoji="🚫"
-          label="provider ถูกพัก"
-          value={`${c["demote:rate-limit"] ?? 0}`}
-          subtext="เจอ 429 ซ้ำ → พัก 5 นาที"
-          color="border-amber-500/30 bg-amber-500/5"
-          title="Auto-demote: provider ถูกจำกัดอัตรา (429) ≥ 5 ครั้งใน 30 วินาที → ระบบปิดใช้ชั่วคราว 5 นาที"
-        />
-        <StatCard
-          emoji="📈"
+        <Metric
+          title="ครึ่งหนึ่งของคำขอตอบเร็วกว่านี้ (p50)"
           label="p50 เวลาตอบ"
-          value={fmtMs(data.p50LatencyMs)}
-          subtext={`p95 ${fmtMs(data.p95LatencyMs)}`}
-          color="border-teal-500/30 bg-teal-500/5"
-          title="ครึ่งนึงของคำขอตอบเร็วกว่านี้ (p50) / 95% เร็วกว่านี้ (p95)"
+          value={data ? <Ms v={data.p50LatencyMs} /> : null}
+          hint={data ? `p95 ${fmtMs(data.p95LatencyMs)}` : undefined}
+          icon={<IconPulse size={16} />}
+          tone="info"
+          loading={loading}
         />
-        <StatCard
-          emoji="📊"
+        <Metric
+          title="จำนวนคำขอทั้งหมดใน 1 ชั่วโมงล่าสุด"
           label="ปริมาณงาน"
-          value={`${data.requestsLastHour.toLocaleString()}`}
-          subtext="คำขอ / ชม."
-          color="border-blue-500/30 bg-blue-500/5"
-          title="จำนวน request ทั้งหมดใน 1 ชั่วโมงล่าสุด"
+          value={data ? <CountUp value={data.requestsLastHour} /> : null}
+          hint="คำขอ / ชม."
+          icon={<IconServer size={16} />}
+          tone="accent"
+          loading={loading}
         />
-        <StatCard
-          emoji={data.errorRate < 0.05 ? "✅" : "⚠️"}
-          label="อัตราผิดพลาด"
-          value={fmtPct(data.errorRate)}
-          subtext={data.errorRate < 0.05 ? "สุขภาพดี" : "เช็ค provider"}
-          color={data.errorRate < 0.05 ? "border-emerald-500/30 bg-emerald-500/5" : "border-red-500/30 bg-red-500/5"}
-          title="สัดส่วนคำขอที่ตอบไม่สำเร็จ (status ≥ 400)"
+        <Metric
+          title="อัตราที่คำขอหาใน cache แล้วได้คำตอบเลย (ไม่ต้องถาม upstream)"
+          label="แคชตอบทันที"
+          value={data ? <Pct v={data.rates.cacheHitRate} /> : null}
+          hint={`${c["cache:hit"] ?? 0}/${(c["cache:hit"] ?? 0) + (c["cache:miss"] ?? 0)} ครั้ง`}
+          icon={<IconCube size={16} />}
+          tone="success"
+          loading={loading}
+        />
+        <Metric
+          title="Hedge top-3: ยิงไป 3 provider พร้อมกัน ตัวที่ตอบก่อนชนะ"
+          label="ยิงขนาน 3 ชนะ"
+          value={data ? <Pct v={data.rates.hedgeWinRate} /> : null}
+          hint={`${c["hedge:win"] ?? 0}/${(c["hedge:win"] ?? 0) + (c["hedge:loss"] ?? 0)} ครั้ง`}
+          icon={<IconRefresh size={16} />}
+          tone="info"
+          loading={loading}
+        />
+        <Metric
+          title="Speculative hedge: ถ้าตัวแรกไม่ตอบใน 1.5 วินาที ยิงสำรองแข่งคู่กัน"
+          label="สำรองช่วย"
+          value={data ? (c["spec:fire"] && c["spec:fire"] > 0 ? <Pct v={data.rates.speculativeWinRate} /> : "—") : null}
+          hint={`ยิง ${c["spec:fire"] ?? 0} · ชนะ ${c["spec:win"] ?? 0}`}
+          icon={<IconSparkle size={16} />}
+          tone="accent"
+          loading={loading}
+        />
+        <Metric
+          title="Sticky routing: จำว่า IP + หมวดนี้ เคยใช้ model ไหน ในช่วง 30 วินาทีที่แล้ว"
+          label="จำลูกค้าเก่า"
+          value={data ? <CountUp value={c["sticky:hit"] ?? 0} /> : null}
+          hint={data ? `${(data.rates.stickyPinRate * 100).toFixed(0)}% ของคำขอ` : undefined}
+          icon={<IconCheck size={16} />}
+          tone="neutral"
+          loading={loading}
+        />
+        <Metric
+          title="Auto-demote: provider โดนจำกัดอัตรา (429) อย่างน้อย 5 ครั้งใน 30 วินาที ระบบปิดใช้ชั่วคราว 5 นาที"
+          label="provider ถูกพัก"
+          value={data ? <CountUp value={c["demote:rate-limit"] ?? 0} /> : null}
+          hint="เจอ 429 ซ้ำ → พัก 5 นาที"
+          icon={<IconAlert size={16} />}
+          tone="warning"
+          loading={loading}
         />
       </div>
-    </div>
+    </section>
   );
 }

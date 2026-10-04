@@ -1,15 +1,15 @@
 {
   "mcpServers": {
-    "sml-gateway": {
+    "bcai-router": {
       "command": "node",
       "args": ["dist/mcp/server.js"],
-      "cwd": "<path-to-sml-gateway>",
+      "cwd": "<path-to-bcai-router>",
       "env": {
         "OPENROUTER_API_KEY": "<your-openrouter-api-key>",
         "KILO_API_KEY": "",
         "GOOGLE_AI_API_KEY": "",
         "GROQ_API_KEY": "<your-groq-api-key>",
-        "BCPROXYAI_API_URL": "http://localhost:3333"
+        "BCAI_ROUTER_API_URL": "http://localhost:3333"
       }
     }
   }

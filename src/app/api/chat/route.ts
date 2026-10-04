@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { getNextApiKey } from "@/lib/api-keys";
 import { resolveProviderUrl } from "@/lib/provider-resolver";
-import { costPolicyBlockMessage, isModelCostAllowed } from "@/lib/cost-policy";
+import { applyNoSpendGuards, costPolicyBlockMessage, isModelCostAllowed } from "@/lib/cost-policy";
 
 export const dynamic = "force-dynamic";
 
@@ -42,8 +42,8 @@ export async function POST(req: NextRequest) {
     };
     if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
     if (provider === "openrouter") {
-      headers["HTTP-Referer"] = "https://sml-gateway.app";
-      headers["X-Title"] = "SMLGateway";
+      headers["HTTP-Referer"] = "https://bcai-router.app";
+      headers["X-Title"] = "BCAiRouter";
     }
 
     // Simple messages format — only role + content string
@@ -52,12 +52,12 @@ export async function POST(req: NextRequest) {
     const res = await fetch(url, {
       method: "POST",
       headers,
-      body: JSON.stringify({
+      body: JSON.stringify(applyNoSpendGuards(provider, {
         model: modelId,
         messages: cleanMessages,
         stream: true,
         max_tokens: 2048,
-      }),
+      })),
       signal: upstreamCtrl.signal,
     });
 

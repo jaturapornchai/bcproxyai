@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
  * GET /v1/trace/:reqId
  *
  * Returns the gateway log entry for a given request id (from response header
- * X-SMLGateway-Request-Id). Lets devs inspect what happened: which model
+ * X-BCAiRouter-Request-Id). Lets devs inspect what happened: which model
  * answered, which provider, latency, input/output tokens, error (if any),
  * user message, assistant message.
  *

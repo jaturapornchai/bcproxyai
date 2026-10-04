@@ -74,8 +74,12 @@ export async function GET(req: NextRequest) {
       catScoreMap.set(r.model_id, existing);
     }
 
+    // Offer only models the gateway can actually serve for free: cost-policy allowed AND the provider has a stored key.
+    const keyRows = await sql<Array<{ provider: string }>>`SELECT provider FROM api_keys WHERE api_key <> ''`;
+    const keyedProviders = new Set(keyRows.map((k) => k.provider));
+
     const now = new Date();
-    const result = rows.filter((r) => isModelCostAllowed(String(r.provider), String(r.modelId))).map((r) => {
+    const result = rows.filter((r) => keyedProviders.has(String(r.provider)) && isModelCostAllowed(String(r.provider), String(r.modelId))).map((r) => {
       let healthStatusFinal = (r.healthStatus as string) ?? "unknown";
       if (r.cooldownUntil && new Date(r.cooldownUntil as string) > now) {
         healthStatusFinal = "cooldown";

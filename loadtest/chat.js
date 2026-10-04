@@ -30,14 +30,14 @@ const CATEGORIES = [
   {
     name: 'thai',
     body: () => ({
-      model: 'sml/auto',
+      model: 'bcai/auto',
       messages: [{ role: 'user', content: 'ตอบสั้นๆว่า "สวัสดี" คำเดียว' }],
     }),
   },
   {
     name: 'code',
     body: () => ({
-      model: 'sml/auto',
+      model: 'bcai/auto',
       messages: [
         {
           role: 'user',
@@ -49,7 +49,7 @@ const CATEGORIES = [
   {
     name: 'tools',
     body: () => ({
-      model: 'sml/auto',
+      model: 'bcai/auto',
       messages: [
         { role: 'user', content: 'What is the weather in Bangkok? Use tools if needed.' },
       ],
@@ -72,7 +72,7 @@ const CATEGORIES = [
   {
     name: 'vision',
     body: () => ({
-      model: 'sml/auto',
+      model: 'bcai/auto',
       messages: [
         {
           role: 'user',
@@ -93,7 +93,7 @@ const CATEGORIES = [
   {
     name: 'long-context',
     body: () => ({
-      model: 'sml/auto',
+      model: 'bcai/auto',
       messages: [
         {
           role: 'user',

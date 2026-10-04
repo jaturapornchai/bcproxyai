@@ -35,7 +35,9 @@ vi.mock("@/lib/provider-resolver", () => ({
   ),
 }));
 
-vi.mock("@/lib/cost-policy", () => ({
+// Real applyNoSpendGuards so tests see the exact upstream body.
+vi.mock("@/lib/cost-policy", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/cost-policy")>()),
   isModelCostAllowed: vi.fn(() => true),
   isProviderCostAllowed: vi.fn(() => true),
   costPolicyBlockMessage: vi.fn((p: string, m?: string) => `blocked ${p}/${m ?? ""}`),
@@ -49,9 +51,10 @@ const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
 import { askModel, judgeAnswer, runBenchmarks } from "../benchmark";
+import { getNextApiKey } from "@/lib/api-keys";
 
 beforeEach(() => {
-  vi.stubEnv("SML_ALLOW_PAID_PROVIDERS", "1");
+  vi.stubEnv("BCAI_ALLOW_PAID_PROVIDERS", "1");
   vi.clearAllMocks();
   mockModels = [];
   mockSummaryRows = [];
@@ -129,10 +132,22 @@ describe("askModel", () => {
     await askModel("openrouter", "test-model", "hi");
 
     const headers = mockFetch.mock.calls[0][1].headers;
-    expect(headers["HTTP-Referer"]).toBe("https://sml-gateway.app");
-    expect(headers["X-Title"]).toBe("SMLGateway");
+    expect(headers["HTTP-Referer"]).toBe("https://bcai-router.app");
+    expect(headers["X-Title"]).toBe("BCAiRouter");
+    // no-spend guard: OpenRouter refuses anything priced above $0
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.provider).toEqual({ max_price: { prompt: 0, completion: 0, request: 0, image: 0 } });
+  });
+
+  it("never calls the provider without a stored key", async () => {
+    vi.mocked(getNextApiKey).mockReturnValueOnce("");
+    const result = await askModel("github", "openai/gpt-4o-mini", "hi");
+    expect(result.error).toBe("no api key");
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 });
+
+const q = (question: string) => ({ category: "test", question, type: "text" as const, judgeCriteria: "test" });
 
 describe("judgeAnswer", () => {
   beforeEach(() => {
@@ -140,7 +155,7 @@ describe("judgeAnswer", () => {
   });
 
   it("returns score 0 for empty answer", async () => {
-    const result = await judgeAnswer("test question", "");
+    const result = await judgeAnswer(q("test question"), "");
     expect(result.score).toBe(0);
     expect(result.reasoning).toBe("No answer provided");
     // No fetch should be called
@@ -159,7 +174,7 @@ describe("judgeAnswer", () => {
       }),
     });
 
-    const result = await judgeAnswer("สวัสดี", "สวัสดีครับ");
+    const result = await judgeAnswer(q("สวัสดี"), "สวัสดีครับ");
     expect(result.score).toBe(8);
     expect(result.reasoning).toBe("[DeepSeek] Good Thai response");
   });
@@ -176,7 +191,7 @@ describe("judgeAnswer", () => {
       }),
     });
 
-    const result = await judgeAnswer("question", "answer");
+    const result = await judgeAnswer(q("question"), "answer");
     expect(result.score).toBe(7);
     expect(result.reasoning).toBe("[DeepSeek] Pretty good");
   });
@@ -191,7 +206,7 @@ describe("judgeAnswer", () => {
       }),
     });
 
-    const result = await judgeAnswer("q", "a");
+    const result = await judgeAnswer(q("q"), "a");
     expect(result.score).toBe(10);
   });
 
@@ -205,7 +220,7 @@ describe("judgeAnswer", () => {
       }),
     });
 
-    const result = await judgeAnswer("q", "a");
+    const result = await judgeAnswer(q("q"), "a");
     expect(result.score).toBe(0);
   });
 
@@ -222,7 +237,7 @@ describe("judgeAnswer", () => {
       }),
     });
 
-    const result = await judgeAnswer("q", "some answer");
+    const result = await judgeAnswer(q("q"), "some answer");
     expect(result.score).toBe(6);
     expect(mockFetch).toHaveBeenCalledTimes(2);
   });
@@ -231,7 +246,7 @@ describe("judgeAnswer", () => {
     // All 3 judges fail
     mockFetch.mockResolvedValue({ ok: false });
 
-    const result = await judgeAnswer("q", "This is a long enough answer to get heuristic");
+    const result = await judgeAnswer(q("q"), "This is a long enough answer to get heuristic");
     expect(result.score).toBe(5); // hasContent = true -> score 5
     expect(result.reasoning).toContain("heuristic");
   });
@@ -239,7 +254,7 @@ describe("judgeAnswer", () => {
   it("returns heuristic score 0 for short answer when all judges fail", async () => {
     mockFetch.mockResolvedValue({ ok: false });
 
-    const result = await judgeAnswer("q", "short");
+    const result = await judgeAnswer(q("q"), "short");
     expect(result.score).toBe(0); // <= 10 chars
     expect(result.reasoning).toContain("heuristic");
   });

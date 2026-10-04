@@ -59,6 +59,8 @@ export async function POST(req: NextRequest) {
     // app itself. We call the chat endpoint through the in-container port to avoid
     // round-tripping through caddy.
     const baseUrl = process.env.INTERNAL_BASE_URL ?? "http://localhost:3000";
+    // The /v1 gate checks this internal call too — forward the caller's Bearer.
+    const authorization = req.headers.get("authorization");
 
     const results = await Promise.all(
       models.map(async (model) => {
@@ -68,15 +70,15 @@ export async function POST(req: NextRequest) {
         try {
           const res = await fetch(`${baseUrl}/v1/chat/completions`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", ...(authorization ? { Authorization: authorization } : {}) },
             body: JSON.stringify({
               model, messages, max_tokens, temperature, stream: false,
             }),
             signal: controller.signal,
           });
           const latency = Date.now() - t0;
-          const provider = res.headers.get("x-smlgateway-provider");
-          const actualModel = res.headers.get("x-smlgateway-model");
+          const provider = res.headers.get("x-bcairouter-provider");
+          const actualModel = res.headers.get("x-bcairouter-model");
 
           if (!res.ok) {
             const errText = await res.text().catch(() => "");

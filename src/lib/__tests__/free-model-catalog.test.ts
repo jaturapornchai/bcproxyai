@@ -8,6 +8,7 @@ import {
   isHardcodedFreeModel,
   getRpmLimit,
 } from "@/lib/free-model-catalog";
+import { PROVIDER_EMBEDDING_URLS, PROVIDER_URLS } from "@/lib/providers";
 
 describe("deprecation watcher", () => {
   it("isModelDeprecated returns false when no deprecatedAfter", () => {
@@ -79,5 +80,26 @@ describe("getRpmLimit", () => {
 
   it("returns undefined for an unknown provider", () => {
     expect(getRpmLimit("unknown_provider_xyz", "any-model")).toBeUndefined();
+  });
+});
+
+describe("provider endpoints", () => {
+  it("every catalog provider has a chat endpoint", () => {
+    for (const m of FREE_MODEL_CATALOG) expect(PROVIDER_URLS[m.provider], m.provider).toBeTruthy();
+  });
+
+  it("providers with no free path have no catalog entry and no endpoint to call", () => {
+    for (const provider of ["together", "huggingface", "github", "google"]) {
+      expect(FREE_MODEL_CATALOG.some((m) => m.provider === provider)).toBe(false);
+      expect(PROVIDER_URLS[provider]).toBeUndefined();
+      expect(PROVIDER_EMBEDDING_URLS[provider]).toBeUndefined();
+    }
+  });
+
+  it("no direct Google AI Studio endpoint anywhere; Google-made models via OpenRouter stay", () => {
+    for (const url of [...Object.values(PROVIDER_URLS), ...Object.values(PROVIDER_EMBEDDING_URLS)]) {
+      expect(url).not.toContain("generativelanguage");
+    }
+    expect(FREE_MODEL_CATALOG.some((m) => m.provider === "openrouter" && m.modelId.startsWith("google/gemma-"))).toBe(true);
   });
 });

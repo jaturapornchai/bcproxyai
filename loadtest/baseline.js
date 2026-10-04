@@ -27,7 +27,7 @@ const req429 = new Counter('k6_req_429');
 const req5xx = new Counter('k6_req_5xx');
 
 const payload = JSON.stringify({
-  model: 'sml/fast',
+  model: 'bcai/fast',
   messages: [{ role: 'user', content: 'say hi' }],
   max_tokens: 5,
 });

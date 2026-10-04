@@ -164,7 +164,7 @@ export async function GET() {
   }
 
   // ── Cooldowns ─────────────────────────────────────────────────────────────────
-  let cooldowns = {
+  const cooldowns = {
     providerCount: 0,
     modelCount: 0,
     totalModels: 0,

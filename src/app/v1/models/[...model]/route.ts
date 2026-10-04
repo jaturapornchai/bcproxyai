@@ -4,19 +4,19 @@ import { FREE_MODEL_CATALOG } from "@/lib/free-model-catalog";
 
 export const dynamic = "force-dynamic";
 
-// Virtual sml/* models — must match entries in /v1/models/route.ts
+// Virtual bcai/* models — must match entries in /v1/models/route.ts
 const VIRTUAL_MODELS: Record<string, { description: string }> = {
-  "sml/auto": { description: "Best available model (highest benchmark score)" },
-  "sml/fast": { description: "Fastest model (lowest latency)" },
-  "sml/tools": { description: "Best model that supports tool calling" },
-  "sml/thai": { description: "Best model for Thai language" },
-  "sml/consensus": { description: "Send to 3 models, pick best answer" },
+  "bcai/auto": { description: "Best available model (highest benchmark score)" },
+  "bcai/fast": { description: "Fastest model (lowest latency)" },
+  "bcai/tools": { description: "Best model that supports tool calling" },
+  "bcai/thai": { description: "Best model for Thai language" },
+  "bcai/consensus": { description: "Send to 3 models, pick best answer" },
 };
 
 /**
  * GET /v1/models/:modelId
  *
- * Catch-all so multi-segment ids (e.g. "sml/tools", "groq/moonshotai/kimi-k2")
+ * Catch-all so multi-segment ids (e.g. "bcai/tools", "groq/moonshotai/kimi-k2")
  * resolve correctly. Next.js' single-segment [model] route would 404 with
  * Next's default HTML page, breaking OpenAI SDK clients that pre-validate
  * model existence.
@@ -38,7 +38,7 @@ export async function GET(
     // Virtual models first
     if (VIRTUAL_MODELS[modelId]) {
       return NextResponse.json(
-        toOpenAIModelObject(modelId, "sml", unixNow()),
+        toOpenAIModelObject(modelId, "bcai", unixNow()),
         { headers: { "Access-Control-Allow-Origin": "*" } }
       );
     }

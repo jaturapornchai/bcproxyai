@@ -2,6 +2,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { getAdminAccess } from "./admin-access";
+import { IconPulse } from "./ui/icons";
+import { LiveNumber } from "./StatsCards";
+import { Card, CardHeader } from "./ui/ui";
 
 interface WarmupLog {
   createdAt: string;
@@ -28,11 +31,11 @@ function formatRelative(iso: string | null): string {
 function levelColor(level: string): string {
   switch (level) {
     case "error":
-      return "text-red-400";
+      return "text-rose-300";
     case "warn":
-      return "text-amber-400";
+      return "text-amber-300";
     case "success":
-      return "text-emerald-400";
+      return "text-emerald-300";
     default:
       return "text-gray-400";
   }
@@ -68,76 +71,62 @@ export function WarmupPanel() {
       ? "text-emerald-300"
       : stats && stats.successRate >= 50
         ? "text-amber-300"
-        : "text-red-300";
+        : "text-rose-300";
 
   return (
-    <div className="glass rounded-xl p-3 border border-white/10">
-      <div className="flex items-center justify-between mb-2">
-        <h2 className="text-xl font-black text-white flex items-center gap-2" title="อุ่นเครื่อง model ที่ผ่านสอบ ทุก 2 นาที กัน TCP socket ตาย">
-          <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-orange-500 to-red-500 text-white">
-            🔥
-          </span>
-          อุ่นเครื่อง (Warmup)
-        </h2>
-        <span className="text-xs text-gray-400">
-          ping ทุก 2 นาที · ครั้งล่าสุด {formatRelative(stats?.lastRunAt ?? null)}
-        </span>
+    <Card>
+      <CardHeader
+        title="อุ่นเครื่อง (Warmup)"
+        subtitle={`ระบบส่งคำถามสั้นๆ หาโมเดลที่สอบผ่านทุก 2 นาที เพื่อให้พร้อมตอบทันที · ครั้งล่าสุด ${formatRelative(stats?.lastRunAt ?? null)}`}
+        icon={<IconPulse size={18} />}
+      />
+
+      <div className="p-5">
+        {loading ? (
+          <div className="grid grid-cols-2 gap-3">
+            <div className="skeleton h-20" />
+            <div className="skeleton h-20" />
+          </div>
+        ) : !stats ? (
+          <p className="py-4 text-center text-[13px] text-[var(--muted)]">ไม่สามารถโหลดข้อมูลได้</p>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="rounded-2xl border border-orange-400/20 bg-orange-400/[0.07] px-4 py-3" title="จำนวน ping ไปหาโมเดลใน 24 ชม.ล่าสุด">
+                <div className="text-[12px] text-orange-200">ping ใน 24 ชม.</div>
+                <div className="mt-1 text-[26px] font-semibold leading-tight text-white">
+                  <LiveNumber value={stats.totalPings24h} />
+                </div>
+              </div>
+              <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3" title="สัดส่วนที่ ping สำเร็จ = โมเดลยังพร้อมใช้">
+                <div className="text-[12px] text-[var(--muted)]">อัตราสำเร็จ</div>
+                <div className={`mt-1 text-[26px] font-semibold leading-tight ${rateColor}`}>
+                  <LiveNumber value={stats.successRate} decimals={1} suffix="%" />
+                </div>
+              </div>
+            </div>
+
+            <div className="mb-2 mt-5 text-[12px] font-medium text-[var(--muted)]">ประวัติอุ่นเครื่องล่าสุด</div>
+            {stats.recentLogs.length === 0 ? (
+              <p className="py-3 text-center text-[13px] text-[var(--muted)]">
+                ยังไม่มีประวัติ — worker จะเริ่มอุ่นเครื่องหลัง deploy ประมาณ 30 วินาที
+              </p>
+            ) : (
+              <div className="font-mono text-[11px]">
+                {stats.recentLogs.map((log, i) => {
+                  const time = new Date(log.createdAt).toLocaleTimeString("th-TH", { hour12: false });
+                  return (
+                    <div key={i} className="flex items-start gap-3 border-b border-white/[0.05] py-1.5 last:border-0">
+                      <span className="shrink-0 tabular-nums text-[var(--muted)]">{time}</span>
+                      <span className={`min-w-0 break-words ${levelColor(log.level)}`}>{log.message}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </>
+        )}
       </div>
-
-      {loading ? (
-        <div className="text-sm text-gray-500">กำลังโหลด…</div>
-      ) : !stats ? (
-        <div className="text-sm text-gray-500">ไม่สามารถโหลดข้อมูลได้</div>
-      ) : (
-        <>
-          <div className="grid grid-cols-2 gap-2 mb-3">
-            <div className="rounded-lg bg-orange-500/10 border border-orange-500/20 px-3 py-2" title="จำนวน ping ไป model ใน 24 ชม.ล่าสุด">
-              <div className="text-[11px] text-orange-300">
-                ping ใน 24 ชม.
-              </div>
-              <div className="text-2xl font-black text-orange-200 leading-tight">
-                {stats.totalPings24h.toLocaleString()}
-              </div>
-            </div>
-            <div className="rounded-lg bg-red-500/10 border border-red-500/20 px-3 py-2" title="สัดส่วนที่ ping สำเร็จ = model ยังพร้อมใช้">
-              <div className="text-[11px] text-red-300">
-                สำเร็จ
-              </div>
-              <div className={`text-2xl font-black ${rateColor} leading-tight`}>
-                {stats.successRate.toFixed(1)}%
-              </div>
-            </div>
-          </div>
-
-          <div className="text-[11px] text-gray-500 mb-1.5">
-            ประวัติอุ่นเครื่องล่าสุด
-          </div>
-          {stats.recentLogs.length === 0 ? (
-            <div className="text-xs text-gray-500 py-2 text-center">
-              ยังไม่มีประวัติ warmup — worker จะเริ่มทำงานหลัง deploy 30 วินาที
-            </div>
-          ) : (
-            <div className="space-y-1 font-mono text-[11px]">
-              {stats.recentLogs.map((log, i) => {
-                const time = new Date(log.createdAt).toLocaleTimeString("th-TH", {
-                  hour12: false,
-                });
-                return (
-                  <div
-                    key={i}
-                    className="flex items-start gap-2 py-1 border-b border-gray-800/40 last:border-0"
-                  >
-                    <span className="text-gray-600 shrink-0">{time}</span>
-                    <span className={levelColor(log.level)}>
-                      {log.message}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </>
-      )}
-    </div>
+    </Card>
   );
 }

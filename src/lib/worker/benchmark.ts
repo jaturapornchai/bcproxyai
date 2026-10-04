@@ -1,7 +1,7 @@
 import { getSqlClient } from "@/lib/db/schema";
 import { getNextApiKey } from "@/lib/api-keys";
 import { resolveProviderUrl } from "@/lib/provider-resolver";
-import { costPolicyBlockMessage, isModelCostAllowed } from "@/lib/cost-policy";
+import { applyNoSpendGuards, costPolicyBlockMessage, isModelCostAllowed } from "@/lib/cost-policy";
 
 // DeepSeek as judge (cheap + reliable) — key resolved from DB at call time
 const DEEPSEEK_MODEL = "deepseek-chat";
@@ -118,15 +118,16 @@ interface DbModel {
   benchmark_count: number;
 }
 
-function buildHeaders(provider: string): Record<string, string> {
+function buildHeaders(provider: string): Record<string, string> | null {
   const key = getNextApiKey(provider);
+  if (!key) return null;
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Authorization: `Bearer ${key}`,
   };
   if (provider === "openrouter") {
-    headers["HTTP-Referer"] = "https://sml-gateway.app";
-    headers["X-Title"] = "SMLGateway";
+    headers["HTTP-Referer"] = "https://bcai-router.app";
+    headers["X-Title"] = "BCAiRouter";
   }
   return headers;
 }
@@ -145,6 +146,8 @@ export async function askModel(
 
   const url = resolveProviderUrl(provider);
   if (!url) return { answer: "", latency: 0, error: "unknown provider" };
+  const headers = buildHeaders(provider);
+  if (!headers) return { answer: "", latency: 0, error: "no api key" };
 
   const start = Date.now();
   try {
@@ -160,12 +163,12 @@ export async function askModel(
 
     const res = await fetch(url, {
       method: "POST",
-      headers: buildHeaders(provider),
-      body: JSON.stringify({
+      headers,
+      body: JSON.stringify(applyNoSpendGuards(provider, {
         model: modelId,
         messages: [{ role: "user", content }],
         max_tokens: 300,
-      }),
+      })),
       signal: AbortSignal.timeout(30000),
     });
     const latency = Date.now() - start;
@@ -212,11 +215,11 @@ export async function judgeAnswer(
           "Content-Type": "application/json",
           Authorization: `Bearer ${deepseekKey}`,
         },
-        body: JSON.stringify({
+        body: JSON.stringify(applyNoSpendGuards("deepseek", {
           model: DEEPSEEK_MODEL,
           messages: [{ role: "user", content: prompt }],
           max_tokens: 200,
-        }),
+        })),
         signal: AbortSignal.timeout(20000),
       });
 
@@ -240,15 +243,17 @@ export async function judgeAnswer(
   // Fallback: free models from OpenRouter
   for (const judgeModel of FALLBACK_JUDGE_MODELS) {
     if (!isModelCostAllowed("openrouter", judgeModel)) continue;
+    const headers = buildHeaders("openrouter");
+    if (!headers) break;
     try {
       const res = await fetch(resolveProviderUrl("openrouter"), {
         method: "POST",
-        headers: buildHeaders("openrouter"),
-        body: JSON.stringify({
+        headers,
+        body: JSON.stringify(applyNoSpendGuards("openrouter", {
           model: judgeModel,
           messages: [{ role: "user", content: prompt }],
           max_tokens: 200,
-        }),
+        })),
         signal: AbortSignal.timeout(20000),
       });
 

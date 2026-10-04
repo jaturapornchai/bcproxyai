@@ -1,7 +1,7 @@
 import { getRedis } from "@/lib/redis";
 
 // ─── Worker leader election ───
-// When sml-gateway scales to multiple replicas, only ONE replica should run
+// When bcai-router scales to multiple replicas, only ONE replica should run
 // the scan/health cron cycle. We use a Redis SETNX lock with a TTL that's
 // slightly longer than the cycle duration.
 //

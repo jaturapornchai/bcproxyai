@@ -9,13 +9,13 @@ export const dynamic = "force-dynamic";
  *
  * Body:
  *   {
- *     model?: string,               // default "sml/auto"
+ *     model?: string,               // default "bcai/auto"
  *     messages: [...],              // OpenAI-style
  *     schema: object,                // JSON schema (keys-only validation)
  *     max_retries?: number,          // default 2
  *     temperature?: number,
  *     max_tokens?: number,
- *     ... extra pass-through (prefer/exclude/strategy headers work too)
+ *     ...only PASSTHROUGH_KEYS extras are forwarded (prefer/exclude/strategy headers work too)
  *   }
  *
  * Response:
@@ -41,6 +41,9 @@ type Schema = {
   required?: string[];
   properties?: Record<string, { type?: string }>;
 };
+
+// Standard OpenAI chat params only — routing/provider/plugin keys never reach the internal chat call.
+const PASSTHROUGH_KEYS = ["top_p", "stop", "seed", "presence_penalty", "frequency_penalty", "max_completion_tokens", "user"];
 
 function tryParseJson(content: string): unknown {
   const stripped = content
@@ -94,7 +97,7 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const {
-      model = "sml/auto",
+      model = "bcai/auto",
       messages,
       schema,
       max_retries = 2,
@@ -139,8 +142,8 @@ export async function POST(req: NextRequest) {
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const headers: Record<string, string> = { "Content-Type": "application/json" };
-      // pass through dev headers from the outer request
-      for (const h of ["x-smlgateway-prefer", "x-smlgateway-exclude", "x-smlgateway-strategy", "x-smlgateway-max-latency"]) {
+      // pass through auth (the /v1 gate needs the caller's Bearer) + dev headers from the outer request
+      for (const h of ["authorization", "x-bcairouter-prefer", "x-bcairouter-exclude", "x-bcairouter-strategy", "x-bcairouter-max-latency"]) {
         const v = req.headers.get(h);
         if (v) headers[h] = v;
       }
@@ -155,14 +158,14 @@ export async function POST(req: NextRequest) {
           max_tokens,
           response_format: { type: "json_object" },
           stream: false,
-          ...extra,
+          ...Object.fromEntries(Object.entries(extra).filter(([key]) => PASSTHROUGH_KEYS.includes(key))),
         }),
       });
 
-      const reqId = res.headers.get("x-smlgateway-request-id");
+      const reqId = res.headers.get("x-bcairouter-request-id");
       if (reqId) requestIds.push(reqId);
-      lastProvider = res.headers.get("x-smlgateway-provider") || lastProvider;
-      lastModel = res.headers.get("x-smlgateway-model") || lastModel;
+      lastProvider = res.headers.get("x-bcairouter-provider") || lastProvider;
+      lastModel = res.headers.get("x-bcairouter-model") || lastModel;
 
       if (!res.ok) {
         lastError = `HTTP ${res.status} from gateway`;

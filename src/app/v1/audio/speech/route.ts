@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { getNextApiKey } from "@/lib/api-keys";
 import { openAIError } from "@/lib/openai-compat";
 import { costPolicyBlockMessage, isProviderCostAllowed } from "@/lib/cost-policy";
+import { GROQ_TTS_MODELS, pickAllowedModel } from "@/lib/free-media-models";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -15,7 +16,6 @@ export const runtime = "nodejs";
  *   - Other languages → Groq Orpheus (free 100 req/day, EN + AR Saudi)
  */
 const THAI_RE = /[฀-๿]/;
-const DEFAULT_TTS_MODEL = "canopylabs/orpheus-v1-english";
 const THAI_DEFAULT_VOICE = "th-TH-PremwadeeNeural";
 const THAI_VOICES: Record<string, string> = {
   female: "th-TH-PremwadeeNeural",
@@ -58,7 +58,8 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    const model = mapTTSModel(body.model as string);
+    // Free-plan Orpheus only; tts-1 / retired / unknown ids fall back to the default (never forwarded)
+    const model = pickAllowedModel(body.model, GROQ_TTS_MODELS) ?? GROQ_TTS_MODELS[0];
     const voice = (body.voice as string) || "austin";
     const responseFormat = (body.response_format as string) || "wav";
 
@@ -96,8 +97,8 @@ export async function POST(req: NextRequest) {
       headers: {
         "Content-Type": contentType,
         "Access-Control-Allow-Origin": "*",
-        "X-SMLGateway-Provider": "groq",
-        "X-SMLGateway-Model": model,
+        "X-BCAiRouter-Provider": "groq",
+        "X-BCAiRouter-Model": model,
       },
     });
   } catch (err) {
@@ -126,8 +127,8 @@ async function synthesizeThai(body: Record<string, unknown>): Promise<Response> 
       headers: {
         "Content-Type": "audio/mpeg",
         "Access-Control-Allow-Origin": "*",
-        "X-SMLGateway-Provider": "msedge-tts",
-        "X-SMLGateway-Model": voice,
+        "X-BCAiRouter-Provider": "msedge-tts",
+        "X-BCAiRouter-Model": voice,
       },
     });
   } catch (err) {
@@ -137,21 +138,6 @@ async function synthesizeThai(body: Record<string, unknown>): Promise<Response> 
       code: "upstream_error",
     });
   }
-}
-
-function mapTTSModel(model?: string): string {
-  if (!model || model === "tts-1" || model === "tts-1-hd") {
-    return DEFAULT_TTS_MODEL;
-  }
-  // Migrate retired playai/PlayDialog references to current default
-  if (/playai|playdialog/i.test(model)) {
-    return DEFAULT_TTS_MODEL;
-  }
-  // Allow direct Groq model names
-  if (model.includes("/") || /orpheus/i.test(model)) {
-    return model;
-  }
-  return DEFAULT_TTS_MODEL;
 }
 
 export async function OPTIONS() {

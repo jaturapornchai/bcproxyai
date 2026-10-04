@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { ProviderBadge } from "./shared";
+import { IconCheck, IconSparkle } from "./ui/icons";
+import { Badge, Card, CardHeader, EmptyState } from "./ui/ui";
 
 interface Teacher {
   modelId: string;
@@ -47,100 +49,61 @@ const CATEGORY_THAI: Record<string, string> = {
   comprehension: "อ่านจับใจความ",
 };
 
-const ROLE_META: Record<
-  Teacher["role"],
-  { icon: string; label: string; border: string; bg: string; text: string }
-> = {
-  principal: {
-    icon: "👑",
-    label: "ครูใหญ่",
-    border: "border-amber-500/40",
-    bg: "bg-gradient-to-br from-amber-500/10 to-orange-500/10",
-    text: "text-amber-300",
-  },
-  head: {
-    icon: "📋",
-    label: "หัวหน้าแผนก",
-    border: "border-indigo-500/40",
-    bg: "bg-gradient-to-br from-indigo-500/10 to-purple-500/10",
-    text: "text-indigo-300",
-  },
-  proctor: {
-    icon: "👥",
-    label: "ครูคุมสอบ",
-    border: "border-cyan-500/40",
-    bg: "bg-gradient-to-br from-cyan-500/10 to-teal-500/10",
-    text: "text-cyan-300",
-  },
+const ROLE_META: Record<Teacher["role"], { label: string; border: string; bg: string; text: string }> = {
+  principal: { label: "ครูใหญ่", border: "border-amber-400/35", bg: "bg-gradient-to-br from-amber-400/[0.12] to-orange-400/[0.05]", text: "text-amber-300" },
+  head:      { label: "หัวหน้าแผนก", border: "border-violet-400/30", bg: "bg-gradient-to-br from-violet-400/[0.10] to-fuchsia-400/[0.04]", text: "text-violet-300" },
+  proctor:   { label: "ครูคุมสอบ", border: "border-cyan-400/30", bg: "bg-gradient-to-br from-cyan-400/[0.10] to-teal-400/[0.04]", text: "text-cyan-300" },
 };
 
-function TeacherCard({ t, highlight = false }: { t: Teacher; highlight?: boolean }) {
+const GRADER_ROLE_LABEL: Record<string, string> = { principal: "ครูใหญ่", head: "หัวหน้าแผนก", proctor: "ครูคุมสอบ" };
+
+function TeacherCard({ t }: { t: Teacher }) {
   const meta = ROLE_META[t.role];
   const scorePct = t.score * 100;
   const categoryThai = t.category ? (CATEGORY_THAI[t.category] ?? t.category) : null;
-  const scoreColor =
-    t.role === "head"
-      ? scorePct >= 80
-        ? "text-emerald-300"
-        : "text-cyan-300"
-      : meta.text;
 
   return (
-    <div
-      className={`rounded-lg border ${meta.border} ${meta.bg} p-3 ${highlight ? "shadow-lg shadow-amber-500/10" : ""}`}
-    >
-      <div className="flex items-center gap-2 mb-2">
-        <span className="text-xl">{meta.icon}</span>
-        <div className="flex flex-col min-w-0 flex-1">
-          <span className={`text-[10px] uppercase tracking-wide ${meta.text}`}>
-            {meta.label}
-          </span>
-          {categoryThai && (
-            <span className={`text-xs font-semibold ${scoreColor}`}>
-              {categoryThai}
-            </span>
-          )}
-          <div className="flex items-center gap-1.5 mt-0.5">
-            <ProviderBadge provider={t.provider} />
-          </div>
+    <div className={`rounded-2xl border p-3.5 transition-transform duration-300 hover:-translate-y-0.5 ${meta.border} ${meta.bg}`}>
+      <div className="mb-2 flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className={`text-[11px] font-medium uppercase tracking-wider ${meta.text}`}>{meta.label}</div>
+          {categoryThai && <div className="mt-0.5 text-[13px] font-semibold text-white">{categoryThai}</div>}
         </div>
-        {t.role === "head" && (
-          <span
-            className={`text-base font-bold shrink-0 ${scoreColor}`}
-            title="exam category score"
-          >
-            {scorePct.toFixed(0)}%
-          </span>
-        )}
+        <span className={`shrink-0 text-[16px] font-semibold tabular-nums ${t.role === "head" && scorePct >= 80 ? "text-emerald-300" : meta.text}`} title="คะแนน">
+          {t.role === "head" ? `${scorePct.toFixed(0)}%` : scorePct.toFixed(1)}
+        </span>
       </div>
-      <div className="text-xs text-gray-300 font-mono truncate" title={t.modelId}>
-        {t.modelId.replace(/^[a-z]+:/, "")}
-      </div>
-      {t.role !== "head" && (
-        <div className="flex justify-between items-center mt-2">
-          <span className="text-[10px] text-gray-500">score</span>
-          <span className={`text-sm font-bold ${meta.text}`}>
-            {scorePct.toFixed(1)}
-          </span>
-        </div>
-      )}
+      <div className="mb-1.5"><ProviderBadge provider={t.provider} /></div>
+      <div className="truncate font-mono text-[11px] text-gray-300" title={t.modelId}>{t.modelId.replace(/^[a-z]+:/, "")}</div>
     </div>
   );
 }
 
 function formatRelative(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
-  if (diff < 60_000) return `${Math.round(diff / 1000)}s`;
-  if (diff < 3_600_000) return `${Math.round(diff / 60_000)}m`;
-  if (diff < 86_400_000) return `${Math.round(diff / 3_600_000)}h`;
-  return `${Math.round(diff / 86_400_000)}d`;
+  if (diff < 60_000) return `${Math.round(diff / 1000)} วิ`;
+  if (diff < 3_600_000) return `${Math.round(diff / 60_000)} น.`;
+  if (diff < 86_400_000) return `${Math.round(diff / 3_600_000)} ชม.`;
+  return `${Math.round(diff / 86_400_000)} วัน`;
 }
 
-function methodIcon(method: string): string {
-  if (method === "rule-based") return "📐";
-  if (method === "ai-grader") return "🧠";
-  if (method === "hybrid") return "🔀";
-  return "❔";
+function methodLabel(method: string): string {
+  if (method === "rule-based") return "ตามกฎ";
+  if (method === "ai-grader") return "AI ตรวจ";
+  if (method === "hybrid") return "ผสม";
+  return method;
+}
+
+function RoleGroup({ title, hint, children }: { title: string; hint: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <div className="mb-2.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+        <span className="text-[13px] font-semibold text-white">{title}</span>
+        <span className="text-[12px] text-[var(--muted)]">{hint}</span>
+      </div>
+      {children}
+    </div>
+  );
 }
 
 export function TeachersPanel() {
@@ -166,155 +129,103 @@ export function TeachersPanel() {
 
   if (loading) {
     return (
-      <div className="glass rounded-xl p-3 text-gray-500 text-sm">
-        กำลังโหลดข้อมูลคณะครู…
-      </div>
+      <Card className="p-5">
+        <div className="skeleton mb-4 h-6 w-48" />
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {[0, 1, 2].map((i) => <div key={i} className="skeleton h-24" />)}
+        </div>
+      </Card>
     );
   }
 
   if (!data) {
     return (
-      <div className="glass rounded-xl p-3 text-gray-500 text-sm">
-        ไม่สามารถโหลดข้อมูลคณะครูได้
-      </div>
+      <Card>
+        <EmptyState icon={<IconSparkle size={22} />} title="โหลดข้อมูลคณะครูไม่สำเร็จ" description="ลองรีเฟรชหน้านี้อีกครั้ง" />
+      </Card>
     );
   }
 
+  const noTeachers = !data.principal && data.heads.length === 0 && data.proctors.length === 0;
+
   return (
-    <div className="space-y-4">
-      {/* Header */}
-      <div className="glass rounded-xl p-3 border border-white/10">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-xl font-bold text-gray-200 flex items-center gap-2">
-            <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-amber-500 to-orange-500 text-white text-base">
-              🏫
-            </span>
-            คณะครู (Teacher Hierarchy)
-          </h2>
-          <div className="flex gap-2 text-xs">
-            <span className="px-2 py-0.5 rounded bg-amber-500/10 text-amber-300 border border-amber-500/30">
-              {data.totals.principal} 👑
-            </span>
-            <span className="px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-300 border border-indigo-500/30">
-              {data.totals.heads} 📋
-            </span>
-            <span className="px-2 py-0.5 rounded bg-cyan-500/10 text-cyan-300 border border-cyan-500/30">
-              {data.totals.proctors} 👥
-            </span>
-          </div>
-        </div>
+    <div className="space-y-5">
+      <Card>
+        <CardHeader
+          title="คณะครู (ผู้ตรวจข้อสอบ)"
+          subtitle="โมเดลที่คะแนนดีที่สุดจะถูกแต่งตั้งเป็นครูโดยอัตโนมัติ เพื่อคุมสอบและตรวจข้อสอบให้โมเดลอื่น"
+          icon={<IconCheck size={18} />}
+          action={
+            <div className="flex flex-wrap justify-end gap-1.5">
+              <Badge tone="warning">ครูใหญ่ {data.totals.principal}</Badge>
+              <Badge tone="accent">หัวหน้า {data.totals.heads}</Badge>
+              <Badge tone="info">คุมสอบ {data.totals.proctors}</Badge>
+            </div>
+          }
+        />
 
-        {!data.principal && data.heads.length === 0 && data.proctors.length === 0 ? (
-          <div className="text-sm text-gray-500 py-6 text-center">
-            ยังไม่มีครู — รอให้ worker cycle รันก่อน (แต่งตั้งอัตโนมัติจาก exam + live score)
-          </div>
+        {noTeachers ? (
+          <EmptyState
+            icon={<IconSparkle size={22} />}
+            title="ยังไม่มีครู"
+            description="รอให้ worker ทำงานรอบแรกก่อน — ระบบจะแต่งตั้งครูอัตโนมัติจากผลสอบและคะแนนการใช้งานจริง"
+          />
         ) : (
-          <>
-            {/* Principal — center spotlight */}
+          <div className="space-y-6 p-5">
             {data.principal && (
-              <div className="mb-4">
-                <div className="text-[10px] text-amber-400 uppercase tracking-wide mb-2">
-                  👑 ครูใหญ่ (Principal) — ตัดสินข้อพิพาท, fallback judge
-                </div>
-                <div className="max-w-md">
-                  <TeacherCard t={data.principal} highlight />
-                </div>
-              </div>
+              <RoleGroup title="ครูใหญ่ (Principal)" hint="ตัดสินข้อพิพาท และเป็นผู้ตรวจสำรอง">
+                <div className="max-w-md"><TeacherCard t={data.principal} /></div>
+              </RoleGroup>
             )}
-
-            {/* Heads — per category */}
             {data.heads.length > 0 && (
-              <div className="mb-4">
-                <div className="text-[10px] text-indigo-400 uppercase tracking-wide mb-2">
-                  📋 หัวหน้าแผนก (Heads) — ตรวจข้อสอบเฉพาะหมวด
+              <RoleGroup title="หัวหน้าแผนก (Heads)" hint="ตรวจข้อสอบเฉพาะหมวดวิชา">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {data.heads.map((h) => <TeacherCard key={h.modelId} t={h} />)}
                 </div>
-                <div className="grid grid-cols-[repeat(auto-fit,minmax(260px,1fr))] gap-2">
-                  {data.heads.map((h) => (
-                    <TeacherCard key={h.modelId} t={h} />
-                  ))}
-                </div>
-              </div>
+              </RoleGroup>
             )}
-
-            {/* Proctors — list */}
             {data.proctors.length > 0 && (
-              <div>
-                <div className="text-[10px] text-cyan-400 uppercase tracking-wide mb-2">
-                  👥 ครูคุมสอบ (Proctors) — ยิงคำถาม วัดเวลา
+              <RoleGroup title="ครูคุมสอบ (Proctors)" hint="ยิงคำถามและจับเวลา">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {data.proctors.map((p) => <TeacherCard key={p.modelId} t={p} />)}
                 </div>
-                <div className="grid grid-cols-[repeat(auto-fit,minmax(260px,1fr))] gap-2">
-                  {data.proctors.map((p) => (
-                    <TeacherCard key={p.modelId} t={p} />
-                  ))}
-                </div>
-              </div>
+              </RoleGroup>
             )}
-          </>
-        )}
-      </div>
-
-      {/* Recent Gradings */}
-      <div className="glass rounded-xl p-3 border border-white/10">
-        <h3 className="text-base font-bold text-gray-200 flex items-center gap-2 mb-3">
-          📜 ประวัติการตรวจ (Grading History)
-          <span className="text-xs text-gray-500 font-normal">
-            {data.recentGradings.length} records
-          </span>
-        </h3>
-
-        {data.recentGradings.length === 0 ? (
-          <div className="text-sm text-gray-500 py-3 text-center">
-            ยังไม่มีประวัติการตรวจ — จะเริ่มบันทึกเมื่อ worker รอบถัดไปสอบ
           </div>
-        ) : (
-          <div className="space-y-1 font-mono text-[11px]">
-            {data.recentGradings.map((g) => {
-              const roleIcon =
-                g.graderRole === "principal"
-                  ? "👑"
-                  : g.graderRole === "head"
-                    ? "📋"
-                    : g.graderRole === "proctor"
-                      ? "👥"
-                      : "📐";
-              return (
-                <div
-                  key={g.id}
-                  className="flex items-start gap-2 py-1 border-b border-gray-800/40 last:border-0"
-                >
-                  <span className="text-gray-600 shrink-0 w-10">
-                    {formatRelative(g.gradedAt)}
-                  </span>
-                  <span className="shrink-0" title={g.graderRole}>
-                    {roleIcon}
-                  </span>
-                  <span className="shrink-0 text-gray-400 truncate max-w-[200px]">
-                    {g.graderModelId.replace(/^[a-z]+:/, "")}
-                  </span>
-                  <span className="text-gray-600">→</span>
-                  <span className="shrink-0 text-indigo-300 truncate max-w-[120px]">
-                    {g.questionId}
-                  </span>
-                  <span className="text-gray-500 shrink-0">
-                    {methodIcon(g.method)}
-                  </span>
+        )}
+      </Card>
+
+      <Card>
+        <CardHeader
+          title="ประวัติการตรวจข้อสอบ"
+          subtitle={`${data.recentGradings.length} รายการล่าสุด — ใครตรวจข้อไหน ด้วยวิธีอะไร ได้กี่คะแนนเต็ม 10`}
+        />
+        <div className="p-5">
+          {data.recentGradings.length === 0 ? (
+            <p className="py-3 text-center text-[13px] text-[var(--muted)]">ยังไม่มีประวัติ — จะเริ่มบันทึกเมื่อ worker สอบรอบถัดไป</p>
+          ) : (
+            <div className="max-h-[360px] overflow-auto font-mono text-[11px]">
+              {data.recentGradings.map((g) => (
+                <div key={g.id} className="flex items-center gap-3 whitespace-nowrap border-b border-white/[0.05] py-1.5 last:border-0">
+                  <span className="w-10 shrink-0 tabular-nums text-[var(--muted)]">{formatRelative(g.gradedAt)}</span>
+                  <span className="w-20 shrink-0 text-gray-400">{GRADER_ROLE_LABEL[g.graderRole] ?? g.graderRole}</span>
+                  <span className="max-w-[200px] shrink-0 truncate text-gray-300" title={g.graderModelId}>{g.graderModelId.replace(/^[a-z]+:/, "")}</span>
+                  <span className="text-[var(--muted)]">→</span>
+                  <span className="max-w-[140px] shrink-0 truncate text-violet-300">{g.questionId}</span>
+                  <span className="shrink-0 text-[var(--muted)]">{methodLabel(g.method)}</span>
                   <span
-                    className={`ml-auto shrink-0 font-bold ${
-                      g.finalScore >= 7
-                        ? "text-emerald-300"
-                        : g.finalScore >= 5
-                          ? "text-amber-300"
-                          : "text-red-300"
+                    className={`ml-auto shrink-0 font-semibold tabular-nums ${
+                      g.finalScore >= 7 ? "text-emerald-300" : g.finalScore >= 5 ? "text-amber-300" : "text-rose-300"
                     }`}
                   >
                     {g.finalScore.toFixed(0)}/10
                   </span>
                 </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </Card>
     </div>
   );
 }

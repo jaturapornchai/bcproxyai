@@ -1,10 +1,34 @@
 import { createHash } from "node:crypto";
+import { isIP } from "node:net";
 import { getSqlClient } from "./db/client";
 
 const OLLAMA_EMBED_URL =
   process.env.OLLAMA_EMBED_URL || "http://host.docker.internal:11434/api/embeddings";
 const EMBED_MODEL = process.env.OLLAMA_EMBED_MODEL || "nomic-embed-text";
 const EMBED_TIMEOUT_MS = 3000;
+
+/**
+ * Cost policy: embed() sends no auth header, so it could only spend money via a remote host,
+ * credentials baked into the URL (user:pass@ / ?key=), or an Ollama "-cloud" model proxied
+ * through a signed-in local Ollama. Allow only a local/private Ollama with a local model.
+ */
+export function isLocalEmbedTarget(rawUrl: string, model: string): boolean {
+  if (/cloud/i.test(model)) return false;
+  try {
+    const u = new URL(rawUrl);
+    if (u.username || u.password || u.search || !/^https?:$/.test(u.protocol)) return false;
+    const host = u.hostname.replace(/^\[|\]$/g, "");
+    if (host === "::1" || host === "host.docker.internal" || !/[.:]/.test(host)) return true; // loopback / docker service name
+    return isIP(host) === 4 && /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host);
+  } catch {
+    return false;
+  }
+}
+
+const EMBED_TARGET_OK = isLocalEmbedTarget(OLLAMA_EMBED_URL, EMBED_MODEL);
+if (!EMBED_TARGET_OK) {
+  console.warn("[SEMCACHE] OLLAMA_EMBED_URL/OLLAMA_EMBED_MODEL is not a local Ollama model — semantic cache disabled (cost policy)");
+}
 
 // ตรวจครั้งเดียวว่า pgvector ใช้ได้มั้ย — log once
 let pgvectorAvailable: boolean | null = null;
@@ -39,6 +63,7 @@ function toVectorLiteral(vec: number[]): string {
 }
 
 async function embed(text: string): Promise<number[] | null> {
+  if (!EMBED_TARGET_OK) return null;
   try {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), EMBED_TIMEOUT_MS);
@@ -67,7 +92,7 @@ async function embed(text: string): Promise<number[] | null> {
 
 function tenantNamespace(apiKey: string | null | undefined): string {
   if (!apiKey) return "_anon";
-  if (apiKey.startsWith("sml_live_")) return apiKey.slice(0, 18);
+  if (apiKey.startsWith("bcai_live_")) return apiKey.slice(0, 19); // prefix + 9 random chars
   return createHash("sha256").update(apiKey).digest("hex").slice(0, 12);
 }
 

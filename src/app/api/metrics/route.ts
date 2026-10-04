@@ -169,8 +169,8 @@ export async function GET(): Promise<Response> {
       try {
         const redis = getRedis();
         const [hitsRaw, missesRaw] = await Promise.all([
-          redis.get("sml:cache:hits").catch(() => null),
-          redis.get("sml:cache:misses").catch(() => null),
+          redis.get("bcai:cache:hits").catch(() => null),
+          redis.get("bcai:cache:misses").catch(() => null),
         ]);
         const hits = Number(hitsRaw ?? 0);
         const misses = Number(missesRaw ?? 0);
@@ -229,16 +229,16 @@ export async function GET(): Promise<Response> {
   const buf = new MetricBuffer();
 
   buf.help(
-    "sml_models_total",
+    "bcai_models_total",
     "Total registered models grouped by provider and health status (available|cooldown).",
     "gauge",
   );
   if (modelsRows.length === 0) {
-    buf.sample("sml_models_total", { provider: "unknown", status: "available" }, 0);
+    buf.sample("bcai_models_total", { provider: "unknown", status: "available" }, 0);
   } else {
     for (const r of modelsRows) {
       buf.sample(
-        "sml_models_total",
+        "bcai_models_total",
         { provider: r.provider, status: r.status },
         Number(r.count) || 0,
       );
@@ -246,29 +246,29 @@ export async function GET(): Promise<Response> {
   }
 
   buf.help(
-    "sml_exam_passed_total",
+    "bcai_exam_passed_total",
     "Models whose latest exam attempt passed, grouped by provider.",
     "gauge",
   );
   if (examRows.length === 0) {
-    buf.sample("sml_exam_passed_total", { provider: "unknown" }, 0);
+    buf.sample("bcai_exam_passed_total", { provider: "unknown" }, 0);
   } else {
     for (const r of examRows) {
-      buf.sample("sml_exam_passed_total", { provider: r.provider }, Number(r.count) || 0);
+      buf.sample("bcai_exam_passed_total", { provider: r.provider }, Number(r.count) || 0);
     }
   }
 
   buf.help(
-    "sml_cooldown_active_total",
+    "bcai_cooldown_active_total",
     "Models currently in cooldown (latest health_log.cooldown_until > now), grouped by provider.",
     "gauge",
   );
   if (cooldownRows.length === 0) {
-    buf.sample("sml_cooldown_active_total", { provider: "unknown" }, 0);
+    buf.sample("bcai_cooldown_active_total", { provider: "unknown" }, 0);
   } else {
     for (const r of cooldownRows) {
       buf.sample(
-        "sml_cooldown_active_total",
+        "bcai_cooldown_active_total",
         { provider: r.provider },
         Number(r.count) || 0,
       );
@@ -276,16 +276,16 @@ export async function GET(): Promise<Response> {
   }
 
   buf.help(
-    "sml_request_total",
+    "bcai_request_total",
     "Gateway requests in the last 24h grouped by HTTP status code (approximated from gateway_logs).",
     "counter",
   );
   if (requestRows.length === 0) {
-    buf.sample("sml_request_total", { status: "0" }, 0);
+    buf.sample("bcai_request_total", { status: "0" }, 0);
   } else {
     for (const r of requestRows) {
       buf.sample(
-        "sml_request_total",
+        "bcai_request_total",
         { status: String(r.status ?? 0) },
         Number(r.count) || 0,
       );
@@ -293,46 +293,46 @@ export async function GET(): Promise<Response> {
   }
 
   buf.help(
-    "sml_latency_p50_seconds",
+    "bcai_latency_p50_seconds",
     "p50 latency per provider (seconds) computed from gateway_logs over last 24h.",
     "gauge",
   );
   if (latencyP50.length === 0) {
-    buf.sample("sml_latency_p50_seconds", { provider: "unknown" }, 0);
+    buf.sample("bcai_latency_p50_seconds", { provider: "unknown" }, 0);
   } else {
     for (const r of latencyP50) {
-      buf.sample("sml_latency_p50_seconds", { provider: r.provider }, r.seconds);
+      buf.sample("bcai_latency_p50_seconds", { provider: r.provider }, r.seconds);
     }
   }
 
   buf.help(
-    "sml_latency_p99_seconds",
+    "bcai_latency_p99_seconds",
     "p99 latency per provider (seconds) computed from gateway_logs over last 24h.",
     "gauge",
   );
   if (latencyP99.length === 0) {
-    buf.sample("sml_latency_p99_seconds", { provider: "unknown" }, 0);
+    buf.sample("bcai_latency_p99_seconds", { provider: "unknown" }, 0);
   } else {
     for (const r of latencyP99) {
-      buf.sample("sml_latency_p99_seconds", { provider: r.provider }, r.seconds);
+      buf.sample("bcai_latency_p99_seconds", { provider: r.provider }, r.seconds);
     }
   }
 
   buf.help(
-    "sml_cache_hit_ratio",
+    "bcai_cache_hit_ratio",
     "Response cache hit ratio (hits / (hits+misses)) from Redis counters; 0 if counters absent.",
     "gauge",
   );
-  buf.sample("sml_cache_hit_ratio", {}, cacheRatio);
+  buf.sample("bcai_cache_hit_ratio", {}, cacheRatio);
 
   buf.help(
-    "sml_provider_limit_remaining",
+    "bcai_provider_limit_remaining",
     "Remaining provider quota from provider_limits table. type=tpm|tpd|rpm.",
     "gauge",
   );
   if (limitsRows.length === 0) {
     buf.sample(
-      "sml_provider_limit_remaining",
+      "bcai_provider_limit_remaining",
       { provider: "unknown", model: "unknown", type: "tpm" },
       0,
     );
@@ -340,14 +340,14 @@ export async function GET(): Promise<Response> {
     for (const r of limitsRows) {
       if (r.remaining_tpm !== null && r.remaining_tpm !== undefined) {
         buf.sample(
-          "sml_provider_limit_remaining",
+          "bcai_provider_limit_remaining",
           { provider: r.provider, model: r.model_id, type: "tpm" },
           Number(r.remaining_tpm) || 0,
         );
       }
       if (r.remaining_tpd !== null && r.remaining_tpd !== undefined) {
         buf.sample(
-          "sml_provider_limit_remaining",
+          "bcai_provider_limit_remaining",
           { provider: r.provider, model: r.model_id, type: "tpd" },
           Number(r.remaining_tpd) || 0,
         );

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Callout } from "@/components/ui/ui";
 
 export function PasswordLoginForm({ next }: { next: string }) {
   const [password, setPassword] = useState("");
@@ -33,24 +34,36 @@ export function PasswordLoginForm({ next }: { next: string }) {
   };
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-2">
-      <label className="block text-xs text-neutral-400">Admin password</label>
-      <input
-        type="password"
-        value={password}
-        onChange={(e) => setPassword(e.target.value)}
-        placeholder="••••••••"
-        autoFocus
-        className="w-full rounded-md bg-neutral-950 border border-neutral-700 focus:border-indigo-500/60 focus:outline-none px-3 py-2 text-sm text-neutral-100 placeholder-neutral-600 font-mono"
-      />
-      <button
-        type="submit"
-        disabled={submitting || !password}
-        className="w-full rounded-md bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 disabled:cursor-not-allowed text-white font-medium px-4 py-2.5 transition"
-      >
+    <form onSubmit={handleSubmit} className="space-y-3">
+      <div className="space-y-1.5">
+        <label htmlFor="admin-password" className="block text-[12.5px] font-medium text-gray-300">
+          Admin password
+        </label>
+        <input
+          id="admin-password"
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="••••••••"
+          autoComplete="current-password"
+          autoFocus
+          className="w-full rounded-xl border border-white/10 bg-black/30 px-3.5 py-2.5 font-mono text-sm text-white placeholder:text-gray-600 transition focus:border-violet-400/60 focus:outline-none focus:ring-2 focus:ring-violet-400/25"
+        />
+      </div>
+      <button type="submit" disabled={submitting || !password} className="btn btn-primary w-full">
+        {submitting && (
+          <svg className="animate-spin" width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" stroke="currentColor" strokeOpacity="0.3" strokeWidth="3" />
+            <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+          </svg>
+        )}
         {submitting ? "กำลังเข้า…" : "เข้าด้วย password"}
       </button>
-      {err && <div className="text-xs text-red-300">✗ {err}</div>}
+      {err && (
+        <div role="alert">
+          <Callout tone="warning">{err}</Callout>
+        </div>
+      )}
     </form>
   );
 }

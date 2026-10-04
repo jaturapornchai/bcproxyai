@@ -1,15 +1,19 @@
 "use client";
 
 import { PROVIDER_COLORS, fmtMs, ProviderBadge } from "./shared";
+import { IconPulse } from "./ui/icons";
+import { Card, EmptyState, Reveal } from "./ui/ui";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
+// The API returns Postgres numerics as strings in places, so every number is
+// coerced with Number() before use.
 
 export interface ProviderStat {
-  provider: string;
-  total: number;
-  success: number;
-  successRate: number;
-  avgLatencyMs: number;
+  provider: string | null;
+  total: number | string;
+  success: number | string;
+  successRate: number | string;
+  avgLatencyMs: number | string;
 }
 
 export interface HourlyVolume {
@@ -22,14 +26,14 @@ export interface HourlyVolume {
 export interface TopModel {
   model: string;
   provider: string;
-  count: number;
-  avgLatencyMs: number;
+  count: number | string;
+  avgLatencyMs: number | string;
 }
 
 export interface DailyToken {
   date: string;
-  input: number;
-  output: number;
+  input: number | string;
+  output: number | string;
 }
 
 export interface AnalyticsData {
@@ -47,34 +51,50 @@ function fmtK(n: number): string {
   return String(n);
 }
 
-function getProviderHex(provider: string): string {
-  const glowMap: Record<string, string> = {
-    openrouter: "#3b82f6",
-    kilo: "#a855f7",
-    google: "#34d399",
-    groq: "#fb923c",
-    cerebras: "#f43e5e",
-    sambanova: "#14b8a6",
-    mistral: "#38bdf8",
-    ollama: "#84cc16",
-  };
-  return glowMap[provider] ?? "#6366f1";
+/** Solid-ish brand colour for a provider, derived from the shared PROVIDER_COLORS glow value. */
+export function providerColor(provider: string | null, alpha = 1): string {
+  const glow = (provider && PROVIDER_COLORS[provider]?.glow) || "rgba(99,102,241,0.5)";
+  return glow.replace(/[\d.]+\)$/, `${alpha})`);
 }
+
+function ChartCard({ title, hint, dot, children }: { title: string; hint: string; dot: string; children: React.ReactNode }) {
+  return (
+    <Card className="p-5" title={hint}>
+      <h3 className="mb-4 flex items-center gap-2 text-[14px] font-semibold text-white">
+        <span className={`h-2 w-2 rounded-full ${dot}`} />
+        {title}
+      </h3>
+      {children}
+    </Card>
+  );
+}
+
+const NO_DATA = <p className="py-6 text-center text-[13px] text-[var(--muted)]">ยังไม่มีข้อมูล</p>;
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export function Analytics({ data }: { data: AnalyticsData | null }) {
-  if (!data) return null;
+export function Analytics({ data, loading }: { data: AnalyticsData | null; loading?: boolean }) {
+  if (!data) {
+    return loading ? (
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        {[0, 1, 2, 3].map((i) => <div key={i} className="skeleton h-56" />)}
+      </div>
+    ) : (
+      <Card>
+        <EmptyState
+          icon={<IconPulse size={22} />}
+          title="โหลดสถิติไม่สำเร็จ"
+          description="ลองรีเฟรชหน้านี้อีกครั้ง หากยังไม่ขึ้น ให้ตรวจว่าเซิร์ฟเวอร์ทำงานอยู่"
+        />
+      </Card>
+    );
+  }
 
   const { providerStats, hourlyVolume, topModels, dailyTokens } = data;
 
-  // Compute max values for scaling
   const maxHourly = Math.max(...hourlyVolume.map((h) => h.total), 1);
-  const maxModelCount = Math.max(...(topModels.length ? topModels.map((m) => m.count) : [1]), 1);
-  const maxDailyTotal = Math.max(
-    ...(dailyTokens.length ? dailyTokens.map((d) => d.input + d.output) : [1]),
-    1
-  );
+  const maxModelCount = Math.max(...topModels.map((m) => Number(m.count)), 1);
+  const maxDailyTotal = Math.max(...dailyTokens.map((d) => Number(d.input) + Number(d.output)), 1);
 
   const hasAnyData =
     providerStats.length > 0 ||
@@ -84,270 +104,165 @@ export function Analytics({ data }: { data: AnalyticsData | null }) {
 
   if (!hasAnyData) {
     return (
-      <section id="analytics" className="animate-fade-in-up stagger-3">
-        <div className="flex items-center gap-3 mb-3">
-          <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-cyan-500/20 text-cyan-400">
-            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-            </svg>
-          </span>
-          <h2 className="text-2xl font-black text-white">กราฟและสถิติ</h2>
-        </div>
-        <div className="glass rounded-xl p-8 text-center text-gray-500">
-          <div className="text-5xl mb-2">📊</div>
-          <p>ยังไม่มีข้อมูล — ใช้งาน Gateway แล้วกลับมาดูสถิติ</p>
-        </div>
-      </section>
+      <Card>
+        <EmptyState
+          icon={<IconPulse size={22} />}
+          title="ยังไม่มีสถิติการใช้งาน"
+          description="เมื่อมีแอปเรียกใช้ gateway สถิติ 24 ชั่วโมงล่าสุดจะแสดงที่นี่"
+        />
+      </Card>
     );
   }
 
   return (
-    <section id="analytics" className="animate-fade-in-up stagger-3">
-      <div className="flex items-center gap-3 mb-3">
-        <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-cyan-500/20 text-cyan-400">
-          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-          </svg>
-        </span>
-        <h2 className="text-2xl font-black text-white">กราฟและสถิติ</h2>
-        <span className="text-xs text-gray-400">24 ชม.ล่าสุด</span>
-      </div>
-
-      <div className="grid grid-cols-[repeat(auto-fit,minmax(320px,1fr))] gap-3">
-
-        {/* ── 1. Provider Success Rate ─────────────────────────────────── */}
-        <div className="glass rounded-xl p-3 card-3d" title="สัดส่วนคำขอที่สำเร็จต่อ provider (ใน 24 ชม.ล่าสุด)">
-          <h3 className="text-sm font-black text-white mb-2 flex items-center gap-2">
-            <span className="h-2 w-2 rounded-full bg-indigo-400" />
-            อัตราสำเร็จต่อผู้ให้บริการ
-          </h3>
-          {providerStats.length === 0 ? (
-            <p className="text-xs text-gray-600 text-center py-4">ไม่มีข้อมูล</p>
-          ) : (
-            <div className="space-y-3">
-              {providerStats.map((p) => {
-                const hex = getProviderHex(p.provider);
-                return (
-                  <div key={p.provider}>
-                    <div className="flex items-center justify-between mb-1">
-                      <div className="flex items-center gap-2">
-                        <ProviderBadge provider={p.provider} />
-                        <span className="text-xs text-gray-400">{p.total} คำขอ</span>
-                      </div>
-                      <span className="text-xs font-bold" style={{ color: hex }}>
-                        {p.successRate}%
-                      </span>
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      {/* 1. Provider success rate */}
+      <Reveal i={0}>
+        <ChartCard title="อัตราสำเร็จต่อผู้ให้บริการ" hint="สัดส่วนคำขอที่สำเร็จต่อ provider (24 ชม.ล่าสุด)" dot="bg-violet-400">
+          {providerStats.length === 0 ? NO_DATA : (
+            <div className="space-y-4">
+              {providerStats.map((p, i) => (
+                <div key={p.provider ?? `unknown-${i}`}>
+                  <div className="mb-1.5 flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      {p.provider ? <ProviderBadge provider={p.provider} /> : <span className="text-[12px] text-[var(--muted)]">ไม่ระบุ</span>}
+                      <span className="text-[12px] tabular-nums text-[var(--muted)]">{p.total} คำขอ</span>
                     </div>
-                    <div className="h-3 bg-gray-800/60 rounded-full overflow-hidden">
-                      <div
-                        className="h-full rounded-full transition-all duration-700 ease-out"
-                        style={{
-                          width: `${p.successRate}%`,
-                          background: `linear-gradient(90deg, ${hex}80, ${hex})`,
-                          boxShadow: `0 0 8px ${hex}60`,
-                        }}
-                      />
-                    </div>
-                    <div className="text-[10px] text-gray-500 mt-0.5">
-                      เฉลี่ย {fmtMs(p.avgLatencyMs)}
-                    </div>
+                    <span className="text-[13px] font-semibold tabular-nums text-white">{p.successRate}%</span>
                   </div>
-                );
-              })}
+                  {/* width + colour are data-driven, so they stay as inline style */}
+                  <div className="h-2.5 overflow-hidden rounded-full bg-white/[0.06]">
+                    <div
+                      className="animate-bar h-full rounded-full"
+                      style={{
+                        width: `${Number(p.successRate)}%`,
+                        background: `linear-gradient(90deg, ${providerColor(p.provider, 0.5)}, ${providerColor(p.provider)})`,
+                      }}
+                    />
+                  </div>
+                  <div className="mt-1 text-[11px] tabular-nums text-[var(--muted)]">เฉลี่ย {fmtMs(Number(p.avgLatencyMs))}</div>
+                </div>
+              ))}
             </div>
           )}
-        </div>
+        </ChartCard>
+      </Reveal>
 
-        {/* ── 2. Hourly Request Volume ─────────────────────────────────── */}
-        <div className="glass rounded-xl p-3 card-3d" title="ปริมาณคำขอต่อชั่วโมง (แท่งเขียว = สำเร็จ, แท่งแดง = ล้มเหลว)">
-          <h3 className="text-sm font-black text-white mb-2 flex items-center gap-2">
-            <span className="h-2 w-2 rounded-full bg-emerald-400" />
-            ปริมาณคำขอรายชั่วโมง
-          </h3>
-          <div className="flex items-end gap-[2px] h-32">
+      {/* 2. Hourly request volume */}
+      <Reveal i={1}>
+        <ChartCard title="ปริมาณคำขอรายชั่วโมง" hint="แท่งเขียว = สำเร็จ, แท่งแดง = ล้มเหลว" dot="bg-emerald-400">
+          <div className="flex h-36 items-end gap-[3px]">
             {hourlyVolume.map((h) => {
               const totalPct = (h.total / maxHourly) * 100;
-              const failedPct = h.total > 0 ? (h.failed / h.total) * totalPct : 0;
-              const successPct = totalPct - failedPct;
               return (
-                <div
-                  key={h.hour}
-                  className="flex-1 flex flex-col justify-end group relative"
-                  style={{ height: "100%" }}
-                >
-                  {/* Tooltip */}
-                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover:block z-10">
-                    <div className="glass rounded px-2 py-1 text-[10px] text-gray-300 whitespace-nowrap border border-white/10">
+                <div key={h.hour} className="group relative flex h-full flex-1 flex-col justify-end">
+                  <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 hidden -translate-x-1/2 group-hover:block">
+                    <div className="whitespace-nowrap rounded-lg border border-white/10 bg-[#0b0d14] px-2 py-1 text-[11px] text-gray-300 shadow-xl">
                       {h.hour}:00 น. — {h.total} คำขอ (สำเร็จ {h.success}, ล้มเหลว {h.failed})
                     </div>
                   </div>
-                  {/* Bar */}
-                  <div className="w-full flex flex-col justify-end" style={{ height: "100%" }}>
-                    {h.total > 0 && (
-                      <>
-                        <div
-                          className="w-full rounded-t transition-all duration-500"
-                          style={{
-                            height: `${failedPct}%`,
-                            background: "rgba(239,68,68,0.7)",
-                            minHeight: failedPct > 0 ? "2px" : "0",
-                          }}
-                        />
-                        <div
-                          className="w-full rounded-b transition-all duration-500"
-                          style={{
-                            height: `${successPct}%`,
-                            background: "linear-gradient(180deg, rgba(52,211,153,0.8), rgba(52,211,153,0.4))",
-                            minHeight: successPct > 0 ? "2px" : "0",
-                          }}
-                        />
-                      </>
-                    )}
-                  </div>
+                  {h.total > 0 && (
+                    <div className="flex w-full flex-col justify-end overflow-hidden rounded-t-[3px] transition-all duration-500" style={{ height: `${totalPct}%` }}>
+                      <div className={`w-full bg-rose-400/70 ${h.failed > 0 ? "min-h-[2px]" : ""}`} style={{ height: `${(h.failed / h.total) * 100}%` }} />
+                      <div className="w-full flex-1 bg-gradient-to-b from-emerald-400/80 to-emerald-400/35" />
+                    </div>
+                  )}
                 </div>
               );
             })}
           </div>
-          {/* X-axis labels */}
-          <div className="flex gap-[2px] mt-1">
+          <div className="mt-1.5 flex gap-[3px]">
             {hourlyVolume.map((h, i) => (
-              <div key={h.hour} className="flex-1 text-center text-[8px] text-gray-600">
+              <div key={h.hour} className="flex-1 text-center text-[9px] tabular-nums text-[var(--muted)]">
                 {i % 3 === 0 ? h.hour : ""}
               </div>
             ))}
           </div>
-          <div className="flex items-center gap-3 mt-2 text-[11px] text-gray-400">
-            <span className="flex items-center gap-1">
-              <span className="inline-block h-2 w-2 rounded-sm" style={{ background: "rgba(52,211,153,0.7)" }} />
-              สำเร็จ
-            </span>
-            <span className="flex items-center gap-1">
-              <span className="inline-block h-2 w-2 rounded-sm" style={{ background: "rgba(239,68,68,0.7)" }} />
-              ล้มเหลว
-            </span>
+          <div className="mt-3 flex items-center gap-4 text-[11px] text-[var(--muted)]">
+            <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-sm bg-emerald-400/80" />สำเร็จ</span>
+            <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-sm bg-rose-400/70" />ล้มเหลว</span>
           </div>
-        </div>
+        </ChartCard>
+      </Reveal>
 
-        {/* ── 3. Top Models by Usage ───────────────────────────────────── */}
-        <div className="glass rounded-xl p-3 card-3d" title="model ที่ถูกเรียกใช้บ่อยสุดใน 24 ชม.">
-          <h3 className="text-sm font-black text-white mb-2 flex items-center gap-2">
-            <span className="h-2 w-2 rounded-full bg-purple-400" />
-            โมเดลที่ใช้บ่อยสุด
-          </h3>
-          {topModels.length === 0 ? (
-            <p className="text-xs text-gray-600 text-center py-4">ไม่มีข้อมูล</p>
-          ) : (
-            <div className="space-y-2.5">
-              {topModels.map((m, i) => {
-                const pct = (m.count / maxModelCount) * 100;
-                const hex = getProviderHex(m.provider);
-                return (
-                  <div key={`${m.model}-${m.provider}`}>
-                    <div className="flex items-center justify-between mb-0.5">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="text-[10px] text-gray-600 w-4 text-right shrink-0">
-                          {i + 1}
-                        </span>
-                        <span className="text-xs text-gray-200 truncate">{m.model}</span>
-                        <ProviderBadge provider={m.provider} />
-                      </div>
-                      <div className="flex items-center gap-2 shrink-0 ml-2">
-                        <span className="text-xs font-bold text-gray-300">{m.count}</span>
-                        <span className="text-[10px] text-gray-600">{fmtMs(m.avgLatencyMs)}</span>
-                      </div>
+      {/* 3. Top models by usage */}
+      <Reveal i={2}>
+        <ChartCard title="โมเดลที่ใช้บ่อยสุด" hint="โมเดลที่ถูกเรียกใช้บ่อยสุดใน 24 ชม." dot="bg-fuchsia-400">
+          {topModels.length === 0 ? NO_DATA : (
+            <div className="space-y-3">
+              {topModels.map((m, i) => (
+                <div key={`${m.model}-${m.provider}`}>
+                  <div className="mb-1 flex items-center justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="w-4 shrink-0 text-right text-[11px] tabular-nums text-[var(--muted)]">{i + 1}</span>
+                      <span className="truncate text-[13px] text-gray-100" title={m.model}>{m.model}</span>
+                      <ProviderBadge provider={m.provider} />
                     </div>
-                    <div className="h-2 bg-gray-800/60 rounded-full overflow-hidden">
-                      <div
-                        className="h-full rounded-full transition-all duration-700 ease-out"
-                        style={{
-                          width: `${pct}%`,
-                          background: `linear-gradient(90deg, ${hex}60, ${hex})`,
-                        }}
-                      />
+                    <div className="flex shrink-0 items-center gap-2">
+                      <span className="text-[13px] font-semibold tabular-nums text-white">{m.count}</span>
+                      <span className="text-[11px] tabular-nums text-[var(--muted)]">{fmtMs(Number(m.avgLatencyMs))}</span>
                     </div>
                   </div>
-                );
-              })}
+                  <div className="h-1.5 overflow-hidden rounded-full bg-white/[0.06]">
+                    <div
+                      className="animate-bar h-full rounded-full"
+                      style={{
+                        width: `${(Number(m.count) / maxModelCount) * 100}%`,
+                        background: `linear-gradient(90deg, ${providerColor(m.provider, 0.4)}, ${providerColor(m.provider)})`,
+                      }}
+                    />
+                  </div>
+                </div>
+              ))}
             </div>
           )}
-        </div>
+        </ChartCard>
+      </Reveal>
 
-        {/* ── 4. Daily Token Usage ─────────────────────────────────────── */}
-        <div className="glass rounded-xl p-3 card-3d" title="ปริมาณ token ต่อวัน 7 วันย้อนหลัง (แบ่ง input / output)">
-          <h3 className="text-sm font-black text-white mb-2 flex items-center gap-2">
-            <span className="h-2 w-2 rounded-full bg-amber-400" />
-            ปริมาณ token 7 วันล่าสุด
-          </h3>
-          {dailyTokens.length === 0 ? (
-            <p className="text-xs text-gray-600 text-center py-4">ไม่มีข้อมูล</p>
-          ) : (
+      {/* 4. Daily token usage */}
+      <Reveal i={3}>
+        <ChartCard title="ปริมาณ token 7 วันล่าสุด" hint="ปริมาณ token ต่อวัน แบ่ง input / output" dot="bg-amber-400">
+          {dailyTokens.length === 0 ? NO_DATA : (
             <>
-              <div className="flex items-end gap-2 h-32">
+              <div className="flex h-36 items-end gap-2">
                 {dailyTokens.map((d) => {
-                  const total = d.input + d.output;
+                  const input = Number(d.input);
+                  const output = Number(d.output);
+                  const total = input + output;
                   const totalPct = (total / maxDailyTotal) * 100;
-                  const inputPct = total > 0 ? (d.input / total) * totalPct : 0;
-                  const outputPct = totalPct - inputPct;
                   return (
-                    <div
-                      key={d.date}
-                      className="flex-1 flex flex-col justify-end group relative"
-                      style={{ height: "100%" }}
-                    >
-                      {/* Tooltip */}
-                      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover:block z-10">
-                        <div className="glass rounded px-2 py-1 text-[10px] text-gray-300 whitespace-nowrap border border-white/10">
-                          {d.date} — รับเข้า {fmtK(d.input)} / ส่งออก {fmtK(d.output)}
+                    <div key={d.date} className="group relative flex h-full flex-1 flex-col justify-end">
+                      <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 hidden -translate-x-1/2 group-hover:block">
+                        <div className="whitespace-nowrap rounded-lg border border-white/10 bg-[#0b0d14] px-2 py-1 text-[11px] text-gray-300 shadow-xl">
+                          {d.date} — รับเข้า {fmtK(input)} / ส่งออก {fmtK(output)}
                         </div>
                       </div>
-                      <div className="w-full flex flex-col justify-end" style={{ height: "100%" }}>
-                        <div
-                          className="w-full rounded-t transition-all duration-500"
-                          style={{
-                            height: `${outputPct}%`,
-                            background: "rgba(251,191,36,0.7)",
-                            minHeight: outputPct > 0 ? "2px" : "0",
-                          }}
-                        />
-                        <div
-                          className="w-full rounded-b transition-all duration-500"
-                          style={{
-                            height: `${inputPct}%`,
-                            background: "linear-gradient(180deg, rgba(99,102,241,0.8), rgba(99,102,241,0.4))",
-                            minHeight: inputPct > 0 ? "2px" : "0",
-                          }}
-                        />
-                      </div>
+                      {total > 0 && (
+                        <div className="flex w-full flex-col justify-end overflow-hidden rounded-t-[4px] transition-all duration-500" style={{ height: `${totalPct}%` }}>
+                          <div className="w-full bg-amber-400/70" style={{ height: `${(output / total) * 100}%` }} />
+                          <div className="w-full flex-1 bg-gradient-to-b from-violet-400/80 to-violet-400/35" />
+                        </div>
+                      )}
                     </div>
                   );
                 })}
               </div>
-              {/* X-axis labels */}
-              <div className="flex gap-2 mt-1">
+              <div className="mt-1.5 flex gap-2">
                 {dailyTokens.map((d) => (
-                  <div key={d.date} className="flex-1 text-center text-[9px] text-gray-600">
-                    {d.date.slice(5)}
-                  </div>
+                  <div key={d.date} className="flex-1 text-center text-[10px] tabular-nums text-[var(--muted)]">{d.date.slice(5)}</div>
                 ))}
               </div>
-              <div className="flex items-center gap-3 mt-2 text-[11px] text-gray-400">
-                <span className="flex items-center gap-1">
-                  <span className="inline-block h-2 w-2 rounded-sm" style={{ background: "rgba(99,102,241,0.7)" }} />
-                  รับเข้า
-                </span>
-                <span className="flex items-center gap-1">
-                  <span className="inline-block h-2 w-2 rounded-sm" style={{ background: "rgba(251,191,36,0.7)" }} />
-                  ส่งออก
-                </span>
-                <span className="ml-auto text-gray-500">
-                  รวม {fmtK(dailyTokens.reduce((s, d) => s + d.input + d.output, 0))} token
+              <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-[var(--muted)]">
+                <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-sm bg-violet-400/80" />รับเข้า</span>
+                <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-sm bg-amber-400/70" />ส่งออก</span>
+                <span className="ml-auto tabular-nums">
+                  รวม {fmtK(dailyTokens.reduce((s, d) => s + Number(d.input) + Number(d.output), 0))} token
                 </span>
               </div>
             </>
           )}
-        </div>
-
-      </div>
-    </section>
+        </ChartCard>
+      </Reveal>
+    </div>
   );
 }

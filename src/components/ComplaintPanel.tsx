@@ -1,8 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
+import type { ReactNode } from "react";
 import { PROVIDER_COLORS, fmtTime } from "./shared";
 import { getAdminAccess } from "./admin-access";
+import { Badge, Card, CardHeader, CountUp, EmptyState, Reveal, Stat } from "./ui/ui";
+import type { Tone } from "./ui/ui";
+import { IconAlert, IconCheck, IconX } from "./ui/icons";
 
 interface Complaint {
   id: number;
@@ -45,11 +50,11 @@ interface ComplaintData {
   categories: Record<string, string>;
 }
 
-const STATUS_STYLES: Record<string, { bg: string; text: string; label: string }> = {
-  pending: { bg: "bg-yellow-500/20", text: "text-yellow-400", label: "รอสอบใหม่" },
-  exam_passed: { bg: "bg-green-500/20", text: "text-green-400", label: "สอบผ่าน" },
-  exam_failed: { bg: "bg-red-500/20", text: "text-red-400", label: "สอบตก" },
-  blacklisted: { bg: "bg-red-700/30", text: "text-red-300", label: "แบนแล้ว" },
+const STATUS_META: Record<string, { tone: Tone; label: string }> = {
+  pending: { tone: "warning", label: "รอสอบใหม่" },
+  exam_passed: { tone: "success", label: "สอบผ่าน" },
+  exam_failed: { tone: "danger", label: "สอบตก" },
+  blacklisted: { tone: "danger", label: "แบนแล้ว" },
 };
 
 const CATEGORY_ICONS: Record<string, string> = {
@@ -62,7 +67,27 @@ const CATEGORY_ICONS: Record<string, string> = {
   irrelevant: ">>",
 };
 
+const scoreText = (score: number | null) => ((score ?? 0) >= 5 ? "text-emerald-300" : "text-rose-300");
+
 // ─── Report Card Modal ────────────────────────────────────────────────────────
+function ModalField({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div>
+      <div className="mb-1 text-[12px] text-[var(--muted)]">{label}</div>
+      <div className="rounded-lg border border-white/5 bg-black/30 px-3 py-2 text-[13px] leading-relaxed text-gray-100">{children}</div>
+    </div>
+  );
+}
+
+function ModalRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <span className="text-[var(--muted)]">{label}</span>
+      <span className="text-right text-gray-100">{children}</span>
+    </div>
+  );
+}
+
 function ReportCardModal({
   complaint,
   onClose,
@@ -70,161 +95,131 @@ function ReportCardModal({
   complaint: Complaint;
   onClose: () => void;
 }) {
-  const statusStyle = STATUS_STYLES[complaint.status] ?? STATUS_STYLES.pending;
+  const status = STATUS_META[complaint.status] ?? STATUS_META.pending;
 
-  return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-gray-800 rounded-xl max-w-lg w-full p-6 border border-gray-700" onClick={e => e.stopPropagation()}>
-        <div className="flex justify-between items-start mb-4">
-          <h3 className="text-xl font-bold text-amber-400">
-            สมุดพก - {complaint.model_id}
-          </h3>
-          <button onClick={onClose} className="text-gray-400 hover:text-white text-2xl leading-none">&times;</button>
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  // Portal: .card uses backdrop-filter, which would trap a position:fixed child inside the panel.
+  return createPortal(
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" onClick={onClose}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={`รายละเอียดข้อร้องเรียน ${complaint.model_id}`}
+        className="animate-page max-h-[88vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-white/10 bg-[#0b0d14] p-6 shadow-2xl"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="mb-5 flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <div className="text-[12px] font-medium uppercase tracking-[0.1em] text-[var(--muted)]">รายละเอียดข้อร้องเรียน</div>
+            <h3 className="mt-1 break-all text-[17px] font-semibold text-white">{complaint.model_id}</h3>
+          </div>
+          <button type="button" onClick={onClose} className="btn btn-ghost btn-sm shrink-0" aria-label="ปิด">
+            <IconX size={16} />
+          </button>
         </div>
 
-        <div className="space-y-3 text-sm">
-          <div className="flex justify-between">
-            <span className="text-gray-400">ผู้ให้บริการ</span>
-            <span className="text-white">{complaint.provider}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-gray-400">ประเภทร้องเรียน</span>
-            <span className="text-orange-400">{complaint.category}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-gray-400">สถานะ</span>
-            <span className={`${statusStyle.text} font-bold`}>{statusStyle.label}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-gray-400">วันที่ร้องเรียน</span>
-            <span className="text-white">{fmtTime(complaint.created_at)}</span>
+        <div className="space-y-3 text-[13px]">
+          <div className="space-y-2.5 rounded-xl border border-white/10 bg-white/[0.03] p-4">
+            <ModalRow label="ผู้ให้บริการ">{complaint.provider}</ModalRow>
+            <ModalRow label="ประเภทร้องเรียน"><span className="text-amber-300">{complaint.category}</span></ModalRow>
+            <ModalRow label="สถานะ"><Badge tone={status.tone}>{status.label}</Badge></ModalRow>
+            <ModalRow label="วันที่ร้องเรียน"><span className="tabular-nums">{fmtTime(complaint.created_at)}</span></ModalRow>
           </div>
 
-          {complaint.reason && (
-            <div>
-              <div className="text-gray-400 mb-1">เหตุผล</div>
-              <div className="bg-gray-700/50 rounded p-2 text-white">{complaint.reason}</div>
-            </div>
-          )}
-
-          {complaint.user_message && (
-            <div>
-              <div className="text-gray-400 mb-1">คำถามที่ถาม</div>
-              <div className="bg-gray-700/50 rounded p-2 text-white">{complaint.user_message}</div>
-            </div>
-          )}
-
+          {complaint.reason && <ModalField label="เหตุผล">{complaint.reason}</ModalField>}
+          {complaint.user_message && <ModalField label="คำถามที่ถาม">{complaint.user_message}</ModalField>}
           {complaint.assistant_message && (
             <div>
-              <div className="text-gray-400 mb-1">คำตอบที่ได้</div>
-              <div className="bg-red-900/30 rounded p-2 text-red-300">{complaint.assistant_message}</div>
+              <div className="mb-1 text-[12px] text-[var(--muted)]">คำตอบที่ได้</div>
+              <div className="rounded-lg border border-rose-400/20 bg-rose-400/[0.07] px-3 py-2 text-[13px] leading-relaxed text-rose-200">{complaint.assistant_message}</div>
             </div>
           )}
 
           {complaint.exam_question && (
-            <div className="border-t border-gray-700 pt-3 mt-3">
-              <div className="text-amber-400 font-bold mb-2">ผลสอบใหม่</div>
-              <div className="text-gray-400 mb-1">ข้อสอบ</div>
-              <div className="bg-gray-700/50 rounded p-2 text-white mb-2">{complaint.exam_question}</div>
+            <div className="space-y-3 border-t border-white/10 pt-4">
+              <div className="text-[13px] font-semibold text-white">ผลสอบใหม่</div>
+              <ModalField label="ข้อสอบ">{complaint.exam_question}</ModalField>
               {complaint.exam_answer && (
-                <>
-                  <div className="text-gray-400 mb-1">คำตอบ</div>
-                  <div className="bg-gray-700/50 rounded p-2 text-white mb-2">{complaint.exam_answer?.slice(0, 200)}</div>
-                </>
+                <ModalField label="คำตอบ">{complaint.exam_answer?.slice(0, 200)}</ModalField>
               )}
-              <div className="flex justify-between">
-                <span className="text-gray-400">คะแนนสอบใหม่</span>
-                <span className={`font-bold ${(complaint.exam_score ?? 0) >= 5 ? "text-green-400" : "text-red-400"}`}>
+              <ModalRow label="คะแนนสอบใหม่">
+                <span className={`font-semibold tabular-nums ${scoreText(complaint.exam_score)}`}>
                   {complaint.exam_score?.toFixed(1) ?? "0"}/10
                 </span>
-              </div>
+              </ModalRow>
               {complaint.exam_reasoning && (
-                <div className="mt-2 text-xs text-gray-400 italic">{complaint.exam_reasoning}</div>
+                <div className="text-[12px] italic leading-relaxed text-[var(--muted)]">{complaint.exam_reasoning}</div>
               )}
             </div>
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
-// ─── Hall of Fame/Shame ───────────────────────────────────────────────────────
-function HallOfFameShame({ topComplained }: { topComplained: TopComplained[] }) {
+// ─── Most-complained models ───────────────────────────────────────────────────
+function TopComplainedList({ topComplained }: { topComplained: TopComplained[] }) {
   if (topComplained.length === 0) return null;
 
   return (
-    <div className="grid grid-cols-[repeat(auto-fit,minmax(360px,1fr))] gap-4 mb-4">
-      {/* Hall of Shame */}
-      <div className="bg-red-900/20 border border-red-800/30 rounded-xl p-4">
-        <h4 className="text-red-400 font-bold mb-3 text-center">
-          ป้ายอับอาย - Hall of Shame
-        </h4>
-        <div className="space-y-2">
-          {topComplained.slice(0, 3).map((m, i) => {
-            const dunce = i === 0 ? " - หมวกโง่" : i === 1 ? " - ตัวป่วน" : " - ขี้โกง";
-            const colors = PROVIDER_COLORS[m.provider] ?? PROVIDER_COLORS.openrouter;
-            return (
-              <div key={m.model_id} className="flex items-center gap-3 bg-gray-800/50 rounded-lg p-2">
-                <div className="text-2xl w-8 text-center">
-                  {i === 0 ? "🤡" : i === 1 ? "😭" : "😤"}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-amber-300 text-sm font-medium truncate">
-                    {m.model_id}
-                  </div>
-                  <div className={`text-xs ${colors.text}`}>{m.provider}{dunce}</div>
-                </div>
-                <div className="text-red-400 font-bold text-lg">
-                  {m.complaint_count}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Detention Board */}
-      <div className="bg-orange-900/20 border border-orange-800/30 rounded-xl p-4">
-        <h4 className="text-orange-400 font-bold mb-3 text-center">
-          กระดานลงโทษ - Detention Board
-        </h4>
-        <div className="space-y-2">
-          {topComplained.slice(0, 3).map((m) => {
-            const colors = PROVIDER_COLORS[m.provider] ?? PROVIDER_COLORS.openrouter;
-            const severity = m.complaint_count >= 5 ? "bg-red-500/30 border-red-500/50" :
-              m.complaint_count >= 3 ? "bg-orange-500/20 border-orange-500/40" :
-              "bg-yellow-500/10 border-yellow-500/30";
-            return (
-              <div key={m.model_id} className={`${severity} border rounded-lg p-2 flex items-center gap-2`}>
-                <span className="text-xl">
-                  {m.complaint_count >= 5 ? "🚫" : m.complaint_count >= 3 ? "⚠️" : "📝"}
+    <section>
+      <h4 className="text-[13px] font-semibold text-white">โมเดลที่ถูกร้องเรียนมากสุด</h4>
+      <p className="mb-3 mt-0.5 text-[12px] text-[var(--muted)]">3 อันดับแรก พร้อมระดับความรุนแรงตามจำนวนครั้งที่ถูกร้องเรียน</p>
+      <div className="grid gap-3 md:grid-cols-3">
+        {topComplained.slice(0, 3).map((m, i) => {
+          const colors = PROVIDER_COLORS[m.provider] ?? PROVIDER_COLORS.openrouter;
+          const level = m.complaint_count >= 10
+            ? { label: "แบน 24 ชม.", tone: "danger" as Tone }
+            : m.complaint_count >= 5
+              ? { label: "เฝ้าระวังสูง", tone: "warning" as Tone }
+              : { label: "ตักเตือน", tone: "neutral" as Tone };
+          return (
+            <Reveal key={m.model_id} i={i}>
+              <div className="flex h-full items-center gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-3.5">
+                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-rose-400/10 text-[13px] font-semibold tabular-nums text-rose-300 ring-1 ring-inset ring-rose-400/25">
+                  {i + 1}
                 </span>
-                <div className="flex-1 min-w-0">
-                  <div className="text-white text-sm truncate">{m.model_id}</div>
-                  <div className={`text-xs ${colors.text}`}>{m.provider}</div>
-                </div>
-                <div className="text-right">
-                  <div className="text-orange-400 font-mono text-sm">{m.complaint_count} ครั้ง</div>
-                  <div className="text-xs text-gray-500">
-                    {m.complaint_count >= 10 ? "แบน 24 ชม." :
-                     m.complaint_count >= 5 ? "อยู่ห้องกัก" :
-                     "ถูกตักเตือน"}
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-mono text-[12.5px] text-gray-100">{m.model_id}</div>
+                  <div className="mt-0.5 flex items-center gap-2">
+                    <span className={`text-[11px] ${colors.text}`}>{m.provider}</span>
+                    <Badge tone={level.tone}>{level.label}</Badge>
                   </div>
                 </div>
+                <div className="shrink-0 text-right">
+                  <div className="text-[20px] font-semibold leading-none tabular-nums text-white">{m.complaint_count}</div>
+                  <div className="mt-1 text-[11px] text-[var(--muted)]">ครั้ง</div>
+                </div>
               </div>
-            );
-          })}
-          {topComplained.length === 0 && (
-            <div className="text-center text-gray-500 py-4">ยังไม่มีนักเรียนถูกลงโทษ</div>
-          )}
-        </div>
+            </Reveal>
+          );
+        })}
       </div>
-    </div>
+    </section>
   );
 }
 
 // ─── Main ComplaintPanel ──────────────────────────────────────────────────────
+function Shell({ children }: { children: ReactNode }) {
+  return (
+    <Card>
+      <CardHeader
+        icon={<IconAlert />}
+        title="ข้อร้องเรียนโมเดล"
+        subtitle="รายการร้องเรียนคุณภาพคำตอบของโมเดล พร้อมผลสอบใหม่และสถานะการแบน — คลิกที่แถวเพื่อดูรายละเอียด"
+      />
+      {children}
+    </Card>
+  );
+}
+
 export function ComplaintPanel() {
   const [data, setData] = useState<ComplaintData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -240,8 +235,9 @@ export function ComplaintPanel() {
       if (res.ok) {
         setData(await res.json());
       }
-    } catch { /* silent */ }
-    setLoading(false);
+    } catch { /* silent */ } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -250,98 +246,109 @@ export function ComplaintPanel() {
     return () => clearInterval(interval);
   }, [fetchData]);
 
-  if (loading) return <div className="text-gray-500 text-center py-8">กำลังโหลดข้อมูลร้องเรียน...</div>;
+  if (loading) {
+    return (
+      <Shell>
+        <div className="space-y-3 p-5" aria-busy="true" aria-label="กำลังโหลดข้อมูลร้องเรียน">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+            {[0, 1, 2, 3, 4].map(i => <div key={i} className="skeleton h-24" />)}
+          </div>
+          <div className="skeleton h-32" />
+        </div>
+      </Shell>
+    );
+  }
   if (!data) return null;
 
   const { complaints, stats, top_complained, categories } = data;
 
+  const statItems: Array<{ label: string; value: number; tone: Tone }> = [
+    { label: "ทั้งหมด", value: stats.total, tone: "neutral" },
+    { label: "รอสอบใหม่", value: stats.pending, tone: "warning" },
+    { label: "สอบผ่าน", value: stats.passed, tone: "success" },
+    { label: "สอบตก", value: stats.failed, tone: "danger" },
+    { label: "ถูกแบน", value: stats.blacklisted, tone: "danger" },
+  ];
+
   return (
-    <div>
-      {/* Stats Bar */}
-      <div className="grid grid-cols-[repeat(auto-fit,minmax(140px,1fr))] gap-3 mb-4">
-        {[
-          { label: "ร้องเรียนทั้งหมด", value: stats.total, color: "text-white" },
-          { label: "รอสอบใหม่", value: stats.pending, color: "text-yellow-400" },
-          { label: "สอบผ่าน", value: stats.passed, color: "text-green-400" },
-          { label: "สอบตก", value: stats.failed, color: "text-red-400" },
-          { label: "ถูกแบน", value: stats.blacklisted, color: "text-red-300" },
-        ].map(s => (
-          <div key={s.label} className="bg-gray-800/50 rounded-lg p-3 text-center">
-            <div className={`text-2xl font-bold ${s.color}`}>{s.value}</div>
-            <div className="text-xs text-gray-400">{s.label}</div>
+    <>
+      <Shell>
+        <div className="space-y-6 p-5">
+          {/* Stats */}
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+            {statItems.map((s, i) => (
+              <Reveal key={s.label} i={i}>
+                <Stat label={s.label} tone={s.tone} value={<CountUp value={s.value} />} />
+              </Reveal>
+            ))}
           </div>
-        ))}
-      </div>
 
-      {/* Hall of Fame/Shame + Detention Board */}
-      <HallOfFameShame topComplained={top_complained} />
+          <TopComplainedList topComplained={top_complained} />
 
-      {/* Complaint List */}
-      <div className="bg-gray-800/30 rounded-xl border border-gray-700/50 overflow-hidden">
-        <div className="px-4 py-3 border-b border-gray-700/50">
-          <h4 className="text-white font-medium">ใบร้องเรียนล่าสุด</h4>
+          {/* Complaint list */}
+          <section className="overflow-hidden rounded-xl border border-white/10 bg-white/[0.02]">
+            <div className="border-b border-white/5 px-4 py-3">
+              <h4 className="text-[13px] font-semibold text-white">ใบร้องเรียนล่าสุด</h4>
+            </div>
+            {complaints.length === 0 ? (
+              <EmptyState
+                icon={<IconCheck size={22} />}
+                title="ยังไม่มีข้อร้องเรียน"
+                description="โมเดลทุกตัวยังทำงานได้ดี — เมื่อมีการร้องเรียนคุณภาพคำตอบ รายการจะแสดงที่นี่"
+              />
+            ) : (
+              <ul className="divide-y divide-white/5">
+                {complaints.map(c => {
+                  const status = STATUS_META[c.status] ?? STATUS_META.pending;
+                  const catIcon = CATEGORY_ICONS[c.category] ?? "?";
+                  const catLabel = categories[c.category] ?? c.category;
+                  const colors = PROVIDER_COLORS[c.provider] ?? PROVIDER_COLORS.openrouter;
+                  return (
+                    <li key={c.id}>
+                      <button
+                        type="button"
+                        onClick={() => setSelected(c)}
+                        className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-white/[0.04] focus-visible:bg-white/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-violet-400/50"
+                      >
+                        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-rose-400/10 font-mono text-[11px] font-bold text-rose-300 ring-1 ring-inset ring-rose-400/20">
+                          {catIcon}
+                        </div>
+
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                            <span className="truncate font-mono text-[12.5px] font-medium text-gray-100">{c.model_id}</span>
+                            <span className={`text-[11px] ${colors.text}`}>{c.provider}</span>
+                            {c.source === "auto" && <Badge tone="info">AUTO</Badge>}
+                          </div>
+                          <div className="truncate text-[12px] text-[var(--muted)]">
+                            {catLabel} {c.reason ? `- ${c.reason.slice(0, 60)}` : ""}
+                            <span className="tabular-nums sm:hidden"> · {fmtTime(c.created_at)}</span>
+                          </div>
+                        </div>
+
+                        <div className="flex shrink-0 flex-col items-end gap-1">
+                          <Badge tone={status.tone}>{status.label}</Badge>
+                          {c.exam_score !== null && (
+                            <span className={`text-[11px] font-medium tabular-nums ${scoreText(c.exam_score)}`}>
+                              {c.exam_score?.toFixed(1)}/10
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="hidden w-20 shrink-0 text-right text-[12px] tabular-nums text-[var(--muted)] sm:block">
+                          {fmtTime(c.created_at)}
+                        </div>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </section>
         </div>
-        <div className="divide-y divide-gray-700/30">
-          {complaints.length === 0 ? (
-            <div className="text-center text-gray-500 py-8">ยังไม่มีใบร้องเรียน - นักเรียนทุกคนประพฤติดี!</div>
-          ) : (
-            complaints.map(c => {
-              const statusStyle = STATUS_STYLES[c.status] ?? STATUS_STYLES.pending;
-              const catIcon = CATEGORY_ICONS[c.category] ?? "?";
-              const catLabel = categories[c.category] ?? c.category;
-              const colors = PROVIDER_COLORS[c.provider] ?? PROVIDER_COLORS.openrouter;
-              return (
-                <div
-                  key={c.id}
-                  className="px-4 py-3 hover:bg-gray-700/20 cursor-pointer flex items-center gap-3"
-                  onClick={() => setSelected(c)}
-                >
-                  {/* Category icon */}
-                  <div className="w-9 h-9 rounded-lg bg-red-900/30 flex items-center justify-center text-red-400 font-mono text-xs font-bold shrink-0">
-                    {catIcon}
-                  </div>
+      </Shell>
 
-                  {/* Info */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-amber-300 text-sm font-medium truncate">
-                        {c.model_id}
-                      </span>
-                      <span className={`text-xs ${colors.text}`}>{c.provider}</span>
-                      {c.source === "auto" && (
-                        <span className="text-[10px] bg-blue-500/20 text-blue-400 px-1.5 rounded">AUTO</span>
-                      )}
-                    </div>
-                    <div className="text-xs text-gray-400 truncate">
-                      {catLabel} {c.reason ? `- ${c.reason.slice(0, 60)}` : ""}
-                    </div>
-                  </div>
-
-                  {/* Status + Score */}
-                  <div className="text-right shrink-0">
-                    <span className={`text-xs px-2 py-0.5 rounded ${statusStyle.bg} ${statusStyle.text}`}>
-                      {statusStyle.label}
-                    </span>
-                    {c.exam_score !== null && (
-                      <div className={`text-xs mt-1 ${(c.exam_score ?? 0) >= 5 ? "text-green-400" : "text-red-400"}`}>
-                        {c.exam_score?.toFixed(1)}/10
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Time */}
-                  <div className="text-xs text-gray-500 shrink-0 w-20 text-right">
-                    {fmtTime(c.created_at)}
-                  </div>
-                </div>
-              );
-            })
-          )}
-        </div>
-      </div>
-
-      {/* Report Card Modal */}
       {selected && <ReportCardModal complaint={selected} onClose={() => setSelected(null)} />}
-    </div>
+    </>
   );
 }

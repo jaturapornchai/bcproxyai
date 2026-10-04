@@ -1,6 +1,6 @@
 @AGENTS.md
 
-## SMLGateway — Next.js / TypeScript AI Gateway
+## BCAiRouter — Next.js / TypeScript AI Gateway
 Stack: Next.js 15, TypeScript, PostgreSQL, Redis, Docker/Caddy
 
 Irrelevant skills (do NOT trigger): auto-pilot, bc-account-expert, bc-deploy, bc-doc, bc-feature, bc-fix, bc-review, api-designer, db-expert, db-migration, flutter-expert, flutter-screen, go-api-handler, go-expert, mcp-tool.

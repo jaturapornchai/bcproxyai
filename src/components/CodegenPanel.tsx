@@ -1,6 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { Badge, Card, CardHeader, EmptyState } from "./ui/ui";
+import type { Tone } from "./ui/ui";
+import { IconBook } from "./ui/icons";
 
 interface CodegenEntry {
   id: number;
@@ -33,24 +36,24 @@ function formatBytes(n: number): string {
   return `${(n / 1024 / 1024).toFixed(1)}MB`;
 }
 
-const KIND_META: Record<string, { icon: string; color: string }> = {
-  analysis: { icon: "🔬", color: "text-cyan-300" },
-  migration: { icon: "🗃", color: "text-violet-300" },
-  script: { icon: "📜", color: "text-amber-300" },
-  test: { icon: "🧪", color: "text-pink-300" },
-  component: { icon: "🧩", color: "text-indigo-300" },
-  api: { icon: "🌐", color: "text-emerald-300" },
-  fix: { icon: "🔧", color: "text-orange-300" },
-  refactor: { icon: "♻️", color: "text-teal-300" },
-  feature: { icon: "✨", color: "text-fuchsia-300" },
-  other: { icon: "📄", color: "text-gray-400" },
+const KIND_COLOR: Record<string, string> = {
+  analysis: "text-cyan-300",
+  migration: "text-violet-300",
+  script: "text-amber-300",
+  test: "text-pink-300",
+  component: "text-indigo-300",
+  api: "text-emerald-300",
+  fix: "text-orange-300",
+  refactor: "text-teal-300",
+  feature: "text-fuchsia-300",
+  other: "text-gray-300",
 };
 
-function outcomeIcon(outcome: string | null): string {
-  if (!outcome) return "⏳";
-  if (/success|ok|passed|200/i.test(outcome)) return "✅";
-  if (/fail|error|500|❌/i.test(outcome)) return "❌";
-  return "⏳";
+function outcomeBadge(outcome: string | null): { label: string; tone: Tone } {
+  if (!outcome) return { label: "รอผล", tone: "neutral" };
+  if (/success|ok|passed|200/i.test(outcome)) return { label: "สำเร็จ", tone: "success" };
+  if (/fail|error|500|❌/i.test(outcome)) return { label: "ล้มเหลว", tone: "danger" };
+  return { label: "รอผล", tone: "neutral" };
 }
 
 export function CodegenPanel() {
@@ -77,69 +80,54 @@ export function CodegenPanel() {
   const empty = !data || data.entries.length === 0;
 
   return (
-    <div className="glass rounded-lg p-2 border border-white/10">
-      <div className="flex items-center gap-2 mb-1">
-        <span className="text-2xl">💾</span>
-        <h2 className="text-3xl font-black text-white">
-          โค้ดที่ระบบสร้างขึ้น
-        </h2>
-        <span className="text-sm text-gray-400">{data?.totalCount ?? 0} ไฟล์</span>
-        <span className="text-sm text-gray-600">· refresh 15s</span>
-      </div>
-
-      <p className="text-sm text-gray-400 mb-2">
-        ไฟล์ code / script / analysis ที่ AI สร้างขึ้นเพื่อวิเคราะห์ optimize หรือแก้ไขตัวเอง — ไม่มี hardcode
-      </p>
+    <Card>
+      <CardHeader
+        icon={<IconBook />}
+        title="โค้ดที่ระบบสร้างขึ้น"
+        subtitle="ไฟล์โค้ด สคริปต์ และผลวิเคราะห์ที่ AI สร้างขึ้นเพื่อวิเคราะห์ ปรับปรุง หรือซ่อมแซมระบบเอง (อัปเดตทุก 15 วินาที)"
+        action={<Badge tone="accent">{data?.totalCount ?? 0} ไฟล์</Badge>}
+      />
 
       {loading ? (
-        <div className="text-base text-gray-500 py-3">กำลังโหลด…</div>
-      ) : empty ? (
-        <div className="text-base text-gray-500 py-6 text-center">
-          ยังไม่มี code generation logs — ระบบจะเริ่มบันทึกเมื่อมีการสร้างไฟล์อัตโนมัติ
-          <div className="text-sm text-gray-600 mt-2 font-mono">
-            Sources: worker auto-analysis · self-healing scripts · schema migrations
-          </div>
+        <div className="space-y-2.5 p-5" aria-busy="true" aria-label="กำลังโหลดบันทึกโค้ด">
+          {[0, 1, 2].map(i => <div key={i} className="skeleton h-16" />)}
         </div>
+      ) : empty ? (
+        <EmptyState
+          icon={<IconBook size={22} />}
+          title="ยังไม่มีบันทึกการสร้างโค้ด"
+          description="ระบบจะเริ่มบันทึกเมื่อมีการสร้างไฟล์อัตโนมัติ — มาจาก worker วิเคราะห์อัตโนมัติ, สคริปต์ซ่อมแซมตัวเอง และ schema migration"
+        />
       ) : (
-        <div className="space-y-0.5 font-mono text-base">
+        <ul className="divide-y divide-white/5 px-5 pb-2 pt-3">
           {data.entries.map((e) => {
-            const meta = KIND_META[e.kind] ?? KIND_META.other;
+            const color = KIND_COLOR[e.kind] ?? KIND_COLOR.other;
+            const outcome = outcomeBadge(e.outcome);
             return (
-              <div
-                key={e.id}
-                className="flex items-start gap-2 py-1 border-b border-gray-800/40 last:border-0"
-              >
-                <span className="text-gray-500 shrink-0 w-12">
+              <li key={e.id} className="flex items-start gap-3 py-3">
+                <span className="w-8 shrink-0 pt-0.5 text-[12px] tabular-nums text-[var(--muted)]">
                   {formatRelative(e.createdAt)}
                 </span>
-                <span className="shrink-0 text-xl" title={e.kind}>
-                  {meta.icon}
-                </span>
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className={`truncate ${meta.color} text-lg font-semibold`}>{e.filename}</span>
-                    <span className="shrink-0 text-gray-500">
-                      {outcomeIcon(e.outcome)}
-                    </span>
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <span className={`truncate font-mono text-[13px] font-semibold ${color}`}>{e.filename}</span>
+                    <Badge tone="neutral">{e.kind}</Badge>
+                    <Badge tone={outcome.tone}>{outcome.label}</Badge>
                   </div>
-                  <div className="text-sm text-gray-400 truncate">
-                    {e.purpose}
-                  </div>
+                  <div className="mt-0.5 truncate text-[12.5px] text-gray-300">{e.purpose}</div>
                   {e.outcome && (
-                    <div className="text-sm text-gray-500 truncate italic">
-                      → {e.outcome}
-                    </div>
+                    <div className="truncate text-[12px] italic text-[var(--muted)]">→ {e.outcome}</div>
                   )}
                 </div>
-                <div className="shrink-0 text-right text-sm text-gray-500">
-                  <div>{e.lines}L</div>
+                <div className="shrink-0 text-right font-mono text-[12px] tabular-nums text-[var(--muted)]">
+                  <div>{e.lines} บรรทัด</div>
                   <div>{formatBytes(e.sizeBytes)}</div>
                 </div>
-              </div>
+              </li>
             );
           })}
-        </div>
+        </ul>
       )}
-    </div>
+    </Card>
   );
 }

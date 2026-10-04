@@ -16,7 +16,6 @@ const PREWARM_TARGETS = [
   { provider: "groq", url: "https://api.groq.com/openai/v1/models" },
   { provider: "cerebras", url: "https://api.cerebras.ai/v1/models" },
   { provider: "sambanova", url: "https://api.sambanova.ai/v1/models" },
-  { provider: "google", url: "https://generativelanguage.googleapis.com/v1beta/models" },
   { provider: "openrouter", url: "https://openrouter.ai/api/v1/models" },
   { provider: "thaillm", url: "https://api.thaillm.or.th/v1/models" },
   { provider: "typhoon", url: "https://api.opentyphoon.ai/v1/models" },

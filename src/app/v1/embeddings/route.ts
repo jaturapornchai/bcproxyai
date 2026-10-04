@@ -2,27 +2,14 @@ import { NextRequest } from "next/server";
 import { ensureApiKeysLoaded, getNextApiKey } from "@/lib/api-keys";
 import { resolveProviderEmbeddingUrl } from "@/lib/provider-resolver";
 import { openAIError } from "@/lib/openai-compat";
-import { getCostAllowedProviders, isProviderCostAllowed } from "@/lib/cost-policy";
+import { applyNoSpendGuards, getCostAllowedProviders, isProviderCostAllowed } from "@/lib/cost-policy";
+import { FREE_EMBEDDING_MODELS, isAutoModel, isFreeEmbeddingModel, pickAllowedModel } from "@/lib/free-media-models";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-// Default embedding models per provider — multilingual-capable preferred for Thai support
-const DEFAULT_EMBEDDING_MODELS: Record<string, string> = {
-  mistral: "mistral-embed",
-  cohere: "embed-multilingual-v3.0",
-  google: "gemini-embedding-001",
-  nvidia: "nvidia/nv-embedqa-e5-v5",
-  together: "togethercomputer/m2-bert-80M-32k-retrieval",
-  huggingface: "intfloat/multilingual-e5-large",
-  openrouter: "openai/text-embedding-3-small",
-  ollama: "nomic-embed-text",
-};
-
-// Order optimized for Thai/multilingual support + free-tier reliability
-const EMBED_PROVIDER_ORDER = [
-  "mistral", "cohere", "google", "nvidia", "together", "huggingface", "openrouter", "ollama",
-];
+// Providers with a verified $0 embedding model, in try order (key order of FREE_EMBEDDING_MODELS)
+const EMBED_PROVIDER_ORDER = Object.keys(FREE_EMBEDDING_MODELS);
 
 /**
  * POST /v1/embeddings — Embedding generation
@@ -41,31 +28,31 @@ export async function POST(req: NextRequest) {
       return openAIError(400, { message: "input is required", param: "input" });
     }
 
+    const requestedModel = body.model;
+    if (!isAutoModel(requestedModel) && !isFreeEmbeddingModel(requestedModel)) {
+      return openAIError(402, {
+        message: `Embedding model '${String(requestedModel)}' is blocked by cost policy. Allowed: auto, ${Object.values(FREE_EMBEDDING_MODELS).flat().join(", ")}.`,
+        code: "cost_policy_blocked",
+        param: "model",
+      });
+    }
+
     // Load API keys from DB cache — required before getNextApiKey()
     await ensureApiKeysLoaded();
-
-    const requestedModel = (body.model as string) || "auto";
-    const isAuto = requestedModel === "auto" || requestedModel === "sml/auto";
 
     // Try each embedding provider in order
     const providerOrder = EMBED_PROVIDER_ORDER.filter(isProviderCostAllowed);
     const triedReasons: string[] = [];
 
     for (const provider of providerOrder) {
+      const embeddingModel = pickAllowedModel(requestedModel, FREE_EMBEDDING_MODELS[provider]);
+      if (!embeddingModel) { triedReasons.push(`${provider}:model_not_served`); continue; }
+
       const url = resolveProviderEmbeddingUrl(provider);
       if (!url) { triedReasons.push(`${provider}:no_url`); continue; }
 
       const apiKey = getNextApiKey(provider);
-      if (!apiKey && provider !== "ollama") { triedReasons.push(`${provider}:no_key`); continue; }
-
-      const embeddingModel = isAuto
-        ? DEFAULT_EMBEDDING_MODELS[provider]
-        : requestedModel;
-      if (!embeddingModel) { triedReasons.push(`${provider}:no_default_model`); continue; }
-      // Note: embedding models are not in FREE_MODEL_CATALOG (chat-only catalog).
-      // Provider-level allowlist (isProviderCostAllowed) is sufficient cost gate
-      // because embedding pricing is ~100x cheaper than chat and we control the
-      // EMBED_PROVIDER_ORDER + DEFAULT_EMBEDDING_MODELS allowlist statically.
+      if (!apiKey) { triedReasons.push(`${provider}:no_key`); continue; }
 
       try {
         const headers: Record<string, string> = {
@@ -75,21 +62,18 @@ export async function POST(req: NextRequest) {
           headers["Authorization"] = `Bearer ${apiKey}`;
         }
         if (provider === "openrouter") {
-          headers["HTTP-Referer"] = "https://smlgateway.ai";
-          headers["X-Title"] = "SMLGateway Gateway";
+          headers["HTTP-Referer"] = "https://bcairouter.ai";
+          headers["X-Title"] = "BCAiRouter Gateway";
         }
-
-        // Google AI Studio uses ?key= query param (also accepts Bearer)
-        // — leave Authorization header in place; both work for OpenAI-compat path
 
         const response = await fetch(url, {
           method: "POST",
           headers,
-          body: JSON.stringify({
+          body: JSON.stringify(applyNoSpendGuards(provider, {
             model: embeddingModel,
             input: body.input,
             encoding_format: body.encoding_format ?? "float",
-          }),
+          })),
         });
 
         if (response.ok) {
@@ -108,8 +92,8 @@ export async function POST(req: NextRequest) {
 
           const respHeaders = new Headers();
           respHeaders.set("Content-Type", "application/json");
-          respHeaders.set("X-SMLGateway-Provider", provider);
-          respHeaders.set("X-SMLGateway-Model", embeddingModel ?? "");
+          respHeaders.set("X-BCAiRouter-Provider", provider);
+          respHeaders.set("X-BCAiRouter-Model", embeddingModel ?? "");
           respHeaders.set("Access-Control-Allow-Origin", "*");
 
           return new Response(JSON.stringify(json), { status: 200, headers: respHeaders });

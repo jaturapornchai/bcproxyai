@@ -63,6 +63,8 @@ When extracting a helper:
 - `src/lib/worker/leader.ts` — fail-closed in production when Redis is
   unreachable. Override with `WORKER_LEADER_FAIL_OPEN=1`. Default-open
   outside production for ergonomic dev.
-- `src/proxy.ts` — `SENSITIVE_GET_PREFIXES` gates `/api/gateway-logs`,
-  `/v1/trace/`, `/api/dev-suggestions`, `/api/k6-report`, `/api/infra`
-  behind master Bearer / admin cookie / owner Google session.
+- `src/proxy.ts` — default-deny: only `/`, `/login`, `/api/health`,
+  `/api/auth/*`, `/api/public/*` are public; `/v1/*` (except owner-only
+  `/v1/trace/*`, `/v1/prompts*`) and `/api/my-stats` take a master or
+  `bcai_live_*` key; everything else needs the owner (master Bearer / admin
+  cookie / owner Google session, `isOwnerRequest` in `src/lib/owner-request.ts`).

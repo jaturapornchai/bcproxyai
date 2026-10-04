@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { ProviderBadge } from "./shared";
 import { getAdminAccess } from "./admin-access";
+import { Badge, Card, CardHeader, EmptyState } from "./ui/ui";
+import { IconPlug } from "./ui/icons";
 
 interface ProviderLimit {
   provider: string;
@@ -36,10 +38,17 @@ function pct(remaining: number | null | undefined, limit: number | null | undefi
 }
 
 function barColor(p: number | null): string {
-  if (p == null) return "bg-gray-600";
-  if (p < 20) return "bg-red-500";
-  if (p < 50) return "bg-amber-500";
-  return "bg-emerald-500";
+  if (p == null) return "bg-white/10";
+  if (p < 20) return "bg-gradient-to-r from-rose-500 to-rose-400";
+  if (p < 50) return "bg-gradient-to-r from-amber-500 to-amber-400";
+  return "bg-gradient-to-r from-emerald-500 to-emerald-400";
+}
+
+function pctText(p: number | null): string {
+  if (p == null) return "text-[var(--muted)]";
+  if (p < 20) return "text-rose-300";
+  if (p < 50) return "text-amber-300";
+  return "text-emerald-300";
 }
 
 function formatSource(source: string): string {
@@ -78,19 +87,23 @@ function LimitBar({ label, remaining, limit }: BarProps) {
   const p = pct(remaining, limit);
   const width = p == null ? "0%" : p.toFixed(0) + "%";
   return (
-    <div className="mb-2">
-      <div className="flex justify-between text-sm text-gray-300 mb-1">
-        <span className="font-bold">{label}</span>
-        <span className="font-mono text-gray-400">
+    <div>
+      <div className="mb-1.5 flex items-center justify-between gap-2 text-[12px]">
+        <span className="font-semibold text-gray-200">{label}</span>
+        <span className="font-mono tabular-nums text-[var(--muted)]">
           {formatNum(remaining ?? null)} / {formatNum(limit ?? null)}
-          {p != null && <span className="ml-2 text-gray-500">({p.toFixed(0)}%)</span>}
+          {p != null && <span className={`ml-2 font-semibold ${pctText(p)}`}>{p.toFixed(0)}%</span>}
         </span>
       </div>
-      <div className="h-3 bg-gray-800 rounded overflow-hidden">
-        <div
-          className={`h-full ${barColor(p)} transition-all`}
-          style={{ width }}
-        />
+      <div
+        className="h-2 overflow-hidden rounded-full bg-white/5"
+        role="progressbar"
+        aria-label={`${label} คงเหลือ`}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={p == null ? undefined : Math.round(p)}
+      >
+        <div className={`h-full rounded-full transition-[width] duration-500 ${barColor(p)}`} style={{ width }} />
       </div>
     </div>
   );
@@ -139,67 +152,68 @@ export function ProviderLimitsPanel() {
   });
 
   return (
-    <div className="glass rounded-2xl p-4 border border-white/10">
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="text-3xl font-black text-white flex items-center gap-3">
-          <span className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-gradient-to-br from-amber-500 to-orange-500 text-white text-xl">
-            📊
-          </span>
-          โควต้า Provider
-        </h2>
-        <span className="text-sm text-gray-400">
-          {limits.length} models · อัพเดททุก 5 วินาที
-        </span>
-      </div>
+    <Card>
+      <CardHeader
+        icon={<IconPlug />}
+        title="โควต้าผู้ให้บริการ"
+        subtitle="ปริมาณที่เหลือของแต่ละโมเดล — TPM = token ต่อนาที, TPD = token ต่อวัน, RPM = คำขอต่อนาที (อัปเดตทุก 5 วินาที)"
+        action={<Badge tone="accent">{limits.length} โมเดล</Badge>}
+      />
 
       {loading ? (
-        <div className="text-base text-gray-400 py-4 text-center">กำลังโหลด…</div>
-      ) : sorted.length === 0 ? (
-        <div className="text-base text-gray-400 py-6 text-center">
-          ยังไม่มีข้อมูล limit — ระบบกำลังเรียนรู้
+        <div className="grid gap-3 p-5 md:grid-cols-2" aria-busy="true" aria-label="กำลังโหลดโควต้า">
+          {[0, 1, 2, 3].map(i => <div key={i} className="skeleton h-32" />)}
         </div>
+      ) : sorted.length === 0 ? (
+        <EmptyState
+          icon={<IconPlug size={22} />}
+          title="ยังไม่มีข้อมูลโควต้า"
+          description="ระบบเรียนรู้ข้อจำกัดจาก header และ error 429 ที่ผู้ให้บริการตอบกลับ — ข้อมูลจะปรากฏหลังมีการเรียกใช้งานโมเดล"
+        />
       ) : (
-        <div className="grid grid-cols-[repeat(auto-fit,minmax(380px,1fr))] gap-3">
+        <div className="grid gap-3 p-5 md:grid-cols-2">
           {sorted.map((l, i) => (
             <div
               key={`${l.provider}-${l.modelId}-${i}`}
-              className="rounded-xl bg-gray-900/40 p-4 border border-white/10"
+              className="rounded-xl border border-white/10 bg-white/[0.03] p-4"
             >
-              <div className="flex items-center justify-between mb-2 gap-2">
-                <div className="flex items-center gap-2 min-w-0">
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <div className="flex min-w-0 items-center gap-2">
                   <ProviderBadge provider={l.provider} />
-                  <span className="text-base text-white font-mono truncate font-bold">
+                  <span className="truncate font-mono text-[13px] font-semibold text-white">
                     {l.modelId}
                   </span>
                 </div>
-                <span className="text-xs text-gray-500 shrink-0">
+                <span className="shrink-0 text-[11px] text-[var(--muted)]" title="แหล่งที่มาของข้อมูลโควต้า">
                   {formatSource(l.source)}
                 </span>
               </div>
 
-              {l.limitTpm != null && (
-                <LimitBar label="TPM" remaining={l.remainingTpm} limit={l.limitTpm} />
-              )}
-              {l.limitTpd != null && (
-                <LimitBar label="TPD" remaining={l.remainingTpd} limit={l.limitTpd} />
-              )}
-              {l.limitRpm != null && (
-                <LimitBar label="RPM" remaining={l.remainingRpm} limit={l.limitRpm} />
-              )}
-              {l.limitTpm == null && l.limitTpd == null && l.limitRpm == null && (
-                <div className="text-sm text-gray-500 italic py-1">
-                  ยังไม่มีข้อมูล limit ตัวเลข
-                </div>
-              )}
+              <div className="space-y-3">
+                {l.limitTpm != null && (
+                  <LimitBar label="TPM" remaining={l.remainingTpm} limit={l.limitTpm} />
+                )}
+                {l.limitTpd != null && (
+                  <LimitBar label="TPD" remaining={l.remainingTpd} limit={l.limitTpd} />
+                )}
+                {l.limitRpm != null && (
+                  <LimitBar label="RPM" remaining={l.remainingRpm} limit={l.limitRpm} />
+                )}
+                {l.limitTpm == null && l.limitTpd == null && l.limitRpm == null && (
+                  <div className="py-1 text-[12px] italic text-[var(--muted)]">
+                    ยังไม่มีข้อมูล limit ตัวเลข
+                  </div>
+                )}
+              </div>
 
-              <div className="mt-2 text-xs text-gray-500 text-right">
+              <div className="mt-3 text-right text-[11px] text-[var(--muted)]">
                 {formatRelative(l.lastUpdated)}
               </div>
             </div>
           ))}
         </div>
       )}
-    </div>
+    </Card>
   );
 }
 

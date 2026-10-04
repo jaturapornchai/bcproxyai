@@ -45,7 +45,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ name: stri
     }
     const body = (await req.json().catch(() => ({}))) as TestBody;
     const overrideUrl = body.base_url?.trim();
-    const chatUrl = overrideUrl || resolveProviderUrl(name);
+    const hardcodedUrl = resolveProviderUrl(name);
+    const chatUrl = overrideUrl || hardcodedUrl;
     if (!chatUrl) {
       return NextResponse.json({ ok: false, error: "no URL configured" }, { status: 400 });
     }
@@ -64,7 +65,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ name: stri
         { status: 400 },
       );
     }
-    const apiKey = getNextApiKey(name);
+    // The stored key only ever goes to the hardcoded provider endpoint — a base_url override is
+    // probed anonymously, otherwise it would exfiltrate the key to any public host.
+    const apiKey = chatUrl === hardcodedUrl ? getNextApiKey(name) : "";
 
     const headers: Record<string, string> = { "Accept": "application/json" };
     if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;

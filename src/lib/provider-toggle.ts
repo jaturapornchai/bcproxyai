@@ -6,24 +6,36 @@ import { getSqlClient } from "@/lib/db/schema";
 
 let cache: Map<string, boolean> | null = null;
 let cacheAt = 0;
+let loading: Promise<Map<string, boolean>> | null = null;
 const TTL_MS = 5_000;
 
-async function loadCache(): Promise<Map<string, boolean>> {
-  try {
-    const sql = getSqlClient();
-    const rows = await sql<{ provider: string; enabled: boolean }[]>`
-      SELECT provider, enabled FROM provider_settings
-    `;
-    const map = new Map<string, boolean>();
-    for (const r of rows) map.set(r.provider, r.enabled);
-    cache = map;
-    cacheAt = Date.now();
-    return map;
-  } catch {
-    cache = new Map();
-    cacheAt = Date.now();
-    return cache;
-  }
+function loadCache(): Promise<Map<string, boolean>> {
+  loading ??= (async () => {
+    try {
+      const sql = getSqlClient();
+      const rows = await sql<{ provider: string; enabled: boolean }[]>`
+        SELECT provider, enabled FROM provider_settings
+      `;
+      const map = new Map<string, boolean>();
+      for (const r of rows) map.set(r.provider, r.enabled);
+      cache = map;
+      cacheAt = Date.now();
+      return map;
+    } catch {
+      // Keep the last known toggles (an empty map would silently re-enable every provider);
+      // with nothing loaded yet the cache stays null and sync readers fail closed.
+      if (cache) cacheAt = Date.now();
+      return cache ?? new Map<string, boolean>();
+    } finally {
+      loading = null;
+    }
+  })();
+  return loading;
+}
+
+/** Await the first load so sync readers on the request path don't hit the fail-closed state. */
+export async function ensureProviderTogglesLoaded(): Promise<void> {
+  if (!cache) await loadCache();
 }
 
 /**
@@ -40,9 +52,9 @@ export async function isProviderEnabled(provider: string): Promise<boolean> {
  */
 export function isProviderEnabledSync(provider: string): boolean {
   if (!cache) {
-    // Trigger background load
+    // Fail closed: a disabled provider must never be called just because toggles aren't loaded yet.
     loadCache().catch(() => {});
-    return true;
+    return false;
   }
   if (Date.now() - cacheAt > TTL_MS) {
     loadCache().catch(() => {});
@@ -60,7 +72,10 @@ export async function setProviderEnabled(provider: string, enabled: boolean): Pr
     VALUES (${provider}, ${enabled}, now())
     ON CONFLICT (provider) DO UPDATE SET enabled = EXCLUDED.enabled, updated_at = now()
   `;
-  cache = null; // invalidate
+  // Reload now instead of nulling (which would fail every provider closed until it lands);
+  // wait out any in-flight read first since it may predate this write.
+  await loading;
+  await loadCache();
 }
 
 export async function getAllProviderToggles(): Promise<Record<string, boolean>> {

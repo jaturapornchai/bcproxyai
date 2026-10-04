@@ -32,7 +32,8 @@ export async function GET() {
       SELECT provider, api_key, updated_at FROM api_keys
     `;
 
-    const result = rows.map((r) => {
+    // Keys of providers outside the free catalog stay in the DB (never used) but are not listed.
+    const result = rows.filter((r) => isProviderCostAllowed(r.provider)).map((r) => {
       const plaintext = openSecret(r.api_key);
       return {
         provider: r.provider,

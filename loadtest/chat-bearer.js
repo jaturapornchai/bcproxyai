@@ -27,22 +27,22 @@ const params = {
 
 const CATEGORIES = [
   { name: 'thai', body: () => ({
-    model: 'sml/auto',
+    model: 'bcai/auto',
     messages: [{ role: 'user', content: 'ตอบสั้นๆว่า "สวัสดี" คำเดียว' }],
     max_tokens: 10,
   }) },
   { name: 'code', body: () => ({
-    model: 'sml/auto',
+    model: 'bcai/auto',
     messages: [{ role: 'user', content: 'Reverse a string in Python one-liner.' }],
     max_tokens: 30,
   }) },
   { name: 'simple', body: () => ({
-    model: 'sml/auto',
+    model: 'bcai/auto',
     messages: [{ role: 'user', content: 'What is 2+2? Just the number.' }],
     max_tokens: 5,
   }) },
   { name: 'uniq-' + Math.random(), body: () => ({
-    model: 'sml/auto',
+    model: 'bcai/auto',
     messages: [{ role: 'user', content: `Random number: ${Math.random()}. Say hi.` }],
     max_tokens: 10,
   }) },

@@ -5,6 +5,7 @@ import { runExams } from "./exam";
 import { appointTeachers } from "@/lib/teacher";
 import { acquireLeader, renewLeader, releaseLeader } from "./leader";
 import { startWarmup, stopWarmup } from "./warmup";
+import { getOpenRouterKeyStatus } from "@/lib/openrouter-key-status";
 
 export { scanModels } from "./scanner";
 export { checkHealth } from "./health";
@@ -23,6 +24,7 @@ export interface WorkerStatus {
 
 let workerTimer: ReturnType<typeof setInterval> | null = null;
 let examTimer: ReturnType<typeof setInterval> | null = null;
+let tripwireTimer: ReturnType<typeof setInterval> | null = null;
 let isRunning = false;
 let examRunning = false;
 
@@ -205,6 +207,14 @@ export function startWorker(): void {
   }, 5 * 60 * 1000);
   if (typeof examTimer.unref === "function") examTimer.unref();
 
+  // OpenRouter spend tripwire — disables the provider if any key's usage rises above its baseline
+  const checkTripwire = () => {
+    getOpenRouterKeyStatus().catch((err) => logWorker("openrouter-tripwire", `check failed: ${err}`, "error"));
+  };
+  checkTripwire();
+  tripwireTimer = setInterval(checkTripwire, 10 * 60 * 1000);
+  if (typeof tripwireTimer.unref === "function") tripwireTimer.unref();
+
   // Warmup pinger — keeps upstream sockets hot between cycles
   startWarmup();
 }
@@ -217,6 +227,7 @@ export function startWorker(): void {
 export async function stopWorker(): Promise<void> {
   if (workerTimer) { clearInterval(workerTimer); workerTimer = null; }
   if (examTimer) { clearInterval(examTimer); examTimer = null; }
+  if (tripwireTimer) { clearInterval(tripwireTimer); tripwireTimer = null; }
   try { stopWarmup(); } catch { /* ignore */ }
   // Best-effort flag flip — if isRunning is true we still release the lock
   // so the next replica can pick up immediately.

@@ -1,11 +1,11 @@
 /**
  * Gateway API Key service
  * ───────────────────────
- * Admin-issued Bearer tokens that clients present to call SMLGateway's `/v1/*`
+ * Admin-issued Bearer tokens that clients present to call BCAiRouter's `/v1/*`
  * endpoints in production. Plaintext is shown exactly once at creation; only
  * the SHA-256 hash is persisted.
  *
- * Key format:  `sml_live_<32 char base64url>`   (about 40 chars total)
+ * Key format:  `bcai_live_<32 char base64url>`   (about 40 chars total)
  *
  * Verification path is a single indexed SELECT by hash. A 30-second in-memory
  * cache keeps the middleware hot path cheap when the same key hits repeatedly.
@@ -13,8 +13,8 @@
 import { createHash, randomBytes } from "node:crypto";
 import { getSqlClient } from "@/lib/db/schema";
 
-const KEY_PREFIX = "sml_live_";
-const PREFIX_DISPLAY_LEN = 12; // "sml_live_Ab"
+const KEY_PREFIX = "bcai_live_";
+const PREFIX_DISPLAY_LEN = 13; // "bcai_live_Abc"
 const CACHE_TTL_MS = 30_000;
 
 function hashKey(plaintext: string): string {

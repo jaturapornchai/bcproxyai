@@ -1,7 +1,20 @@
 "use client";
 
-import { AnimatedNumber, Skeleton } from "./shared";
+import { useEffect, useState } from "react";
+import { IconCheck, IconCube, IconPulse, IconSparkle, IconX } from "./ui/icons";
+import { CountUp, Reveal, Stat } from "./ui/ui";
+import type { Tone } from "./ui/ui";
 import type { Stats } from "./shared";
+
+/** Counts up once on first paint, then updates in place so periodic refreshes do not replay the animation. */
+export function LiveNumber({ value, decimals = 0, suffix = "" }: { value: number; decimals?: number; suffix?: string }) {
+  const [settled, setSettled] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setSettled(true), 1200);
+    return () => clearTimeout(t);
+  }, []);
+  return settled ? <span className="tabular-nums">{value.toFixed(decimals)}{suffix}</span> : <CountUp value={value} decimals={decimals} suffix={suffix} />;
+}
 
 interface StatsCardsProps {
   stats: Stats | undefined;
@@ -11,28 +24,27 @@ interface StatsCardsProps {
 export function StatsCards({ stats, loading }: StatsCardsProps) {
   const examined = (stats?.passedExam ?? 0) + (stats?.failedExam ?? 0);
 
+  const cards: Array<{ label: string; value: number; suffix?: string; hint: string; tone: Tone; icon: React.ReactNode }> = [
+    { label: "โมเดลทั้งหมด", value: stats?.totalModels ?? 0, hint: "ที่ระบบรู้จัก", tone: "accent", icon: <IconCube size={16} /> },
+    { label: "สอบผ่าน", value: stats?.passedExam ?? 0, hint: "พร้อมรับงาน", tone: "success", icon: <IconCheck size={16} /> },
+    { label: "สอบตก", value: stats?.failedExam ?? 0, hint: "ไม่ถึงเกณฑ์", tone: "danger", icon: <IconX size={16} /> },
+    { label: "รอสอบ", value: Math.max(0, (stats?.totalModels ?? 0) - examined), hint: "ยังไม่ได้สอบ", tone: "warning", icon: <IconPulse size={16} /> },
+    { label: "คะแนนเฉลี่ย", value: stats?.avgScore ?? 0, suffix: "%", hint: "ของผู้สอบผ่าน", tone: "info", icon: <IconSparkle size={16} /> },
+  ];
+
   return (
-    <div className="grid grid-cols-[repeat(auto-fit,minmax(140px,1fr))] gap-2 mt-3">
-      {[
-        { label: "โมเดลทั้งหมด",  value: stats?.totalModels ?? 0, color: "from-indigo-500 to-purple-500", delay: "stagger-1", suffix: "", tip: "model ทั้งหมดที่ระบบรู้จัก (รวมที่ยังไม่สอบ + สอบตก)" },
-        { label: "สอบผ่าน",        value: stats?.passedExam ?? 0,  color: "from-emerald-500 to-teal-500",  delay: "stagger-2", suffix: "", tip: "model ที่ผ่านข้อสอบล่าสุด พร้อมรับงาน" },
-        { label: "สอบตก",          value: stats?.failedExam ?? 0,  color: "from-red-500 to-rose-500",      delay: "stagger-3", suffix: "", tip: "model ที่สอบไม่ผ่านเกณฑ์ในรอบล่าสุด" },
-        { label: "รอสอบ",          value: (stats?.totalModels ?? 0) - examined, color: "from-amber-500 to-orange-500", delay: "stagger-4", suffix: "", tip: "model ใหม่ที่ระบบยังไม่ได้ทดสอบ — worker จะสอบให้" },
-        { label: "คะแนนเฉลี่ย",   value: stats?.avgScore ?? 0,    color: "from-cyan-500 to-sky-500",      delay: "stagger-5", suffix: "%", tip: "เฉลี่ยของ model ที่สอบผ่าน (0-100%)" },
-      ].map((card) => (
-        <div key={card.label} className={`card-3d glass rounded-xl px-3 py-2 animate-fade-in-up ${card.delay}`} title={card.tip}>
-          <div className={`text-3xl font-black bg-gradient-to-r ${card.color} bg-clip-text text-transparent leading-tight`}>
-            {loading ? (
-              <Skeleton className="h-8 w-14" />
-            ) : (
-              <span>
-                <AnimatedNumber value={card.value} />
-                {card.suffix && <span className="text-base font-medium opacity-70">{card.suffix}</span>}
-              </span>
-            )}
-          </div>
-          <div className="text-xs text-gray-400 leading-tight">{card.label}</div>
-        </div>
+    <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+      {cards.map((c, i) => (
+        <Reveal key={c.label} i={i}>
+          <Stat
+            label={c.label}
+            tone={c.tone}
+            icon={c.icon}
+            hint={c.hint}
+            loading={loading}
+            value={<LiveNumber value={c.value} suffix={c.suffix} />}
+          />
+        </Reveal>
       ))}
     </div>
   );

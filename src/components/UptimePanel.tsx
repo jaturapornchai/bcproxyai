@@ -1,7 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import { PROVIDER_COLORS, fmtTime, fmtMs } from "./shared";
+import { Badge, Card, CardHeader, EmptyState } from "./ui/ui";
+import type { Tone } from "./ui/ui";
+import { IconCheck, IconPulse } from "./ui/icons";
 
 interface UptimeStat {
   provider: string;
@@ -44,6 +48,26 @@ const PROVIDER_HEX: Record<string, string> = {
   cerebras: "#f43e5e", sambanova: "#14b8a6", mistral: "#38bdf8", ollama: "#84cc16",
 };
 
+const INCIDENT_META: Record<string, { label: string; tone: Tone }> = {
+  rate_limited: { label: "ติด rate limit", tone: "warning" },
+  blacklisted: { label: "ถูกแบน", tone: "danger" },
+  complained: { label: "ถูกร้องเรียน", tone: "warning" },
+  error: { label: "ผิดพลาด", tone: "danger" },
+};
+
+function Shell({ children }: { children: ReactNode }) {
+  return (
+    <Card>
+      <CardHeader
+        icon={<IconPulse />}
+        title="ความพร้อมใช้งานของผู้ให้บริการ"
+        subtitle="สัดส่วนเวลาที่ผู้ให้บริการแต่ละรายตอบสนองได้ปกติ (Uptime) พร้อมเหตุการณ์ผิดปกติใน 24 ชั่วโมงล่าสุด"
+      />
+      {children}
+    </Card>
+  );
+}
+
 export function UptimePanel() {
   const [data, setData] = useState<UptimeData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -52,8 +76,9 @@ export function UptimePanel() {
     try {
       const res = await fetch("/api/uptime");
       if (res.ok) setData(await res.json());
-    } catch { /* silent */ }
-    setLoading(false);
+    } catch { /* silent */ } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -62,13 +87,24 @@ export function UptimePanel() {
     return () => clearInterval(t);
   }, [fetchData]);
 
-  if (loading) return <div className="text-gray-500 text-center py-8">กำลังโหลดข้อมูล Uptime...</div>;
+  if (loading) {
+    return (
+      <Shell>
+        <div className="grid gap-3 p-5 sm:grid-cols-2 lg:grid-cols-4" aria-busy="true" aria-label="กำลังโหลดข้อมูล Uptime">
+          {[0, 1, 2, 3].map(i => <div key={i} className="skeleton h-32" />)}
+        </div>
+      </Shell>
+    );
+  }
   if (!data || data.uptimeStats.length === 0) {
     return (
-      <div className="glass rounded-2xl p-8 text-center text-gray-500">
-        <div className="text-4xl mb-3">🏥</div>
-        <p>ครูยังไม่ได้เช็คชื่อ — รอครูใหญ่มาเช็คชื่อรอบแรกก่อนนะ</p>
-      </div>
+      <Shell>
+        <EmptyState
+          icon={<IconPulse size={22} />}
+          title="ยังไม่มีข้อมูลความพร้อมใช้งาน"
+          description="ระบบจะตรวจสุขภาพของผู้ให้บริการอัตโนมัติเป็นรอบ ๆ — ผลรอบแรกจะปรากฏที่นี่เมื่อตรวจเสร็จ"
+        />
+      </Shell>
     );
   }
 
@@ -79,37 +115,38 @@ export function UptimePanel() {
   const uniqueDates = [...new Set(dailyUptime.map(d => d.date))].sort();
 
   return (
-    <div className="space-y-4">
-      {/* Uptime Cards */}
-      <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3">
-        {uptimeStats.map(stat => {
+    <Shell>
+      {/* Provider uptime tiles */}
+      <div className="grid gap-3 p-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        {uptimeStats.map((stat, idx) => {
           const hex = PROVIDER_HEX[stat.provider] ?? "#6366f1";
           const colors = PROVIDER_COLORS[stat.provider] ?? PROVIDER_COLORS.openrouter;
           const cooldowns = cooldownMap.get(stat.provider) ?? 0;
-          const uptimeColor = stat.uptime_pct >= 99 ? "text-emerald-400" :
-            stat.uptime_pct >= 90 ? "text-yellow-400" : "text-red-400";
+          const uptimeColor = stat.uptime_pct >= 99 ? "text-emerald-300" :
+            stat.uptime_pct >= 90 ? "text-amber-300" : "text-rose-300";
 
           return (
-            <div key={stat.provider} className="glass rounded-xl p-4 relative overflow-hidden">
-              {/* Background glow */}
-              <div className="absolute top-0 right-0 w-20 h-20 rounded-full blur-2xl opacity-10" style={{ background: hex }} />
+            <div
+              key={stat.provider}
+              className="reveal relative overflow-hidden rounded-xl border border-white/10 bg-white/[0.03] p-4"
+              style={{ "--i": idx } as React.CSSProperties}
+            >
+              <div className="pointer-events-none absolute -right-5 -top-5 h-20 w-20 rounded-full opacity-20 blur-2xl" style={{ background: hex }} />
 
-              <div className="flex items-center justify-between mb-2">
-                <span className={`text-sm font-bold ${colors.text}`}>{stat.provider}</span>
-                {cooldowns > 0 && (
-                  <span className="text-[10px] bg-red-500/20 text-red-400 px-1.5 rounded">{cooldowns} cooldown</span>
-                )}
+              <div className="relative flex items-center justify-between gap-2">
+                <span className={`text-[13px] font-semibold ${colors.text}`}>{stat.provider}</span>
+                {cooldowns > 0 && <Badge tone="danger">{cooldowns} cooldown</Badge>}
               </div>
 
-              <div className={`text-3xl font-black ${uptimeColor}`}>
+              <div className={`relative mt-2 text-[28px] font-semibold tabular-nums tracking-tight ${uptimeColor}`}>
                 {stat.uptime_pct}%
               </div>
-              <div className="text-[10px] text-gray-500 mt-1">
-                {stat.total_checks} checks / {stat.avg_latency_ms ? fmtMs(stat.avg_latency_ms) : "-"} avg
+              <div className="relative mt-0.5 text-[12px] tabular-nums text-[var(--muted)]">
+                ตรวจ {stat.total_checks} ครั้ง · เฉลี่ย {stat.avg_latency_ms ? fmtMs(stat.avg_latency_ms) : "-"}
               </div>
 
-              {/* Mini 7-day sparkline */}
-              <div className="flex items-end gap-[2px] h-6 mt-2">
+              {/* Mini sparkline: uptime per day */}
+              <div className="relative mt-3 flex h-8 items-end gap-[3px]" role="img" aria-label={`Uptime รายวันของ ${stat.provider}`}>
                 {uniqueDates.map(date => {
                   const row = dailyUptime.find(d => d.date === date && d.provider === stat.provider);
                   const pct = row ? row.uptime_pct : 0;
@@ -117,8 +154,8 @@ export function UptimePanel() {
                   return (
                     <div
                       key={date}
-                      className="flex-1 rounded-sm"
-                      style={{ height: `${Math.max(pct, 5)}%`, background: barColor, opacity: 0.6 }}
+                      className="flex-1 rounded-sm opacity-60 transition-opacity hover:opacity-100"
+                      style={{ height: `${Math.max(pct, 5)}%`, background: barColor }}
                       title={`${date.slice(5)}: ${pct}%`}
                     />
                   );
@@ -129,41 +166,43 @@ export function UptimePanel() {
         })}
       </div>
 
-      {/* Incident Timeline */}
-      <div className="bg-gray-800/30 rounded-xl border border-gray-700/50 overflow-hidden">
-        <div className="px-4 py-3 border-b border-gray-700/50 flex items-center justify-between">
-          <h4 className="text-white font-medium text-sm">เหตุการณ์ — ใครมาสาย ใครขาดเรียน (24 ชม.)</h4>
-          <span className="text-xs text-gray-500">{incidents.length} รายการ</span>
+      {/* Incident timeline */}
+      <div className="border-t border-white/5">
+        <div className="flex items-center justify-between gap-3 px-5 py-3.5">
+          <div>
+            <h4 className="text-[13px] font-semibold text-white">เหตุการณ์ผิดปกติ (24 ชม.)</h4>
+            <p className="text-[12px] text-[var(--muted)]">โมเดลที่ติด rate limit ถูกแบน ถูกร้องเรียน หรือเกิดข้อผิดพลาด</p>
+          </div>
+          <Badge tone={incidents.length === 0 ? "success" : "warning"}>{incidents.length} รายการ</Badge>
         </div>
-        <div className="divide-y divide-gray-700/30">
-          {incidents.length === 0 ? (
-            <div className="text-center text-gray-500 py-6 text-sm">ไม่มีใครขาดเรียน — เด็กดีทุกคน! 🟢</div>
-          ) : (
-            incidents.map((inc, i) => {
+        {incidents.length === 0 ? (
+          <div className="flex items-center justify-center gap-2 px-5 pb-6 pt-2 text-[13px] text-emerald-300">
+            <IconCheck size={16} /> ไม่มีเหตุการณ์ผิดปกติ — ทุกอย่างทำงานปกติ
+          </div>
+        ) : (
+          <ul className="max-h-[360px] divide-y divide-white/5 overflow-y-auto border-t border-white/5">
+            {incidents.map((inc, i) => {
               const colors = PROVIDER_COLORS[inc.provider] ?? PROVIDER_COLORS.openrouter;
-              const statusIcon = inc.status === "rate_limited" ? "⏳" :
-                inc.status === "blacklisted" ? "🚫" :
-                inc.status === "complained" ? "📝" :
-                inc.status === "error" ? "❌" : "⚠️";
+              const meta = INCIDENT_META[inc.status] ?? { label: inc.status, tone: "neutral" as Tone };
               return (
-                <div key={i} className="px-4 py-2.5 flex items-center gap-3 text-xs">
-                  <span className="text-base">{statusIcon}</span>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-gray-200">{inc.model_id}</span>
-                      <span className={`${colors.text} text-[10px]`}>{inc.provider}</span>
+                <li key={i} className="flex items-center gap-3 px-5 py-3 text-[13px] transition-colors hover:bg-white/[0.02]">
+                  <Badge tone={meta.tone} className="shrink-0">{meta.label}</Badge>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-x-2">
+                      <span className="truncate font-mono text-[12.5px] text-gray-200">{inc.model_id}</span>
+                      <span className={`text-[11px] ${colors.text}`}>{inc.provider}</span>
                     </div>
                     {inc.error && (
-                      <div className="text-gray-500 truncate">{inc.error.slice(0, 80)}</div>
+                      <div className="truncate text-[12px] text-[var(--muted)]">{inc.error.slice(0, 80)}</div>
                     )}
                   </div>
-                  <div className="text-gray-600 shrink-0">{fmtTime(inc.checked_at)}</div>
-                </div>
+                  <div className="shrink-0 text-[12px] tabular-nums text-[var(--muted)]">{fmtTime(inc.checked_at)}</div>
+                </li>
               );
-            })
-          )}
-        </div>
+            })}
+          </ul>
+        )}
       </div>
-    </div>
+    </Shell>
   );
 }

@@ -31,7 +31,7 @@ function uniquePrompt() {
   const idx = Math.floor(Math.random() * topics.length);
   const nonce = Math.floor(Math.random() * 100000);
   return {
-    model: 'sml/auto',
+    model: 'bcai/auto',
     messages: [{ role: 'user', content: `${topics[idx]} [n=${nonce}]` }],
     max_tokens: 15,
   };

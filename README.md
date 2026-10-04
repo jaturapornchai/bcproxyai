@@ -1,566 +1,233 @@
-# SMLGateway
+# BCAiRouter
 
-**OpenAI-compatible LLM gateway ที่ใช้เฉพาะ free-tier model จาก provider ที่คัดเลือกไว้แล้ว**
-ระบบเรียนรู้จากการใช้งานเอง — ยิ่งใช้ยิ่งเลือก route ได้ดี
+**เกตเวย์ AI ส่วนตัวแบบ OpenAI-compatible ที่ใช้เฉพาะโมเดลฟรี จากหลาย provider**
+เลือกโมเดลให้อัตโนมัติตามประเภทงาน, สลับเส้นทางสำรองเมื่อ provider ล่ม และเรียนรู้จากผลการใช้งานจริง
 
-> ใช้ได้กับทุก client ที่รองรับ OpenAI SDK — Next.js, Python, LangChain, thClaws, Hermes Agent, OpenClaw, Aider, Cline, curl ฯลฯ
+**Production:** https://bcairouter.bcaicloud.com
 
----
+| ส่วน | ใครใช้ได้ |
+|---|---|
+| `/` ศูนย์ควบคุม 3D | **ทุกคนดูได้** (ดูอย่างเดียว ข้อมูลแบบไม่ระบุตัวตน) |
+| `/v1/*` API | client ที่ถือ key `bcai_live_*` (ออกที่ `/admin/keys`) |
+| หน้าอื่นและ `/api/*` ทั้งหมด | **เจ้าของระบบเท่านั้น** — login ด้วย Google (`AUTH_OWNER_EMAIL`) |
 
-## ⛔ ก่อนสมัคร provider — อ่านก่อน
-
-provider AI หลายเจ้า **ข้ามจาก free tier ไปตัดบัตรเครดิตเงียบๆ** เมื่อ quota หมด — SMLGateway ห้ามไม่ได้
-
-**กฎเหล็ก 4 ข้อก่อนกรอก API key:**
-1. **ใช้ email สำรอง** ที่ไม่เคยใส่บัตรเครดิต ไม่มี Google Pay/Apple Pay ผูก
-2. ถ้าตอนสมัคร **SKIP ใส่บัตรได้ → ใช้ได้** ปลอดภัย
-3. ถ้า provider **บังคับใส่บัตร** → ข้ามไปเลย ใช้เจ้าอื่นแทน
-4. ถ้าเผลอผูกบัตรไปแล้ว → **ลบบัตรออก** หรือตั้ง `spending limit = $0` ก่อนกรอก key
-
-หน้า `/setup` มี hazard-stripe banner เตือนทุกครั้ง — ห้ามปิด ห้ามข้าม
+ใช้ได้กับทุก client ที่รองรับ OpenAI SDK — Next.js, Python, LangChain, OpenClaw, Hermes Agent, thClaws, Cline, curl ฯลฯ
 
 ---
 
-## Catalog ปัจจุบัน — 15 providers / 130 models
+## หน้าแรก `/` — ศูนย์ควบคุม 3D (สาธารณะ)
 
-ทุก model ใน [src/lib/free-model-catalog.ts](src/lib/free-model-catalog.ts) ผ่านการ verify ด้วย direct API probe ว่าเป็น free tier จริง — ไม่ใช่ trial credit ที่จะหมดแล้วเก็บเงิน
+กาแล็กซีทางช้างเผือกแบบ WebGL เต็มจอ: **ดาว = provider**, **ดาวหาง = คำขอจริง** และกล้องเคลื่อนตามกิจกรรม
 
-| Provider | Models | Free tier |
-|---|--:|---|
-| OpenRouter | 33 | ตัวที่ลงท้าย `:free` + house models (owl-alpha) |
-| GitHub Models | 25 | Microsoft preview (Personal Access Token + `read:models`) |
-| SambaNova | 12 | 10-30 RPM, daily quota per model |
-| Google AI Studio | 8 | Gemini 2.x/3 Flash + Gemma 3/4 |
-| Mistral La Plateforme | 8 | Free Experiment 1G tok/เดือน |
-| NVIDIA NIM | 7 | ~40 RPM + starter credits |
-| Groq | 6 | 30 RPM / 1K-14K RPD |
-| Cohere | 6 | trial 1K calls/**month** (RPM throttled to 1) — multilingual incl Thai |
-| HuggingFace Inference | 6 | monthly free credits |
-| Cerebras | 5 | 1M tok/วัน, context cap 8K |
-| 🇹🇭 ThaiLLM (NECTEC) | 4 | 5 RPS / 200 RPM, no card |
-| Ollama Cloud | 3 | daily quota + key required |
-| 🇸🇬 SEA-LION (AI Singapore) | 3 | 10 RPM, no card |
-| Together AI | 2 | เฉพาะ `*-Free` endpoints |
-| 🇹🇭 Typhoon (SCB 10X) | 2 | 5 RPS / 200 RPM, no card |
+- **ศูนย์ควบคุม** (ค่าเริ่มต้น) — แถบตัวชี้วัด (คำขอวันนี้, อัตราสำเร็จ 1 ชม., เวลาตอบ p50/p95, โมเดลออนไลน์, ค่าใช้จ่าย $0.00) วางระหว่างหน้าต่างสองคอลัมน์ หน้าต่างลากได้ ย่อได้ และจำตำแหน่งไว้ในเบราว์เซอร์ มี dock กลางล่างสำหรับเปิด/ปิด
+- **ชม** — แถบบนกับ ticker คำขอล่าสุด (กดสลับได้ ระบบจำโหมดที่เลือก)
+- **มือถือ / แท็บเล็ตแนวตั้ง / จอเตี้ย** — ใช้ bottom sheet: แถวตัวชี้วัด + แท็บหน้าต่าง
+- **ไม่มี WebGL** — แสดงฉาก CSS แทน พร้อมป้าย "โหมดประหยัด" และซ่อนปุ่มกล้อง; ถ้า WebGL context หลุด ระบบลองสร้างใหม่ 1 ครั้งก่อน
+- คีย์ลัด: `H` ซ่อน/แสดง UI · `F` เต็มจอ · `Esc` กลับมุมกว้าง
 
-ลบ/เพิ่ม model ต้องแก้ `free-model-catalog.ts` แล้ว redeploy. Model ที่ deprecate เพิ่ม field `deprecatedAfter: 'YYYY-MM-DD'` แทนการลบ — จะถูก filter ออกอัตโนมัติเมื่อถึงวัน + warn 7 วันก่อน
+| หน้าต่าง | ผู้ชม | เจ้าของ |
+|---|:-:|:-:|
+| กิจกรรมสด · สนามสอบ & รอบตรวจ · สุขภาพผู้ให้บริการ · 24 ชั่วโมงล่าสุด · ปริมาณงาน & ความหน่วง | ✓ | ✓ |
+| การตัดสินใจของ Router · ป้องกันค่าใช้จ่าย (ปิดไว้ เปิดจาก dock) | ✓ (สรุป) | ✓ (เต็ม) |
+| ห้องเครื่อง · โควตา & การพักโมเดล · ถามเลย · เชื่อมต่อ · โมเดลยอดนิยม | — | ✓ |
+
+**สิ่งที่ผู้ชมไม่มีทางเห็น** (ตัดที่ฝั่ง server): ชื่อ provider/model, prompt/คำตอบ, ข้อความ error, request id, IP, key, เหตุผลการ routing, จำนวนต่อ provider ที่ระบุตัวได้ และอีเมลเจ้าของ — ผู้ชมเห็นดาวเป็น `ดาว sXXXXXX` (id แบบ HMAC เปลี่ยนทุกวัน UTC), โทเคนวันนี้ปัดลงทีละ 100K และ JS bundle ของ `/` ไม่มีชื่อ provider
+
+ข้อมูลมาจาก pulse ทุก 4 วินาที และ insights ทุก 30 วินาที (หยุดเมื่อแท็บถูกซ่อน) — อ่านจาก DB/Redis อย่างเดียว ไม่เรียก provider ไม่เรียก `/api/worker` และไม่เพิ่มแถวใน `gateway_logs`
 
 ---
 
-## 3 แบบการใช้งาน (เลือก 1)
+## Provider ที่รองรับ — 11 providers / 88 models
 
-ระบบ **auto-detect จาก `.env`** — ตั้ง env ของ method ไหน = method นั้นเปิดอัตโนมัติ
+ทุก model อยู่ใน [src/lib/free-model-catalog.ts](src/lib/free-model-catalog.ts) (hardcoded) — นอก catalog ระบบไม่เรียก
 
-| | ① Local | ② VPS + Password | ③ VPS + Google OAuth |
-|---|---|---|---|
-| **ใคร** | Dev เล่นคนเดียว | ทีมเล็ก, ไม่มี Gmail | ทีม production, audit รายคน |
-| **Setup** | 5 นาที | 10 นาที | 30-45 นาที |
-| **Auth** | 🚫 ไม่มี | Bearer + Password | Bearer + Password + Google |
-| **Client** | `api_key: "dummy"` | `Bearer sk-gw-...` / `sml_live_*` | `Bearer sk-gw-...` / `sml_live_*` |
-| **Admin UI** | เปิดหมด | Password 7-day cookie | Google login / Password fallback |
+| Provider | Models | Provider | Models |
+|---|--:|---|--:|
+| OpenRouter (`:free`) | 33 | Cohere (trial) | 6 |
+| SambaNova | 12 | ThaiLLM (NECTEC) | 4 |
+| Mistral | 8 | Cerebras | 4 |
+| NVIDIA NIM | 7 | SEA-LION (AI Singapore) | 3 |
+| Groq | 6 | Ollama Cloud | 3 |
+| | | Typhoon (SCB 10X) | 2 |
 
-### ① Local
-```bash
-git clone https://github.com/jaturapornchai/bcproxyai.git sml-gateway
-cd sml-gateway
-cp .env.example .env.local
-docker compose up -d --build
-# http://localhost:3334/
-```
+**ไม่รองรับ:** Google AI Studio (Gemini API key ตรง), Together AI, Hugging Face, GitHub Models (โมเดลของ Google ที่เสิร์ฟผ่าน OpenRouter เช่น `google/gemma-*:free` ใช้ได้)
 
-### ② VPS + Password
-ตั้ง 3 ตัวใน `.env.production`:
-```bash
-GATEWAY_API_KEY=sk-gw-<32-byte-hex>
-ADMIN_PASSWORD=<random-24-base64>
-AUTH_OWNER_EMAIL=admin@example.com
-```
-
-### ③ VPS + Google OAuth
-เพิ่มอีก 4 ตัว:
-```bash
-NEXTAUTH_URL=https://your-domain.com
-NEXTAUTH_SECRET=<random-32-base64>
-GOOGLE_CLIENT_ID=<from-google-console>
-GOOGLE_CLIENT_SECRET=<from-google-console>
-```
-เปิด method ไหน = ตั้ง env ของ method นั้น · ไม่ตั้ง = ปิด · ไม่มี `AUTH_MODE` flag
+Model ที่จะเลิกให้บริการใส่ `deprecatedAfter: 'YYYY-MM-DD'` — ถูกกรองออกอัตโนมัติเมื่อถึงวัน และเตือนล่วงหน้า 7 วัน
 
 ---
 
-## Quick Start
+## กันเสียเงิน (no-spend)
+
+- **Catalog-only** — `isModelCostAllowed()` ตรวจทุก upstream call กับ catalog; env allowlist ใดๆ ถูกละเว้น
+- **OpenRouter `max_price = 0`** — `applyNoSpendGuards()` ล็อก `provider.max_price` เป็น 0 ทุกคำขอ (OpenRouter ปฏิเสธเองถ้ามีราคา)
+- **ตัดของที่คิดเงิน** — ลบ body key ที่พาไป model/feature เสียเงิน (`models`, `route`, `preset`, `provider`, `plugins`, `web_search*`, `search`), เหลือเฉพาะ tool แบบ `function` และ content แบบ `text`/`image_url` (ตัด server tools และไฟล์/PDF)
+- **สวิตช์ provider บังคับจริง** — provider ที่ปิดใน `/setup` ไม่ได้รับ key จึงไม่มีทางถูกเรียก
+- **เฝ้า key OpenRouter + tripwire** — worker เรียก `GET https://openrouter.ai/api/v1/key` ทุก 10 นาที (cache 5 นาที): เตือนเมื่อ key ไม่มี credit limit, บัญชีไม่ใช่ free tier หรือโควตาฟรีรายวันใช้ ≥ 80%; จำ `usage` ครั้งแรกเป็น baseline ถ้า `usage` เพิ่มเมื่อไร ระบบปิด OpenRouter ทันที เปิดคืนเองที่ `/setup` (= ตั้ง baseline ใหม่) · สถานะดูได้ที่ `/setup`, `/overview` และ `GET /api/openrouter-status`
+
+ตั้งค่าฝั่งบัญชี provider ให้เก็บเงินไม่ได้ด้วย (สมัครด้วยอีเมลที่ไม่ผูกบัตร):
+
+| Provider | กันเสียเงิน |
+|---|---|
+| OpenRouter | เครดิต $0 + ปิด auto top-up หรือตั้ง credit limit ของ key = $0 |
+| Groq / SambaNova | ไม่ใส่ payment method |
+| Mistral | แผน Experiment (ฟรี) ปิด pay-as-you-go |
+| Cohere | ใช้ Trial key เท่านั้น |
+| Cerebras / Ollama Cloud | ไม่ซื้อเครดิต |
+| NVIDIA / Typhoon / ThaiLLM / SEA-LION | ไม่มีระบบเก็บเงิน |
+
+---
+
+## ใช้งาน `/v1` (OpenAI-compatible)
+
+เจ้าของออก key `bcai_live_*` ที่ `/admin/keys` (เก็บเป็น hash) แล้วส่งเป็น Bearer:
 
 ```bash
-docker compose up -d --build
-sleep 10 && curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3334/
-start http://localhost:3334/         # Windows — เปิด dashboard
-start http://localhost:3334/guide    # คู่มือเชื่อมต่อ + ตัวอย่างโค้ด
-```
-
-ยิงทดสอบ (local — no auth):
-```bash
-curl -X POST http://localhost:3334/v1/chat/completions \
+curl https://bcairouter.bcaicloud.com/v1/chat/completions \
+  -H "Authorization: Bearer bcai_live_..." \
   -H "Content-Type: application/json" \
-  -d '{"model":"sml/auto","messages":[{"role":"user","content":"สวัสดี"}]}'
+  -d '{"model":"bcai/auto","messages":[{"role":"user","content":"สวัสดี"}]}'
 ```
 
-ผ่าน production (Cloudflare):
-```bash
-curl -X POST https://your-domain.com/v1/chat/completions \
-  -H "Authorization: Bearer sk-gw-..." \
-  -H "Content-Type: application/json" \
-  -d '{"model":"sml/auto","messages":[{"role":"user","content":"สวัสดี"}]}'
+```python
+from openai import OpenAI
+client = OpenAI(base_url="https://bcairouter.bcaicloud.com/v1", api_key="bcai_live_...")
+client.chat.completions.create(model="bcai/thai", messages=[{"role": "user", "content": "สวัสดี"}])
 ```
-
----
-
-## Virtual Models
 
 | Model | เลือกยังไง |
 |---|---|
-| `sml/auto` | category-aware — กระจาย provider ใน top-6 candidates ก่อน fallback (single-provider outage ไม่ stall) |
-| `sml/fast` | latency ต่ำสุด — boost Groq/Cerebras/SambaNova/Together และใช้ EWMA ของ production latency |
-| `sml/tools` | รองรับ tool calling — function call schema validation gate |
-| `sml/thai` | filter เฉพาะ provider Thai-tuned — `thaillm` / `typhoon` / `sealion` ก่อน, fallback ไป generic ถ้าทุกตัว dead |
-| `sml/consensus` | ส่งไปหลาย model พร้อมกัน vote คำตอบที่ตรงกันมากสุด |
+| `bcai/auto` | ตามประเภทงาน (thai / code / tools / vision / math / json …) กระจายหลาย provider ก่อน fallback |
+| `bcai/fast` | latency ต่ำสุด |
+| `bcai/tools` | รองรับ tool calling + ตรวจ JSON ของ `tool_calls` |
+| `bcai/thai` | โมเดลไทยก่อน (ThaiLLM / Typhoon / SEA-LION) |
+| `bcai/consensus` | ยิงหลายโมเดลพร้อมกันแล้วเลือกคำตอบที่ตรงกันมากสุด |
+| `<provider>/<model_id>` | ระบุตรง เช่น `groq/llama-3.3-70b-versatile` |
 
-เรียก model ตรงได้ทุกตัวใน catalog เช่น `openrouter/openai/gpt-oss-20b:free`, `groq/llama-3.3-70b-versatile`, `typhoon/typhoon-v2.5-30b-a3b-instruct`
+Endpoint: `chat/completions`, `completions`, `models` (+ `models/search`, `models/:id`), `embeddings`, `structured`, `compare`, `audio/speech`, `audio/transcriptions` · เฉพาะเจ้าของ: `trace/:reqId`, จัดการ `prompts` — รายละเอียด request/response, headers และตัวอย่างโค้ดอยู่ที่ [docs/API-GUIDE.md](docs/API-GUIDE.md) และหน้า `/guide`
 
----
+เส้นทางการเลือกโมเดล: response cache → semantic cache → ตรวจประเภทงาน → ตัดโมเดลที่พัก/หมดอายุ → เรียงตาม latency จริง (EWMA) → กระจาย provider → hedge/speculative race → circuit breaker + RPM throttle ต่อโมเดล → ตรวจ/ซ่อม tool-call JSON
 
-## Reliability Features
-
-### Hardcoded mode (no runtime discovery)
-- Catalog ฝังในโค้ด (`free-model-catalog.ts`) — scanner sync เข้า DB ทุก 15 นาที, ไม่ scrape internet
-- ENV vars `SML_FREE_PROVIDER_ALLOWLIST`, `SML_FREE_MODEL_ALLOWLIST`, `SML_ALLOW_PAID_PROVIDERS` ถูก ignore ทั้งหมด — leak `.env` ไม่ขยาย access ได้
-
-### Circuit breaker (3-state)
-- In-memory + Redis-mirrored — multi-pod safe ผ่าน `SET NX EX 65`
-- เมื่อ model fail ≥2 ครั้งใน 30s → half-open: admit 1 probe ทั่ว cluster
-- Success ปิด breaker ทันที, fail double cooldown
-
-### Client-side RPM throttle
-- Redis sliding-window per `(provider, model)` ตาม `rpmLimit` ใน catalog
-- Skip locally ก่อนยิง upstream → ไม่เผา quota แล้วเจอ 429 cooldown ยาว
-- Fail-open บน Redis outage
-
-### Provider-diversity fallback chain
-- Top-6 candidates round-robin across providers ใน `reorderForLatency()`
-- OR ล่ม → ลำดับถัดไปคือ Groq/Cerebras/Google ทันที (ไม่ใช่ OR ตัวที่ 2-6)
-
-### Tool-call JSON validation
-- ทุก response ที่มี `tool_calls` ตรวจ `JSON.parse(arguments)` ก่อน return
-- Malformed JSON / non-object args → treated as fail, fallback ไป provider ถัดไป
-- ป้องกัน OpenClaw/Hermes agents stall จาก broken function call
-
-### Deprecation watcher
-- Field `deprecatedAfter: 'YYYY-MM-DD'` ใน catalog entry
-- หลังวันที่ระบุ — auto-filter จาก `/v1/models` + scanner + cost policy check
-- 7 วันก่อน EOL — log warn จาก worker cycle
-
-### Regression alert
-- `checkRegressionWarning()` เทียบ success rate 1h ล่าสุด vs baseline 23h
-- Drop ≥20pp + min sample 10 ฝั่งละ → log warn + POST ไปยัง `GATEWAY_REGRESSION_WEBHOOK` (ถ้าตั้ง)
-- Slack/Discord-compatible payload (`text` + `content` field)
-- Cooldown 10 นาทีต่อ modelId กัน log spam
-
-### Cost policy
-- `isModelCostAllowed(provider, modelId)` ตรวจกับ catalog set ตรงๆ
-- ทุก request ผ่าน `forwardToProvider` → check ก่อนยิง
-- Hardcoded — ไม่อ่าน env, ไม่อ่าน DB allowlist
+Worker (รอบหลักทุก 15 นาที) sync catalog → ตรวจสุขภาพ → สอบโมเดลตามระดับที่ตั้ง (ประถม 40% · มัธยมต้น 50% · มัธยมปลาย 60% · มหาลัย 70%) → เลือกครูประจำหมวด; ตั้งระดับที่ `/api/exam-config`
 
 ---
 
-## Security & Validation
+## API สาธารณะ vs เจ้าของ
 
-### Response headers (set ผ่าน `next.config.ts` กับทุก path)
-```
-Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
-X-Content-Type-Options: nosniff
-X-Frame-Options: DENY
-Referrer-Policy: strict-origin-when-cross-origin
-Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=()
-```
-`x-powered-by` ปิด (`poweredByHeader: false`)
-
-### Request validation (`/v1/chat/completions` + `/v1/embeddings` + `/v1/audio/speech`)
-| Check | Behavior |
-|---|---|
-| `content-length > 1MB` | 413 ทันที (ไม่รอ parse) |
-| Invalid JSON body | 400 + parse error message |
-| `messages` ว่าง / ไม่ใช่ array | 400 |
-| `max_tokens` / `max_completion_tokens` ไม่ใช่ int 1-128000 | 400 |
-| `model` ไม่ใช่ string | 400 |
-
-### Prompt-injection guard (`/v1/chat/completions` — default ON)
-- Wrap user/tool content ด้วย `<untrusted_input>...</untrusted_input>`
-- Prepend guard directive ใน system prompt — บอก model ไม่ทำตามคำสั่งใน tags
-- Opt-out: header `X-SMLGateway-Guard: 0` (สำหรับ red-team / passthrough)
-
-### Constant-time compare
-master Bearer ทุกจุดใช้ [secret-compare.ts](src/lib/secret-compare.ts) `timingSafeStringEqual()`
-
-### SSRF protection
-`/api/admin/providers/*/test` ผ่าน [ssrf-guard.ts](src/lib/ssrf-guard.ts) — DNS resolve + block RFC1918 / loopback / link-local / cloud-metadata + port allowlist
-
----
-
-## Smart Routing
-
-1. **Response cache HIT** — hash body+model, TTL 30min → ~200ms ไม่เรียก upstream
-2. **Semantic cache** — pgvector ANN (HNSW), per-tenant key, 1h TTL
-3. **Category detect** — code / thai / tools / vision / math / reasoning / json / ...
-4. **Sticky pin** — `(client_ip, category)` 30s — pin warm socket
-5. **Pool filter** — ตัด `cooldown_until > now()` + `deprecated` ออก
-6. **Context filter** — `estTokens > 20K` → เลือก `context_length > estTokens × 1.5`
-7. **Latency-aware sort** — EWMA จาก `routing_stats` (24h) + `PROVIDER_LATENCY_HINT_MS` fallback สำหรับ provider ใหม่
-8. **Provider diversity** — top-6 round-robin across providers
-9. **Hedge top-N** — ยิงพร้อมกัน, race first byte
-10. **Speculative hedge** — primary > 1.5s → backup race
-11. **Circuit breaker** — half-open probe limit ป้องกัน thundering herd
-12. **Local RPM throttle** — Redis sliding window
-13. **JSON tool-call repair** — Hermes/Qwen JSON-in-content → OpenAI `tool_calls` shape
-14. **Mistral message-order patch** — inject `assistant` turn ก่อน `tool` after `system`/`user`
-15. **Connection pre-warm** — ทุก 4 นาที (keep-alive socket)
-
----
-
-## โรงเรียน — Exam + Teachers
-
-### Exam levels (cumulative)
-| ระดับ | ชื่อ | จำนวนข้อ | ผ่าน |
-|---|---|--:|---|
-| 🟢 primary | ประถม | 5 | ≥40% |
-| 🟡 middle | มัธยมต้น | 14 | ≥50% |
-| 🟠 high | มัธยมปลาย | ~30 | ≥60% (default) |
-| 🔴 university | มหาลัย | ~41 | ≥70% |
-
-**Thai battery: 32 questions** — translation TH↔EN, idiom (น้ำขึ้นให้รีบตัก), proverb, word problem ภาษาไทย, currency words, polite particle (ห้าม `ครับ/ค่ะ` slash), numerals (๒๐๒๖), classifier (ลักษณนาม), royal vocab (เสวย), tone marker, code-switch detection, Isan dialect, address order, BE↔CE conversion, phone format, summary
-
-ตั้งระดับ: dashboard **🎚 ระดับสอบ** หรือ `POST /api/exam-config { "level": "middle" }`
-สอบใหม่ทุกคน: `POST /api/exam-reset` (ลบ `exam_attempts` + `model_category_scores`)
-ใส่ key ใหม่ → re-exam อัตโนมัติ: `triggerExamForProvider()` (5-min cooldown guard)
-
-### Teachers
-- **ครูใหญ่** — 1 ตัว, คะแนนรวมสูงสุด, ใช้ตอบ `sml/auto` ที่ไม่ระบุ category
-- **ครูหัวหน้าหมวด** — 1 ตัวต่อ category (12 หมวด)
-- **ครูคุมสอบ** — ≤10 ตัว, ใช้ออก/เกรดข้อสอบ
-- หลังสอบ → `DELETE FROM teachers` + bulk insert (atomic swap)
-
----
-
-## API
-
-| Endpoint | หน้าที่ |
-|---|---|
-| `POST /v1/chat/completions` | OpenAI-compatible (text / vision / tools / stream) |
-| `GET  /v1/models` | รายการ + 5 virtual aliases (deprecation-filtered) |
-| `GET  /v1/models/:id` | model ตัวเดียว — รองรับ ID ที่มี `/` |
-| `GET  /v1/models/search` | filter/rank ตาม category, context, tools |
-| `POST /v1/compare` | ยิงไปหลาย model พร้อมกัน (≤10) |
-| `POST /v1/structured` | Chat + JSON schema validation + auto-retry |
-| `POST /v1/completions` | legacy completion |
-| `POST /v1/embeddings` | embeddings (8 providers: mistral/cohere/google/nvidia/together/HF/openrouter/ollama, multilingual incl Thai) |
-| `POST /v1/audio/speech` | TTS — Thai input → msedge-tts (`th-TH-PremwadeeNeural`/`NiwatNeural`), อื่น → Groq Orpheus EN/AR |
-| `GET  /v1/trace/:reqId` | log ของ request เดิม |
-| `GET/POST/PUT/DELETE /v1/prompts[/:name]` | prompt library |
-| `GET  /api/health` | public health check |
-| `GET  /api/status` | health + counts |
-| `GET  /api/my-stats?window=24h` | stats ของ IP ตัวเอง (p50/p95/p99) |
-| `POST /api/worker` | trigger scan + exam cycle |
-| `POST /api/exam-reset` | ลบประวัติสอบ + trigger worker |
-| `GET/POST /api/exam-config` | active exam level |
-| `GET  /api/admin/keys` `POST /api/admin/keys` | **[owner]** issue/revoke `sml_live_*` |
-| `GET/PUT /api/admin/providers` | **[owner]** provider catalog |
-| `GET/DELETE /api/admin/circuits` | **[owner]** per-model breaker state |
-
-**`[owner]`** = master `Bearer GATEWAY_API_KEY` / admin password cookie / Google owner session
-
-### Sensitive GET endpoints (auth-gated)
-- `/api/gateway-logs`, `/v1/trace/:reqId` — full prompts
-- `/api/infra`, `/api/dev-suggestions`, `/api/k6-report`, `/api/complaint`
-- `/api/setup`, `/api/status`, `/api/warmup-stats`
-- `/api/semantic-cache`, `/api/providers`, `/api/provider-limits`
-- `/api/live-score`, `/api/learning`, `/api/control-room`
-- `/api/routing-explain`, `/api/autopilot`, `/api/replay`
-
-`/api/health` + `/api/auth/*` ยังเปิด public
-
-### Response headers (`/v1/chat/completions`)
-```
-X-SMLGateway-Model        ชื่อ model ที่ตอบจริง
-X-SMLGateway-Provider     provider ที่ตอบ
-X-SMLGateway-Request-Id   ใช้กับ /v1/trace/:reqId
-X-SMLGateway-Cache        HIT (จาก semantic cache)
-X-SMLGateway-Hedge        true (ชนะจาก hedge)
-X-SMLGateway-Consensus    รายชื่อ model (ถ้าใช้ sml/consensus)
-```
-
-### Dev controls (body extra หรือ header)
-```
-prefer:          ["openrouter"]    ดัน provider ขึ้น
-exclude:         ["cohere"]        ตัดทิ้ง
-max_latency_ms:  3000              กรอง model
-strategy:        "fastest"|"strongest"
-```
-
----
-
-## Integration
-
-### Next.js / Node
-```ts
-import OpenAI from "openai";
-const client = new OpenAI({ baseURL: "http://localhost:3334/v1", apiKey: "dummy" });
-const chat = await client.chat.completions.create({
-  model: "sml/auto",
-  messages: [{ role: "user", content: "สวัสดี" }],
-});
-```
-
-### Python
-```python
-from openai import OpenAI
-client = OpenAI(base_url="http://localhost:3334/v1", api_key="dummy")
-chat = client.chat.completions.create(
-    model="sml/thai",
-    messages=[{"role": "user", "content": "แปลเป็นไทย: I love coding"}],
-)
-```
-
-### LangChain
-```python
-from langchain_openai import ChatOpenAI
-llm = ChatOpenAI(base_url="http://localhost:3334/v1", api_key="dummy", model="sml/auto")
-```
-
-### thClaws
-```bash
-docker run --rm \
-  -e DASHSCOPE_BASE_URL=https://your-domain.com/v1 \
-  -e DASHSCOPE_API_KEY=sml_live_... \
-  -e THCLAWS_DISABLE_KEYCHAIN=1 \
-  -v "$PWD:/workspace" -w /workspace \
-  thclaws-smlgateway:local \
-  -p -m sml/auto --permission-mode auto \
-  "สรุปโปรเจกต์นี้"
-```
-
-### Hermes Agent
-```bash
-hermes config set model.provider custom
-hermes config set model.base_url https://your-domain.com/v1
-hermes config set model.default sml/auto
-echo 'OPENAI_API_KEY=sml_live_...' >> ~/.hermes/.env
-```
-
-ตัวอย่างเพิ่มเติม (vision, tools, streaming, 6 ภาษา) → `/guide`
-
----
-
-## Architecture
-
-```
-┌──────────────┐     ┌─────────────────────┐     ┌──────────┐
-│  OpenAI SDK  │────▶│  Caddy (in-compose) │────▶│ Next.js  │
-│   client     │     │  :3334 → :3000      │     │ gateway  │
-└──────────────┘     └─────────────────────┘     └────┬─────┘
-                                                     │
-                              ┌──────────────────────┼──────────────────────┐
-                              ▼                      ▼                      ▼
-                        ┌──────────┐          ┌───────────┐          ┌──────────────┐
-                        │Postgres  │          │  Valkey   │          │ 15 providers │
-                        │pgvector  │          │ (Redis)   │          │  upstream    │
-                        │  :5434   │          │   :6382   │          │              │
-                        └──────────┘          └───────────┘          └──────────────┘
-```
-
-### Containers
-| Container | Image | Port |
+| Endpoint | ผู้ชม | เจ้าของ |
 |---|---|---|
-| `sml-gateway-sml-gateway-1` | next.js app | 3000 (internal) |
-| `sml-gateway-caddy-1` | caddy:2-alpine | 3334 → 80 |
-| `sml-gateway-postgres-1` | pgvector/pgvector:pg17 | 5434 → 5432 |
-| `sml-gateway-redis-1` | valkey/valkey:8-alpine | 6382 → 6379 |
+| `GET /api/health` | `{status}` อย่างเดียว (503 เฉพาะตอน DB ต่อไม่ได้) | รายงานเต็ม (DB, Redis, โมเดลพร้อมเสิร์ฟ, alerts) |
+| `GET /api/public/pulse` | กิจกรรมสดแบบไม่ระบุตัวตน | — |
+| `GET /api/public/insights` | สรุป 24 ชม., p95, ผลสอบแบบตำแหน่ง, รอบตรวจ, จำนวนโมเดลพัก/ใหม่ | — |
+| `GET /api/activity` | 401 | กิจกรรมสดฉบับเต็ม (ชื่อ provider/model, routing) |
+| `GET /api/insights` | 401 | insights ฉบับเต็ม + เหตุขัดข้อง, error ล่าสุด, โควตา, การพักโมเดล, perf, ระบบ |
+| `GET /api/openrouter-status` | 401 | สถานะ key OpenRouter + tripwire |
 
-Scale: `docker compose up -d --scale sml-gateway=N`
+`/api/*` อื่นทั้งหมดเฉพาะเจ้าของ (ไม่ใช่ → 401 JSON) · หน้าอื่น → redirect ไป `/login` · หลัง login เจ้าของกลับมาที่ `/`
 
-### DB highlights (29+ tables)
-| Table | หน้าที่ |
+---
+
+## การยืนยันตัวตน ([src/proxy.ts](src/proxy.ts) — default-deny)
+
+- **Server mode** — เปิดเมื่อตั้ง auth env อย่างน้อย 1 ตัว: public เฉพาะ `/`, `/login`, `/api/auth/*`, `/api/public/*`, `/api/health`; `/v1/*` ต้องมี key `bcai_live_*`; `/v1/trace/*`, `/v1/prompts*` และที่เหลือเฉพาะเจ้าของ
+- **Production** — เจ้าของ login ด้วย Google เท่านั้น: ไม่มี password login และไม่มี master key
+- **Local open mode** — ไม่ตั้ง auth env เลย = ไม่มี login ทุกหน้าและ API เปิด (ถือเป็นเจ้าของ) ใช้บนเครื่องตัวเองเท่านั้น
+
+---
+
+## Environment variables
+
+ไฟล์ตัวอย่าง: [.env.example](.env.example) (local → `.env.local` + `.env` สำหรับ compose) และ [.env.production.example](.env.production.example) (server → `.env.production`) — ห้าม commit ไฟล์จริง
+
+| Env | ความหมาย |
 |---|---|
-| `models` | catalog sync จาก `free-model-catalog.ts` + capability flags |
-| `teachers` | principal + heads + proctors (rebuild ทุก cycle) |
-| `model_category_scores` | คะแนนต่อ 12 หมวด |
-| `exam_attempts` / `exam_answers` | ผลสอบ + `exam_level` |
-| `model_fail_streak` | exponential cooldown |
-| `model_capacity` | EWMA token + latency tracking |
-| `health_logs` | ping + cooldown_until |
-| `provider_limits` | TPM/TPD/RPM parsed จาก response header |
-| `gateway_api_keys` | `sml_live_*` per-client (SHA-256 hash) |
-| `gateway_logs` | request log + routing_explain |
-| `routing_stats` | p50/p99 latency per provider |
-| `category_winners` | win/loss per (category, model) |
-| `semantic_cache` | pgvector embeddings (HNSW) |
+| `AUTH_OWNER_EMAIL` | อีเมล Google ของเจ้าของ (หลายคนคั่นด้วย `,`) — ตั้งแล้วเปิด server mode |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | OAuth client ของ Google (redirect URI: `{NEXTAUTH_URL}/api/auth/callback/google`) |
+| `NEXTAUTH_URL` | URL ของ deployment (prod ตั้งใน `docker-compose.prod.yml`) |
+| `NEXTAUTH_SECRET` (หรือ `AUTH_SECRET`) | ใช้ sign session และเป็น key ของ id ดาวสาธารณะ |
+| `APP_ENCRYPTION_KEY` | (ไม่บังคับ) เข้ารหัส provider key ใน DB (AES-256-GCM) — ตั้งแล้วห้ามเปลี่ยน |
+| `GATEWAY_API_KEY` | master Bearer key (สิทธิ์เจ้าของ) — ไม่ใช้บน production |
+| `ADMIN_PASSWORD` / `ADMIN_COOKIE_SECRET` | password login (แสดงเฉพาะเมื่อไม่ได้ตั้ง Google) + key sign cookie — ไม่ใช้บน production |
+| `POSTGRES_PASSWORD` + `DATABASE_URL` | รหัส Postgres ของ compose และ connection string — docker compose อ่านจาก `.env` (local) หรือ `--env-file .env.production` (prod) ไม่มีค่าฝังในไฟล์ compose; รัน `next dev`/`next start` นอก compose ตั้ง `DATABASE_URL` ใน `.env.local` |
+| `REDIS_URL` | Valkey — compose ตั้งให้แล้ว |
+| `WORKER_AUTOSTART` | `0` = ไม่เริ่ม worker ตอนบูต (ค่าเริ่มต้นเริ่ม) |
+
+Provider API key **ไม่อยู่ใน env** — กรอกที่ `/setup` แล้วเก็บใน DB · ตัวปรับจูนอื่น (`PG_POOL_MAX`, `CACHE_MAX_ENTRIES`, `RESPONSE_CACHE_ENABLED`, `SEMANTIC_CACHE_ENABLED`, `TRUSTED_PROXY_HOPS`, `GATEWAY_REGRESSION_WEBHOOK`, `LOG_LEVEL` ฯลฯ) มีค่าเริ่มต้นในโค้ดแล้ว
 
 ---
 
-## Worker cycles (auto)
+## Local dev
 
-| Loop | Interval | งาน |
-|---|---|---|
-| main | 15 นาที | sync hardcoded catalog → DB + health + exam + teacher |
-| exam | 5 นาที | สอบ model ที่รอในคิว |
-| warmup | 2 นาที | ping model — keep socket warm |
+```bash
+cp .env.example .env.local        # เว้น auth env ว่าง = open mode
+docker compose up -d --build
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3334/   # 200
+```
 
-Trigger manual: `POST /api/worker`
+เปิด `http://localhost:3334/` (ศูนย์ควบคุม), `/setup` (ใส่ provider key), `/overview` (dashboard), `/guide` (คู่มือเชื่อมต่อ)
+
+ตรวจก่อนส่งงาน (ต้องผ่านทั้งหมด):
+```bash
+npx tsc --noEmit
+npx eslint src --quiet
+npx vitest run
+npx next build
+docker compose up -d --build && docker ps --format "{{.Names}} {{.Status}}" | grep bcai-router   # Up
+```
+
+Stack: Next.js 16 (App Router) · React 19 · TypeScript · Tailwind CSS 4 · three.js · Postgres (pgvector) · Valkey · Docker Compose + Caddy
 
 ---
 
-## Port Map
+## Deploy (droplet)
+
+Production อยู่ที่ `/opt/bcai-router` บน droplet (ไม่ใช่ git checkout): host Caddy → `127.0.0.1:8335` → Caddy ใน compose → app
+
+```bash
+# 1. ส่งไฟล์ (tar ไม่ลบไฟล์ที่ถูกลบในเครื่อง — ลบบน server เอง)
+tar czf - --exclude=./node_modules --exclude=./.next --exclude=./.git --exclude='./.env*' . \
+  | ssh root@<droplet> 'cd /opt/bcai-router && tar xzf -'
+
+# 2. build + start + รอ /api/health
+ssh root@<droplet> 'cd /opt/bcai-router && bash scripts/deploy-droplet.sh'
+
+# 3. ตรวจ
+curl -s -o /dev/null -w "%{http_code}\n" https://bcairouter.bcaicloud.com/api/health   # 200
+```
+
+`scripts/deploy-droplet.sh` ไม่ยอม deploy ถ้าไม่มี `.env.production`, ยังมี placeholder `<...>` จากไฟล์ตัวอย่าง หรือไม่ได้ตั้ง auth env สักตัว (gateway เปิดโล่ง) จากนั้นรัน `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build` และรอ `/api/health` = 200 ภายใน 30 วินาที
+
+Scale: `docker compose up -d --scale bcai-router=N` (Caddy ใน compose กระจายโหลด)
+
+---
+
+## Ports
 
 | Port | Service |
-|------|---------|
-| 3333 | SMLGateway via external Caddy (300s timeout) |
-| 3334 | SMLGateway via in-compose Caddy (load balanced) |
-| 5434 | Postgres (pgvector) |
-| 6382 | Valkey (Redis-compatible) |
+|---|---|
+| 3333 | BCAiRouter ผ่าน Caddy ภายนอก (timeout 300s) |
+| 3334 | BCAiRouter ผ่าน Caddy ใน compose (load balanced) — container app เปิดแค่ 3000 ภายใน |
+| 5434 | Postgres (service ใน compose) |
+| 6382 | Redis/Valkey (service ใน compose) |
+| 18790 | OpenClaw ผ่าน Caddy (timeout 600s) |
+| 18791 | OpenClaw ตรง (Docker) |
+| 8335 | (prod) Caddy ใน compose บน `127.0.0.1` ให้ host Caddy ต่อเข้า |
 
----
-
-## Development
-
-Stack: Next.js 16 (App Router) · TypeScript 5 · Postgres (pgvector) · Valkey · Docker Compose
-
-```bash
-# Build + deploy + verify (ต้องผ่านทั้ง 3)
-rtk npx next build                                                              # 0 errors
-rtk docker compose up -d --build
-sleep 5 && curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3334/      # 200
-docker ps --format "{{.Names}} {{.Status}}" | grep sml-gateway                  # Up / healthy
-```
-
-Tests:
-```bash
-rtk node node_modules/vitest/vitest.mjs run    # 127 tests across 10 files
-```
-
-Load tests:
-```bash
-npm run loadtest:smoke
-npm run loadtest:chat
-npm run loadtest:stress
-npm run loadtest:ratelimit
-```
-
-Reset DB:
-```bash
-docker compose down -v && docker compose up -d --build
-```
-
----
-
-## Deploy to Droplet
-
-Droplet เป็น Docker host ล้วน — ไม่ใช่ git repo. Flow: copy ไฟล์ที่แก้ → run deploy script → verify
-
-```bash
-# 1. Stream changed files via tar (preserves permissions, atomic)
-git archive HEAD -- <files...> | ssh root@<droplet> 'cd /opt/sml-gateway && tar -xf -'
-
-# 2. Run deploy
-ssh root@<droplet> 'cd /opt/sml-gateway && bash scripts/deploy-droplet.sh'
-
-# Script: docker compose up -d --build → wait /api/health 30s → print state
-
-# 3. Verify ผ่าน Cloudflare
-curl -s -o /dev/null -w "%{http_code}\n" https://<your-domain>/api/health
-```
-
-**Requirement:** `/opt/sml-gateway/.env.production` ต้องมีอยู่ (copy จาก `.env.production.example` ครั้งแรก)
-
-**Memory caveat:** `next build` กิน RAM 1-2 GB. droplet 8 GB ที่รัน 10+ container อาจ OOM ต้องมี swap ≥4 GB:
-```bash
-fallocate -l 4G /swapfile && chmod 600 /swapfile
-mkswap /swapfile && swapon /swapfile
-echo '/swapfile none swap sw 0 0' >> /etc/fstab
-```
-
-**Caddy config:** `caddy-prod.Caddyfile` bind mount เข้า in-compose caddy ที่ `/etc/caddy/Caddyfile`. แก้ → `docker compose restart caddy`
-
----
-
-## Operations / Tuning
-
-Runtime knobs (env) — ใส่ผิดก็ไม่ crash (clamped ที่ code)
-
-| Env | Default | ผล |
-|---|---|---|
-| `PG_POOL_MAX` | 20 | Postgres connection per replica |
-| `PG_IDLE_TIMEOUT_SEC` | 30 | ปิด idle connection |
-| `CACHE_MAX_ENTRIES` | 2000 | LRU cap ของ in-memory cache |
-| `WORKER_LEADER_FAIL_OPEN` | `0` prod / `1` dev | Redis ล่ม: `1` = single-replica run, `0` = wait |
-| `WORKER_AUTOSTART` | `1` | `1` = boot triggers `ensureWorkerStarted()` |
-| `WARMUP_MAX_MODELS` | 30 | จำนวน model ต่อ warmup cycle |
-| `LOG_SAMPLE_RATE` | 1 | sampled log 1-in-N (`debug` ปิด sampling) |
-| `RESPONSE_CACHE_ENABLED` | `1` | Redis response cache (skip ถ้ามี tools) |
-| `SEMANTIC_CACHE_SHOW_PREVIEW` | `0` | `1` = แสดง 40-char preview ใน admin |
-| `APP_ENCRYPTION_KEY` | _(unset)_ | AES-256-GCM encrypt-at-rest สำหรับ provider keys |
-| `ADMIN_COOKIE_SECRET` | _(fallback to ADMIN_PASSWORD)_ | HMAC signing key ของ admin cookie |
-| `TRUSTED_PROXY_HOPS` | 1 | reverse proxy hops ที่เชื่อ X-Forwarded-For |
-| `BENCHMARK_CONCURRENCY` | 8 | parallel workers ใน benchmark cycle |
-| `GATEWAY_REGRESSION_WEBHOOK` | _(unset)_ | Slack/Discord URL — POST เมื่อ regression detected |
-| `SSRF_ALLOW_PRIVATE` | _(unset)_ | dev only — disable SSRF guard |
-
-### Worker leader behavior ([leader.ts](src/lib/worker/leader.ts))
-- Redis OK → `SET NX EX 14m` ป้องกัน multi-replica run cycle ซ้อน
-- `renewLeader` / `releaseLeader` ใช้ Lua script fenced (atomic CAS)
-- Background renewer ทุก 2 นาที — cycle > 14 นาทีไม่หลุด lock
-- Redis ล่ม + prod + `WORKER_LEADER_FAIL_OPEN ≠ 1` → return `false`
-- SIGTERM → `stopWorker()` → release lock + `sql.end()` ก่อน exit
-
-### Migration safety ([migrate.ts](src/lib/db/migrate.ts))
-ทุก table ใช้ `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN IF NOT EXISTS`. ไม่มี `DROP TABLE` — restart container ไม่ทำลาย data
-
-### Tenant isolation
-- Response cache key `respcache:<tenant_ns>:<hash>` per Bearer
-- Semantic cache composite unique `(tenant_ns, query_hash)`
-- API keys encrypt-at-rest ผ่าน `APP_ENCRYPTION_KEY` (lazy migrate `enc:v1:*`)
-
-### Live ops dashboard
-- 🛰️ **Control Room** (`/api/control-room`) — single-call snapshot
-- 🤖 **Autopilot** (`/api/autopilot`) — rule-based recommendations
-- 🧭 **Routing Explain** (`/api/routing-explain`) — decision trail per request
-- 🔁 **Replay & Compare** (`/api/replay`) — owner-only re-run prompt
-- 🧠 **Semantic Cache Analytics** (`/api/semantic-cache`) — hit rate, top entries
+แก้ Caddyfile ภายนอกแล้วรัน `powershell -File "C:/Users/jatur/restart-caddy.ps1"`
 
 ---
 
 ## Troubleshooting
 
-| อาการ | สาเหตุ / วิธีแก้ |
+| อาการ | วิธีแก้ |
 |---|---|
-| `/v1/chat/completions` → 404 model | ใช้ `sml/auto` หรือเช็ค `GET /v1/models` |
-| 503 ยาว | pool หมด — ดู dashboard "โควต้า Provider", รอ cooldown |
-| p99 สูง | long context — filter ไป `context_length` สูง, ดู `/api/routing-stats` |
-| `sml/auto` เลือกผิดหมวด | เช็ค `model_category_scores` + `teachers` |
-| Worker ไม่รัน | `POST /api/worker`, ดู `worker_logs` + `worker_state` |
-| Cerebras "Wrong API Key" | API key ผิด — เปลี่ยนใน `/setup` |
-| Cohere ทุกตัวคืน 429 | trial 1K calls/month หมด — รอเดือนถัดไป |
-| Provider ล่ม → ทุก fallback fail | เช็ค `/api/admin/circuits` — อาจ open ทั้ง pool |
+| `/v1/*` → 401 | ใช้ key `bcai_live_*` ที่ยังไม่ถูก revoke |
+| 404 model | ใช้ `bcai/auto` หรือดู `GET /v1/models` |
+| 503 จาก `/v1` | ทุกโมเดลพัก/ติด rate limit — ดูหน้าต่าง "โควตา & การพักโมเดล" ที่ `/` |
+| OpenRouter ถูกปิดเอง | tripwire ทำงาน — ตรวจบัญชี OpenRouter แล้วเปิดคืนที่ `/setup` |
+| หน้า `/` ไม่มีกาแล็กซี | เบราว์เซอร์ไม่รองรับ WebGL2 — ระบบใช้โหมดประหยัด (หน้าต่างยังทำงานครบ) |
+| Worker ไม่รัน | ดู `worker_logs` / `worker_state` ใน Postgres |
 
-Debug DB:
 ```bash
-docker exec -it sml-gateway-postgres-1 psql -U sml -d smlgateway
-# \dt
-# SELECT * FROM teachers;
-# SELECT * FROM model_fail_streak;
-# SELECT * FROM gateway_logs ORDER BY created_at DESC LIMIT 10;
-# SELECT model_id, status, cooldown_until FROM latest_model_health;
-```
-
-Logs:
-```bash
-docker compose logs -f sml-gateway
-docker exec sml-gateway-postgres-1 psql -U sml -d smlgateway \
-  -c "SELECT created_at, level, message FROM worker_logs WHERE level='warn' ORDER BY created_at DESC LIMIT 30"
+docker compose logs -f bcai-router
+docker exec -it bcai-router-postgres-1 psql -U bcai -d bcairouter
 ```

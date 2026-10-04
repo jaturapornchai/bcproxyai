@@ -3,7 +3,7 @@
 	# In production the request chain is:
 	#   client -> Cloudflare -> origin Caddy (host :80 -> localhost:8335)
 	#                        -> in-compose Caddy (this file, port :80)
-	#                        -> sml-gateway:3000
+	#                        -> bcai-router:3000
 	# The in-compose Caddy receives traffic from the Docker bridge (172.x.x.x)
 	# after the host -> container port forward, so trust private ranges.
 	# Origin Caddy is responsible for: (a) stripping inbound spoofed headers,
@@ -15,7 +15,7 @@
 }
 
 :80 {
-	reverse_proxy sml-gateway:3000 {
+	reverse_proxy bcai-router:3000 {
 		lb_policy round_robin
 		lb_try_duration 10s
 		lb_try_interval 250ms

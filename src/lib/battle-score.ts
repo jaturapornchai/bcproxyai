@@ -4,7 +4,7 @@ import { getRedis } from "./redis";
 // Cumulative battle score for the Mascot Theater
 //
 // Every gateway event (success or failure) maps to points for either
-// the hero (🦸 SMLGateway) or the villain (👿 Latency/Failure). We store
+// the hero (🦸 BCAiRouter) or the villain (👿 Latency/Failure). We store
 // running totals in Redis so they persist across restarts.
 //
 // Redis keys:

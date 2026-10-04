@@ -1,6 +1,6 @@
-# SMLGateway Load Tests
+# BCAiRouter Load Tests
 
-Load testing suite for the SMLGateway gateway using [k6](https://k6.io/).
+Load testing suite for the BCAiRouter gateway using [k6](https://k6.io/).
 
 ## Scripts
 

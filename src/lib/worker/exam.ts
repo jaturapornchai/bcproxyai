@@ -12,7 +12,7 @@ import { getSqlClient } from "@/lib/db/schema";
 import { getNextApiKey } from "@/lib/api-keys";
 import { resolveProviderUrl, resolveProviderAuth } from "@/lib/provider-resolver";
 import { computeNextExamAt, getLiveSuccessRate } from "@/lib/learning";
-import { costPolicyBlockMessage, isModelCostAllowed } from "@/lib/cost-policy";
+import { applyNoSpendGuards, costPolicyBlockMessage, isModelCostAllowed } from "@/lib/cost-policy";
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
 
@@ -867,7 +867,7 @@ What is the square root of 144?`,
 
   // ═══════════════════════════════════════════════════════════════════════════
   //  Section TH+: Extended Thai-language proficiency battery.
-  //  Goal — give `sml/thai` virtual alias real signal to pick the best
+  //  Goal — give `bcai/thai` virtual alias real signal to pick the best
   //  Thai-tuned model (Pathumma, Typhoon, OpenThaiGPT) over English-trained
   //  ones that pass primary Thai but stumble on idiom/translation/grammar.
   // ═══════════════════════════════════════════════════════════════════════════
@@ -1229,8 +1229,8 @@ async function askModel(
     headers["Authorization"] = `Bearer ${apiKey}`;
   }
   if (provider === "openrouter") {
-    headers["HTTP-Referer"] = "https://sml-gateway.app";
-    headers["X-Title"] = "SMLGateway Exam";
+    headers["HTTP-Referer"] = "https://bcai-router.app";
+    headers["X-Title"] = "BCAiRouter Exam";
   }
 
   // สร้าง content — ถ้าเป็น vision ส่ง multipart array [text, image_url]
@@ -1271,7 +1271,7 @@ async function askModel(
     const res = await fetch(url, {
       method: "POST",
       headers,
-      body: JSON.stringify(reqBody),
+      body: JSON.stringify(applyNoSpendGuards(provider, reqBody)),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     const latency = Date.now() - start;

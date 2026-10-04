@@ -15,7 +15,7 @@
  */
 import { createHmac, timingSafeEqual } from "node:crypto";
 
-export const ADMIN_COOKIE_NAME = "sml_admin";
+export const ADMIN_COOKIE_NAME = "bcai_admin";
 const VERSION = "v1";
 const MAX_AGE_S = 7 * 24 * 60 * 60; // 7 days
 

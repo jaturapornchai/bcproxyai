@@ -195,7 +195,7 @@ export async function runMigrations(): Promise<void> {
     // "N model พร้อมใช้" before the user has set up an API key.
     await sql`ALTER TABLE provider_catalog ADD COLUMN IF NOT EXISTS public_models_count INT`;
 
-    // Gateway API keys — admin-issued Bearer tokens for clients of SMLGateway.
+    // Gateway API keys — admin-issued Bearer tokens for clients of BCAiRouter.
     // We store only the SHA-256 hash; the plaintext is shown to the admin once
     // on creation. `key_prefix` is the first 12 chars kept in cleartext so the
     // admin can identify a key in the list view.
@@ -559,7 +559,7 @@ export async function runMigrations(): Promise<void> {
         console.warn("[migrate] hnsw index unavailable — falling back to ivfflat:", (e as Error).message);
         await sql`CREATE INDEX IF NOT EXISTS idx_semantic_cache_embedding ON semantic_cache USING ivfflat (embedding vector_cosine_ops)`;
       }
-      // Tenant namespace — '_anon' for unauth/master, prefix of sml_live_* otherwise.
+      // Tenant namespace — '_anon' for unauth/master, prefix of bcai_live_* otherwise.
       // Forward-compat ALTER for tables that pre-date this column.
       await sql`ALTER TABLE semantic_cache ADD COLUMN IF NOT EXISTS tenant_ns TEXT NOT NULL DEFAULT '_anon'`;
       await sql`CREATE INDEX IF NOT EXISTS idx_semantic_cache_tenant ON semantic_cache(tenant_ns)`;

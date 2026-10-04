@@ -3,46 +3,12 @@
 import { useMemo } from "react";
 import { PROVIDER_COLORS, fmtMs } from "./shared";
 import type { ModelData } from "./shared";
-
-// ─── Provider Emoji Map ───────────────────────────────────────────────────────
-
-const PROVIDER_EMOJI: Record<string, string> = {
-  openrouter: "\u{1F310}",  // 🌐
-  kilo:       "\u26A1",     // ⚡
-  google:     "\u{1F50D}",  // 🔍
-  groq:       "\u{1F3CE}\uFE0F", // 🏎️
-  cerebras:   "\u{1F9E0}",  // 🧠
-  sambanova:  "\u{1F680}",  // 🚀
-  mistral:    "\u{1F4A8}",  // 💨
-  ollama:     "\u{1F4BB}",  // 💻
-  github:     "\u{1F431}",  // 🐱
-  fireworks:  "\u{1F386}",  // 🎆
-  cohere:     "\u{1F4E1}",  // 📡
-  cloudflare: "\u2601\uFE0F", // ☁️
-  huggingface: "\u{1F917}",  // 🤗
-};
-
-const PROVIDER_HEX: Record<string, string> = {
-  openrouter: "#3b82f6",
-  kilo:       "#a855f7",
-  google:     "#34d399",
-  groq:       "#fb923c",
-  cerebras:   "#f43f5e",
-  sambanova:  "#14b8a6",
-  mistral:    "#38bdf8",
-  ollama:     "#84cc16",
-  github:     "#9ca3af",
-  fireworks:  "#ef4444",
-  cohere:     "#ec4899",
-  cloudflare: "#f59e0b",
-  huggingface: "#fbbf24",
-};
-
-// ─── Types ────────────────────────────────────────────────────────────────────
+import { providerColor } from "./Analytics";
+import { IconPulse } from "./ui/icons";
+import { Card, CardHeader, EmptyState } from "./ui/ui";
 
 interface ProviderRace {
   provider: string;
-  emoji: string;
   avgLatency: number;
   modelCount: number;
   available: boolean;
@@ -53,217 +19,154 @@ interface SpeedRaceProps {
   loading: boolean;
 }
 
-// ─── Component ────────────────────────────────────────────────────────────────
+const MEDAL_STYLE = [
+  "bg-amber-300/20 text-amber-200 ring-amber-300/40",
+  "bg-slate-300/15 text-slate-200 ring-slate-300/30",
+  "bg-orange-400/15 text-orange-200 ring-orange-400/30",
+];
+
+/** Round coloured avatar with the provider's initial; colour is data-driven (per provider). */
+function ProviderAvatar({ provider, size }: { provider: string; size: number }) {
+  return (
+    <span
+      className="grid shrink-0 place-items-center rounded-full font-bold uppercase text-white"
+      style={{
+        width: size,
+        height: size,
+        fontSize: size * 0.4,
+        background: providerColor(provider, 0.22),
+        boxShadow: `inset 0 0 0 1.5px ${providerColor(provider, 0.6)}, 0 0 18px ${providerColor(provider, 0.25)}`,
+      }}
+      aria-hidden
+    >
+      {provider.slice(0, 1)}
+    </span>
+  );
+}
 
 export function SpeedRace({ models, loading }: SpeedRaceProps) {
   const racers = useMemo(() => {
-    // Group models by provider
     const grouped: Record<string, { totalLatency: number; count: number; availableCount: number }> = {};
 
     for (const m of models) {
-      if (!grouped[m.provider]) {
-        grouped[m.provider] = { totalLatency: 0, count: 0, availableCount: 0 };
-      }
-      grouped[m.provider].count++;
+      const g = (grouped[m.provider] ??= { totalLatency: 0, count: 0, availableCount: 0 });
+      g.count++;
       if (m.health.status === "available" && m.health.latencyMs > 0) {
-        grouped[m.provider].totalLatency += m.health.latencyMs;
-        grouped[m.provider].availableCount++;
+        g.totalLatency += m.health.latencyMs;
+        g.availableCount++;
       }
     }
 
-    const result: ProviderRace[] = Object.entries(grouped).map(([provider, data]) => ({
+    const result: ProviderRace[] = Object.entries(grouped).map(([provider, g]) => ({
       provider,
-      emoji: PROVIDER_EMOJI[provider] ?? "\u{1F916}",
-      avgLatency: data.availableCount > 0 ? Math.round(data.totalLatency / data.availableCount) : 0,
-      modelCount: data.count,
-      available: data.availableCount > 0,
+      avgLatency: g.availableCount > 0 ? Math.round(g.totalLatency / g.availableCount) : 0,
+      modelCount: g.count,
+      available: g.availableCount > 0,
     }));
 
-    // Sort: available first (by latency asc), then unavailable
+    // Available first (fastest first), then the rest
     result.sort((a, b) => {
-      if (a.available && !b.available) return -1;
-      if (!a.available && b.available) return 1;
-      if (a.available && b.available) return a.avgLatency - b.avgLatency;
-      return 0;
+      if (a.available !== b.available) return a.available ? -1 : 1;
+      return a.available ? a.avgLatency - b.avgLatency : 0;
     });
-
     return result;
   }, [models]);
 
-  // Calculate max latency for bar scaling
   const maxLatency = useMemo(() => {
     const latencies = racers.filter((r) => r.available).map((r) => r.avgLatency);
     return latencies.length > 0 ? Math.max(...latencies) : 1;
   }, [racers]);
 
   const top3 = racers.filter((r) => r.available).slice(0, 3);
-  const medals = ["\u{1F947}", "\u{1F948}", "\u{1F949}"]; // 🥇🥈🥉
 
   if (loading) {
     return (
-      <section id="speed-race" className="animate-fade-in-up stagger-2">
-        <div className="glass rounded-xl p-4">
-          <div className="shimmer rounded h-8 w-64 bg-gray-800/60 mb-3" />
-          <div className="space-y-4">
-            {[1, 2, 3, 4].map((i) => (
-              <div key={i} className="shimmer rounded-xl h-14 bg-gray-800/60" />
-            ))}
-          </div>
+      <Card className="p-5">
+        <div className="skeleton mb-4 h-6 w-56" />
+        <div className="space-y-3">
+          {[1, 2, 3, 4].map((i) => <div key={i} className="skeleton h-12" />)}
         </div>
-      </section>
+      </Card>
     );
   }
 
   if (racers.length === 0) {
     return (
-      <section id="speed-race" className="animate-fade-in-up stagger-2">
-        <div className="glass rounded-2xl p-12 text-center text-gray-500">
-          <div className="text-5xl mb-3">{"\u{1F3C1}"}</div>
-          <p>ยังไม่มีข้อมูลความเร็ว — รอ Worker ตรวจสอบ</p>
-        </div>
-      </section>
+      <Card>
+        <EmptyState
+          icon={<IconPulse size={22} />}
+          title="ยังไม่มีข้อมูลความเร็ว"
+          description="รอให้ระบบตรวจสุขภาพโมเดลรอบแรกเสร็จ แล้วผลการวิ่งแข่งจะแสดงที่นี่"
+        />
+      </Card>
     );
   }
 
   return (
-    <section id="speed-race" className="animate-fade-in-up stagger-2">
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="text-2xl font-black text-white flex items-center gap-3">
-          <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-orange-500/20 text-orange-400">
-            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-            </svg>
-          </span>
-          {"\u{1F3C1}"} Speed Race — ใครเร็วที่สุด?
-        </h2>
-      </div>
+    <Card>
+      <CardHeader
+        title="ใครตอบเร็วที่สุด"
+        subtitle="เปรียบเทียบเวลาตอบเฉลี่ยของแต่ละผู้ให้บริการ (นับเฉพาะโมเดลที่พร้อมใช้) — แท่งยาว = เร็วกว่า"
+        icon={<IconPulse size={18} />}
+      />
 
-      {/* Podium - Top 3 */}
+      {/* Podium */}
       {top3.length >= 2 && (
-        <div className="glass-bright rounded-xl p-3 neon-border card-3d mb-3">
-          <div className="flex items-center justify-center gap-3 sm:gap-10 flex-wrap">
-            {top3.map((racer, i) => {
-              const hex = PROVIDER_HEX[racer.provider] ?? "#6366f1";
-              return (
-                <div
-                  key={racer.provider}
-                  className="flex flex-col items-center gap-1.5"
-                  style={{ order: i === 0 ? 1 : i === 1 ? 0 : 2 }}
-                >
-                  <span className="text-2xl sm:text-3xl">{medals[i]}</span>
-                  <div
-                    className="flex items-center justify-center rounded-full"
-                    style={{
-                      width: i === 0 ? 56 : 44,
-                      height: i === 0 ? 56 : 44,
-                      background: `${hex}20`,
-                      border: `2px solid ${hex}60`,
-                      boxShadow: `0 0 20px ${hex}30`,
-                      transition: "all 0.5s ease",
-                    }}
-                  >
-                    <span className={`${i === 0 ? "text-2xl" : "text-xl"}`}>{racer.emoji}</span>
-                  </div>
-                  <span className="text-sm font-bold text-white capitalize">{racer.provider}</span>
-                  <span className="text-xs font-mono" style={{ color: hex }}>
-                    {fmtMs(racer.avgLatency)}
-                  </span>
-                  <span className="text-xs text-gray-500">{racer.modelCount} models</span>
-                </div>
-              );
-            })}
-          </div>
+        <div className="mx-5 mt-5 flex flex-wrap items-end justify-center gap-6 rounded-2xl border border-white/[0.06] bg-white/[0.02] px-4 py-5 sm:gap-12">
+          {top3.map((racer, i) => (
+            <div
+              key={racer.provider}
+              className={`flex flex-col items-center gap-1.5 ${i === 0 ? "order-2" : i === 1 ? "order-1" : "order-3"}`}
+            >
+              <span className={`grid h-6 w-6 place-items-center rounded-full text-[11px] font-bold ring-1 ring-inset ${MEDAL_STYLE[i]}`}>{i + 1}</span>
+              <ProviderAvatar provider={racer.provider} size={i === 0 ? 56 : 44} />
+              <span className="text-[13px] font-semibold capitalize text-white">{racer.provider}</span>
+              <span className="font-mono text-[12px] tabular-nums" style={{ color: providerColor(racer.provider) }}>
+                {fmtMs(racer.avgLatency)}
+              </span>
+              <span className="text-[11px] text-[var(--muted)]">{racer.modelCount} โมเดล</span>
+            </div>
+          ))}
         </div>
       )}
 
-      {/* Race Lanes */}
-      <div className="glass rounded-xl p-3 space-y-3">
-        {racers.map((racer, i) => {
-          const hex = PROVIDER_HEX[racer.provider] ?? "#6366f1";
-          const c = PROVIDER_COLORS[racer.provider] ?? {
-            text: "text-gray-300",
-            bg: "bg-gray-700/40",
-            border: "border-gray-600/40",
-          };
-          // Bar width: fastest = 100%, slowest proportionally less
-          // Invert: lower latency = wider bar
-          const barPct = racer.available
-            ? Math.max(10, 100 - ((racer.avgLatency / maxLatency) * 70))
-            : 0;
+      {/* Race lanes */}
+      <div className="space-y-1 p-3 sm:p-4">
+        {racers.map((racer) => {
+          const c = PROVIDER_COLORS[racer.provider];
+          // fastest = widest bar; slowest keeps at least 30% so every lane stays readable
+          const barPct = racer.available ? Math.max(10, 100 - (racer.avgLatency / maxLatency) * 70) : 0;
 
           return (
-            <div
-              key={racer.provider}
-              className="group rounded-xl px-4 py-3 hover:bg-white/[0.03] transition-all duration-300"
-              style={{ animationDelay: `${i * 80}ms` }}
-            >
-              <div className="flex items-center gap-3 mb-1.5">
-                <span className="text-lg w-7 text-center shrink-0">{racer.emoji}</span>
-                <span className={`font-semibold capitalize text-sm ${c.text} w-24 shrink-0`}>
-                  {racer.provider}
-                </span>
-                <div className="flex-1 min-w-0">
-                  <div className="h-6 bg-gray-800/60 rounded-full overflow-hidden relative">
-                    {racer.available ? (
-                      <div
-                        className="h-full rounded-full relative overflow-hidden"
-                        style={{
-                          width: `${barPct}%`,
-                          background: `linear-gradient(90deg, ${hex}40, ${hex}90)`,
-                          transition: "width 1s cubic-bezier(0.4, 0, 0.2, 1)",
-                          boxShadow: `0 0 12px ${hex}40`,
-                        }}
-                      >
-                        {/* Shimmer effect on bar */}
-                        <div
-                          style={{
-                            position: "absolute",
-                            inset: 0,
-                            background: `linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.15) 50%, transparent 100%)`,
-                            animation: "race-shimmer 2s infinite",
-                          }}
-                        />
-                        {/* Racing dot at the end */}
-                        <div
-                          className="absolute right-0 top-1/2 -translate-y-1/2"
-                          style={{
-                            width: 10,
-                            height: 10,
-                            borderRadius: "50%",
-                            background: hex,
-                            boxShadow: `0 0 8px ${hex}, 0 0 16px ${hex}60`,
-                            transition: "all 1s ease",
-                          }}
-                        />
-                      </div>
-                    ) : (
-                      <div className="h-full flex items-center justify-center">
-                        <span className="text-xs text-gray-600">offline</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-                <span
-                  className="text-sm font-mono w-16 text-right shrink-0"
-                  style={{ color: racer.available ? hex : "rgb(75,85,99)" }}
-                >
-                  {racer.available ? fmtMs(racer.avgLatency) : "N/A"}
-                </span>
-                <span className="text-xs text-gray-500 w-20 text-right shrink-0 hidden sm:block">
-                  ({racer.modelCount} models)
-                </span>
+            <div key={racer.provider} className="flex items-center gap-3 rounded-xl px-2 py-2 transition-colors duration-300 hover:bg-white/[0.03] sm:px-3">
+              <ProviderAvatar provider={racer.provider} size={28} />
+              <span className={`w-20 shrink-0 truncate text-[13px] font-medium capitalize sm:w-28 ${c?.text ?? "text-gray-300"}`}>
+                {racer.provider}
+              </span>
+              <div className="relative h-3 min-w-0 flex-1 overflow-hidden rounded-full bg-white/[0.06]">
+                {racer.available ? (
+                  <div
+                    className="animate-bar relative h-full rounded-full"
+                    style={{
+                      width: `${barPct}%`,
+                      background: `linear-gradient(90deg, ${providerColor(racer.provider, 0.35)}, ${providerColor(racer.provider)})`,
+                      boxShadow: `0 0 14px ${providerColor(racer.provider, 0.4)}`,
+                    }}
+                  />
+                ) : (
+                  <span className="absolute inset-0 grid place-items-center text-[9px] uppercase tracking-wider text-[var(--muted)]">offline</span>
+                )}
               </div>
+              <span className="w-14 shrink-0 text-right font-mono text-[12px] tabular-nums text-gray-200">
+                {racer.available ? fmtMs(racer.avgLatency) : "N/A"}
+              </span>
+              <span className="hidden w-20 shrink-0 text-right text-[11px] text-[var(--muted)] sm:block">
+                {racer.modelCount} โมเดล
+              </span>
             </div>
           );
         })}
       </div>
-
-      <style jsx>{`
-        @keyframes race-shimmer {
-          0% { transform: translateX(-100%); }
-          100% { transform: translateX(200%); }
-        }
-      `}</style>
-    </section>
+    </Card>
   );
 }

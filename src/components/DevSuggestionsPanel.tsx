@@ -1,7 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import { getAdminAccess } from "./admin-access";
+import { Badge, Button, Card, CardHeader, EmptyState } from "./ui/ui";
+import { IconCheck, IconCompass } from "./ui/icons";
 
 type Severity = "info" | "warn" | "high" | "critical";
 type Status = "open" | "acknowledged" | "resolved" | "dismissed";
@@ -34,39 +37,37 @@ interface Response {
   counts: Counts;
 }
 
-const SEVERITY_META: Record<
-  Severity,
-  { label: string; icon: string; border: string; bg: string; text: string }
-> = {
-  critical: {
-    label: "วิกฤต",
-    icon: "🚨",
-    border: "border-red-500/50",
-    bg: "bg-red-500/10",
-    text: "text-red-300",
-  },
-  high: {
-    label: "สูง",
-    icon: "⚠️",
-    border: "border-orange-500/50",
-    bg: "bg-orange-500/10",
-    text: "text-orange-300",
-  },
-  warn: {
-    label: "เตือน",
-    icon: "💡",
-    border: "border-amber-500/50",
-    bg: "bg-amber-500/10",
-    text: "text-amber-300",
-  },
-  info: {
-    label: "แนะนำ",
-    icon: "ℹ️",
-    border: "border-blue-500/50",
-    bg: "bg-blue-500/10",
-    text: "text-blue-300",
-  },
+// chip = pill colours, accent = left edge of the suggestion card
+const SEVERITY_META: Record<Severity, { label: string; chip: string; accent: string }> = {
+  critical: { label: "วิกฤต", chip: "bg-rose-400/10 text-rose-300 ring-rose-400/25", accent: "border-l-rose-400" },
+  high: { label: "สูง", chip: "bg-orange-400/10 text-orange-300 ring-orange-400/25", accent: "border-l-orange-400" },
+  warn: { label: "เตือน", chip: "bg-amber-400/10 text-amber-300 ring-amber-400/25", accent: "border-l-amber-400" },
+  info: { label: "แนะนำ", chip: "bg-cyan-400/10 text-cyan-200 ring-cyan-400/25", accent: "border-l-cyan-400" },
 };
+
+const STATUS_LABEL: Record<Status, string> = {
+  open: "รอดำเนินการ",
+  acknowledged: "รับทราบแล้ว",
+  resolved: "แก้เสร็จแล้ว",
+  dismissed: "ยกเลิกแล้ว",
+};
+
+function SeverityChip({ severity, children }: { severity: Severity; children: ReactNode }) {
+  return (
+    <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${SEVERITY_META[severity].chip}`}>
+      {children}
+    </span>
+  );
+}
+
+function Detail({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div>
+      <div className="mb-1 text-[11px] font-medium uppercase tracking-[0.1em] text-[var(--muted)]">{label}</div>
+      {children}
+    </div>
+  );
+}
 
 function formatRelative(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
@@ -120,148 +121,107 @@ export function DevSuggestionsPanel() {
   const isEmpty = !data || data.suggestions.length === 0;
 
   return (
-    <div className="glass rounded-lg p-2 border border-white/10">
-      <div className="flex items-center gap-2 mb-1 flex-wrap">
-        <span className="text-2xl">💡</span>
-        <h2 className="text-3xl font-black text-white">คำแนะนำสำหรับ Dev</h2>
-        {data && (
-          <div className="flex items-center gap-2 text-sm">
-            {data.counts.critical > 0 && (
-              <span className="px-2 py-0.5 rounded bg-red-500/20 text-red-300 border border-red-500/40 font-bold">
-                🚨 {data.counts.critical}
-              </span>
-            )}
-            {data.counts.high > 0 && (
-              <span className="px-2 py-0.5 rounded bg-orange-500/20 text-orange-300 border border-orange-500/40 font-bold">
-                ⚠️ {data.counts.high}
-              </span>
-            )}
-            {data.counts.warn > 0 && (
-              <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 font-bold">
-                💡 {data.counts.warn}
-              </span>
-            )}
-            <span className="text-gray-500">{data.counts.open} open</span>
-          </div>
-        )}
-        <button
-          onClick={() => setShowResolved((v) => !v)}
-          className="ml-auto text-sm text-gray-400 hover:text-white border border-gray-700 hover:border-gray-500 rounded px-2 py-1"
-        >
-          {showResolved ? "ซ่อน resolved" : "แสดงทั้งหมด"}
-        </button>
-      </div>
+    <Card>
+      <CardHeader
+        icon={<IconCompass />}
+        title="คำแนะนำสำหรับนักพัฒนา"
+        subtitle="ปัญหาที่ระบบ AI พบในส่วน core ซึ่งแก้ไขเองไม่ได้ (ตามกฎ no-hardcode และ no-edit-core) — บันทึกไว้ให้นักพัฒนามาปรับปรุง"
+        action={
+          <Button size="sm" onClick={() => setShowResolved((v) => !v)} aria-pressed={showResolved}>
+            {showResolved ? "ซ่อนที่จบแล้ว" : "แสดงทั้งหมด"}
+          </Button>
+        }
+      />
 
-      <p className="text-sm text-gray-400 mb-2">
-        ระบบ AI พบปัญหาในส่วน core ที่ตัวเองแตะไม่ได้ (ตามกฎ no-hardcode + no-edit-core) —
-        บันทึกไว้ให้ Dev มนุษย์มาปรับปรุง
-      </p>
+      {data && (
+        <div className="flex flex-wrap items-center gap-2 px-5 pt-4">
+          {data.counts.critical > 0 && <SeverityChip severity="critical">วิกฤต {data.counts.critical}</SeverityChip>}
+          {data.counts.high > 0 && <SeverityChip severity="high">สูง {data.counts.high}</SeverityChip>}
+          {data.counts.warn > 0 && <SeverityChip severity="warn">เตือน {data.counts.warn}</SeverityChip>}
+          <Badge tone="neutral">{data.counts.open} รอดำเนินการ</Badge>
+        </div>
+      )}
 
       {loading ? (
-        <div className="text-base text-gray-500 py-3">กำลังโหลด…</div>
-      ) : isEmpty ? (
-        <div className="text-base text-gray-500 py-6 text-center">
-          🎉 ยังไม่มีคำแนะนำค้าง — ระบบ healthy หรือ worker ยังไม่ได้วิเคราะห์
+        <div className="grid gap-3 p-5 lg:grid-cols-2" aria-busy="true" aria-label="กำลังโหลดคำแนะนำ">
+          {[0, 1].map(i => <div key={i} className="skeleton h-40" />)}
         </div>
+      ) : isEmpty ? (
+        <EmptyState
+          icon={<IconCheck size={22} />}
+          title="ยังไม่มีคำแนะนำค้าง"
+          description="ระบบอยู่ในสภาพดี หรือ worker ยังไม่ได้วิเคราะห์ — เมื่อพบปัญหาในส่วน core จะบันทึกไว้ที่นี่"
+        />
       ) : (
-        <div className="grid grid-cols-[repeat(auto-fit,minmax(380px,1fr))] gap-3">
+        <div className="grid gap-3 p-5 lg:grid-cols-2">
           {data!.suggestions.map((s) => {
             const meta = SEVERITY_META[s.severity];
             const isActive = s.status === "open" || s.status === "acknowledged";
             return (
-              <div
+              <article
                 key={s.id}
-                className={`rounded-lg border ${meta.border} ${meta.bg} p-3 ${!isActive ? "opacity-50" : ""}`}
+                className={`flex flex-col rounded-xl border border-l-2 border-white/10 ${meta.accent} bg-white/[0.03] p-4 ${!isActive ? "opacity-50" : ""}`}
               >
-                <div className="flex items-start gap-2 mb-2">
-                  <span className="text-2xl shrink-0">{meta.icon}</span>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className={`text-xs uppercase font-bold ${meta.text}`}>
-                        {meta.label}
-                      </span>
-                      <span className="text-xs text-gray-500">· {s.category}</span>
-                      <span className="text-xs text-gray-600 ml-auto">
-                        {formatRelative(s.updatedAt)}
-                      </span>
-                    </div>
-                    <h3 className="text-lg font-bold text-gray-100 leading-tight mt-0.5">
-                      {s.title}
-                    </h3>
-                  </div>
+                <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <SeverityChip severity={s.severity}>{meta.label}</SeverityChip>
+                  <span className="text-[12px] text-[var(--muted)]">{s.category}</span>
+                  <span className="ml-auto text-[12px] tabular-nums text-[var(--muted)]">{formatRelative(s.updatedAt)}</span>
                 </div>
+                <h3 className="text-[15px] font-semibold leading-snug text-white">{s.title}</h3>
 
-                <p className="text-sm text-gray-300 mb-2 whitespace-pre-wrap">
+                <p className="mt-2 whitespace-pre-wrap text-[13px] leading-relaxed text-gray-300">
                   {s.description}
                 </p>
 
-                {s.targetFiles && (
-                  <div className="mb-2">
-                    <div className="text-[10px] uppercase text-gray-500 tracking-wide">
-                      target files
-                    </div>
-                    <div className="text-xs font-mono text-indigo-300 break-all">
-                      {s.targetFiles}
-                    </div>
+                {(s.targetFiles || s.proposedChange || s.evidence) && (
+                  <div className="mt-3 space-y-3">
+                    {s.targetFiles && (
+                      <Detail label="ไฟล์ที่เกี่ยวข้อง">
+                        <div className="break-all font-mono text-[12px] text-violet-200">{s.targetFiles}</div>
+                      </Detail>
+                    )}
+                    {s.proposedChange && (
+                      <Detail label="แนวทางแก้ไขที่เสนอ">
+                        <pre className="max-h-32 overflow-auto whitespace-pre-wrap rounded-lg border border-white/5 bg-black/40 p-2.5 font-mono text-[12px] text-gray-300">
+                          {s.proposedChange}
+                        </pre>
+                      </Detail>
+                    )}
+                    {s.evidence && (
+                      <Detail label="หลักฐาน">
+                        <div className="break-all font-mono text-[12px] text-[var(--muted)]">{s.evidence}</div>
+                      </Detail>
+                    )}
                   </div>
                 )}
 
-                {s.proposedChange && (
-                  <div className="mb-2">
-                    <div className="text-[10px] uppercase text-gray-500 tracking-wide">
-                      proposed change
-                    </div>
-                    <pre className="text-xs font-mono text-gray-300 bg-black/40 rounded p-2 overflow-x-auto whitespace-pre-wrap max-h-32">
-                      {s.proposedChange}
-                    </pre>
+                <div className="mt-auto pt-4">
+                  <div className="flex flex-wrap items-center gap-2 border-t border-white/5 pt-3">
+                    <span className="text-[11px] text-[var(--muted)]">
+                      {s.source ?? "system"} · {STATUS_LABEL[s.status]}
+                    </span>
+                    {s.status === "open" && (
+                      <div className="ml-auto flex gap-2">
+                        <Button size="sm" variant="primary" onClick={() => updateStatus(s.id, "acknowledged")}>
+                          รับทราบ
+                        </Button>
+                        <Button size="sm" onClick={() => updateStatus(s.id, "dismissed")}>
+                          ยกเลิก
+                        </Button>
+                      </div>
+                    )}
+                    {s.status === "acknowledged" && (
+                      <Button size="sm" variant="primary" className="ml-auto" onClick={() => updateStatus(s.id, "resolved")}>
+                        แก้เสร็จแล้ว
+                      </Button>
+                    )}
                   </div>
-                )}
-
-                {s.evidence && (
-                  <div className="mb-2">
-                    <div className="text-[10px] uppercase text-gray-500 tracking-wide">
-                      evidence
-                    </div>
-                    <div className="text-xs font-mono text-gray-400 break-all">
-                      {s.evidence}
-                    </div>
-                  </div>
-                )}
-
-                <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-800/50">
-                  <span className="text-[10px] text-gray-500">
-                    {s.source ?? "system"} · {s.status}
-                  </span>
-                  {s.status === "open" && (
-                    <>
-                      <button
-                        onClick={() => updateStatus(s.id, "acknowledged")}
-                        className="ml-auto text-xs px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30 border border-indigo-500/40"
-                      >
-                        รับทราบ
-                      </button>
-                      <button
-                        onClick={() => updateStatus(s.id, "dismissed")}
-                        className="text-xs px-2 py-0.5 rounded bg-gray-700/40 text-gray-400 hover:bg-gray-700/60"
-                      >
-                        ยกเลิก
-                      </button>
-                    </>
-                  )}
-                  {s.status === "acknowledged" && (
-                    <button
-                      onClick={() => updateStatus(s.id, "resolved")}
-                      className="ml-auto text-xs px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 border border-emerald-500/40"
-                    >
-                      แก้เสร็จแล้ว
-                    </button>
-                  )}
                 </div>
-              </div>
+              </article>
             );
           })}
         </div>
       )}
-    </div>
+    </Card>
   );
 }

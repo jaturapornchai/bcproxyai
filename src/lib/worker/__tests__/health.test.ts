@@ -6,6 +6,7 @@ const mockSql = vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => {
   const text = strings.join("?");
   sqlCalls.push({ text, values });
   if (text.includes("FROM models m")) return Promise.resolve(mockModels);
+  if (text.includes("SELECT id, provider, model_id FROM models")) return Promise.resolve(mockModels);
   return Promise.resolve([]);
 });
 
@@ -15,6 +16,8 @@ vi.mock("@/lib/db/schema", () => ({
 
 vi.mock("@/lib/api-keys", () => ({
   getNextApiKey: vi.fn(() => "test-key"),
+  hasProviderKey: vi.fn(() => true),
+  ensureApiKeysLoaded: vi.fn(async () => {}),
 }));
 
 vi.mock("@/lib/provider-resolver", () => ({
@@ -31,7 +34,9 @@ vi.mock("@/lib/upstream-agent", () => ({
   upstreamAgent: undefined,
 }));
 
-vi.mock("@/lib/cost-policy", () => ({
+// Real applyNoSpendGuards so tests see the exact upstream body.
+vi.mock("@/lib/cost-policy", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/cost-policy")>()),
   isModelCostAllowed: vi.fn(() => true),
   isProviderCostAllowed: vi.fn(() => true),
   costPolicyBlockMessage: vi.fn((p: string, m?: string) => `blocked ${p}/${m ?? ""}`),
@@ -51,6 +56,13 @@ import {
   testVisionSupport,
   checkHealth,
 } from "../health";
+import { getNextApiKey, hasProviderKey } from "@/lib/api-keys";
+import { isModelCostAllowed } from "@/lib/cost-policy";
+
+// 200 response with a normal chat completion body
+function okChat(json: unknown = { choices: [{ message: { content: "hi" } }] }) {
+  return { ok: true, clone: () => ({ json: async () => json }) };
+}
 
 // Helper to create a model object matching the DbModel interface
 function makeModel(provider = "openrouter", modelId = "test-model") {
@@ -68,6 +80,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockModels = [];
   sqlCalls.length = 0;
+  vi.mocked(hasProviderKey).mockImplementation(() => true);
+  vi.mocked(isModelCostAllowed).mockImplementation(() => true);
 });
 
 describe("isNonChatModel", () => {
@@ -117,7 +131,7 @@ describe("pingModel", () => {
   });
 
   it("returns 'available' when fetch responds ok", async () => {
-    mockFetch.mockResolvedValueOnce({ ok: true });
+    mockFetch.mockResolvedValueOnce(okChat());
 
     const result = await pingModel(makeModel());
     expect(result.status).toBe("available");
@@ -187,18 +201,18 @@ describe("pingModel", () => {
   });
 
   it("sets OpenRouter-specific headers", async () => {
-    mockFetch.mockResolvedValueOnce({ ok: true });
+    mockFetch.mockResolvedValueOnce(okChat());
 
     await pingModel(makeModel("openrouter"));
 
     const callArgs = mockFetch.mock.calls[0];
     const headers = callArgs[1].headers;
-    expect(headers["HTTP-Referer"]).toBe("https://sml-gateway.app");
-    expect(headers["X-Title"]).toBe("SMLGateway");
+    expect(headers["HTTP-Referer"]).toBe("https://bcai-router.app");
+    expect(headers["X-Title"]).toBe("BCAiRouter");
   });
 
   it("does not set OpenRouter headers for other providers", async () => {
-    mockFetch.mockResolvedValueOnce({ ok: true });
+    mockFetch.mockResolvedValueOnce(okChat());
 
     await pingModel(makeModel("groq"));
 
@@ -206,6 +220,36 @@ describe("pingModel", () => {
     const headers = callArgs[1].headers;
     expect(headers["HTTP-Referer"]).toBeUndefined();
     expect(headers["X-Title"]).toBeUndefined();
+  });
+
+  it("returns 'error' (not available) for HTTP 200 with a non-JSON body", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      clone: () => ({ json: async () => { throw new SyntaxError("Unexpected token <"); } }),
+    });
+    const result = await pingModel(makeModel());
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("non-JSON");
+  });
+
+  it("returns 'error' for HTTP 200 carrying an error object", async () => {
+    mockFetch.mockResolvedValueOnce(okChat({ error: { message: "no credits" } }));
+    const result = await pingModel(makeModel());
+    expect(result.status).toBe("error");
+  });
+
+  it("never calls the provider without a stored key", async () => {
+    vi.mocked(getNextApiKey).mockReturnValueOnce("");
+    const result = await pingModel(makeModel("github", "openai/gpt-4o-mini"));
+    expect(result.status).toBe("unavailable");
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("pins OpenRouter max_price to 0 in the probe body", async () => {
+    mockFetch.mockResolvedValueOnce(okChat());
+    await pingModel(makeModel("openrouter"));
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.provider).toEqual({ max_price: { prompt: 0, completion: 0, request: 0, image: 0 } });
   });
 });
 
@@ -215,7 +259,7 @@ describe("testToolSupport", () => {
   });
 
   it("returns 1 when model supports tools (ok response)", async () => {
-    mockFetch.mockResolvedValueOnce({ ok: true });
+    mockFetch.mockResolvedValueOnce(okChat());
     expect(await testToolSupport(makeModel())).toBe(1);
   });
 
@@ -267,7 +311,7 @@ describe("testVisionSupport", () => {
   });
 
   it("returns 1 when model supports vision (ok response)", async () => {
-    mockFetch.mockResolvedValueOnce({ ok: true });
+    mockFetch.mockResolvedValueOnce(okChat());
     expect(await testVisionSupport(makeModel())).toBe(1);
   });
 
@@ -363,7 +407,7 @@ describe("checkHealth", () => {
     model.supports_vision = 1;
     mockModels = [model];
 
-    mockFetch.mockResolvedValueOnce({ ok: true });
+    mockFetch.mockResolvedValueOnce(okChat());
 
     const result = await checkHealth();
     expect(result.available).toBe(1);
@@ -378,10 +422,33 @@ describe("checkHealth", () => {
     llama.supports_vision = 1;
     mockModels = [whisper, llama];
 
-    mockFetch.mockResolvedValueOnce({ ok: true }); // only llama gets pinged
+    mockFetch.mockResolvedValueOnce(okChat()); // only llama gets pinged
 
     const result = await checkHealth();
     expect(result.checked).toBe(1);
     expect(result.available).toBe(1);
+  });
+
+  it("marks providers without a key / models outside the catalog unavailable and never pings them", async () => {
+    const github = makeModel("github", "openai/gpt-4o-mini");
+    const paid = makeModel("groq", "paid-model");
+    const groq = makeModel("groq", "llama-3-70b");
+    groq.supports_tools = 1;
+    groq.supports_vision = 1;
+    mockModels = [github, paid, groq];
+    vi.mocked(hasProviderKey).mockImplementation((p: string) => p !== "github");
+    vi.mocked(isModelCostAllowed).mockImplementation((_p: string, m?: string | null) => m !== "paid-model");
+    mockFetch.mockResolvedValueOnce(okChat());
+
+    const result = await checkHealth();
+    expect(result).toEqual({ checked: 1, available: 1, cooldown: 0 });
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+
+    for (const id of [github.id, paid.id]) {
+      const insert = sqlCalls.find((c) => c.text.includes("INSERT INTO health_logs") && c.values[0] === id);
+      expect(insert?.values[1]).toBe("unavailable");
+      // cooldown must outlive the 15-min worker cycle so /api/status never counts it available
+      expect(new Date(insert!.values[3] as string).getTime()).toBeGreaterThan(Date.now() + 15 * 60 * 1000);
+    }
   });
 });

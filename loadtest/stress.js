@@ -22,7 +22,7 @@ const LARGE = 'Please summarize the following document in one sentence:\n\n' +
 
 function body(content, extra = {}) {
   return JSON.stringify({
-    model: 'sml/auto',
+    model: 'bcai/auto',
     messages: [{ role: 'user', content }],
     ...extra,
   });

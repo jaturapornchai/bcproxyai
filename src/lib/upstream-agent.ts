@@ -1,5 +1,5 @@
 /**
- * Upstream agent for LLM provider calls (SMLGateway).
+ * Upstream agent for LLM provider calls (BCAiRouter).
  *
  * undici 8 custom dispatchers hang on some providers (nvidia confirmed).
  * Node 20's built-in fetch already uses undici internally with keep-alive,

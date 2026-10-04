@@ -12,7 +12,7 @@ for (let i = 1; i <= 3; i++) {
         Authorization: `Bearer ${KEY}`,
       },
       body: JSON.stringify({
-        model: 'sml/auto',
+        model: 'bcai/auto',
         messages: [{ role: 'user', content: prompt }],
         max_tokens: 40,
         stream: false,

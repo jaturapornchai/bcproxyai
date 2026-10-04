@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { ProviderBadge } from "./shared";
 import { getAdminAccess } from "./admin-access";
+import { Badge, Card, CardHeader, EmptyState, Reveal, Stat, Tabs } from "./ui/ui";
+import { IconAlert, IconCube } from "./ui/icons";
 
 interface CacheEntry {
   id: number;
@@ -56,25 +58,25 @@ function EntryRow({ e }: { e: CacheEntry }) {
   // first 40 chars of the prompt for debugging.
   const showPreview = e.queryPreview.length > 0;
   return (
-    <div className="rounded bg-gray-900/40 p-2 border border-gray-800/60">
-      <div className="flex items-center justify-between mb-0.5">
-        <div className="flex items-center gap-1.5 min-w-0">
+    <li className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3">
+      <div className="mb-1 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+        <div className="flex min-w-0 items-center gap-2">
           {e.provider && <ProviderBadge provider={e.provider} />}
           {e.model && (
-            <span className="text-[10px] text-gray-400 truncate font-mono">{e.model}</span>
+            <span className="truncate font-mono text-[11px] text-[var(--muted)]">{e.model}</span>
           )}
         </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <span className="text-[10px] text-fuchsia-300 font-bold">{e.hitCount} hits</span>
-          <span className="text-[10px] text-gray-500">{formatRelative(e.lastUsedAt)}</span>
+        <div className="flex shrink-0 items-center gap-2">
+          <Badge tone="accent">{e.hitCount} hits</Badge>
+          <span className="text-[11px] text-[var(--muted)]">{formatRelative(e.lastUsedAt)}</span>
         </div>
       </div>
-      <div className="text-[11px] text-gray-400 font-mono truncate">
-        <span className="text-gray-500">#{e.queryHash}</span>{" "}
-        <span className="text-gray-600">· {e.queryLength}ch</span>
+      <div className="truncate font-mono text-[11.5px] text-[var(--muted)]">
+        <span>#{e.queryHash}</span>{" "}
+        <span className="opacity-70">· {e.queryLength} ตัวอักษร</span>
         {showPreview && <span className="text-gray-300"> · {e.queryPreview}</span>}
       </div>
-    </div>
+    </li>
   );
 }
 
@@ -104,89 +106,104 @@ export function SemanticCachePanel() {
     return () => clearInterval(interval);
   }, [fetchStats]);
 
+  const entries = stats ? (tab === "top" ? stats.topEntries : stats.staleSamples) : [];
+
   return (
-    <div className="glass rounded-xl p-3 border border-white/10">
-      <div className="flex items-center justify-between mb-2">
-        <h2 className="text-xl font-black text-white flex items-center gap-2" title="จำคำถามที่คล้ายกัน (cosine similarity) แล้วตอบคำตอบเก่าทันที">
-          <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 text-white">
-            🧠
-          </span>
-          แคชความหมาย (Semantic)
-        </h2>
-        {stats?.enabled && <span className="text-xs text-emerald-400">● pgvector พร้อม</span>}
-        {stats && !stats.enabled && <span className="text-xs text-amber-400">⚠ pgvector ไม่พร้อม</span>}
-      </div>
+    <Card>
+      <CardHeader
+        icon={<IconCube />}
+        title="แคชความหมาย (Semantic cache)"
+        subtitle="จำคำถามที่ความหมายใกล้เคียงกัน แล้วตอบด้วยคำตอบเดิมทันที — ตอบเร็วขึ้นและไม่ต้องเรียกโมเดลซ้ำ"
+        action={
+          stats?.enabled ? (
+            <Badge tone="success" dot>pgvector พร้อม</Badge>
+          ) : stats ? (
+            <Badge tone="warning"><IconAlert size={12} /> pgvector ไม่พร้อม</Badge>
+          ) : undefined
+        }
+      />
 
       {loading ? (
-        <div className="text-sm text-gray-500">กำลังโหลด…</div>
-      ) : !stats || !stats.enabled ? (
-        <div className="text-sm text-gray-500 py-2">
-          ติดตั้ง extension <code className="text-fuchsia-300">pgvector</code>{" "}
-          เพื่อเปิดใช้งาน — ระบบจะจำคำตอบของคำถามที่ใกล้เคียงกันโดยอัตโนมัติ
+        <div className="space-y-3 p-5" aria-busy="true" aria-label="กำลังโหลดข้อมูลแคช">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            {[0, 1, 2, 3].map(i => <div key={i} className="skeleton h-28" />)}
+          </div>
+          <div className="skeleton h-24" />
         </div>
+      ) : !stats || !stats.enabled ? (
+        <EmptyState
+          icon={<IconCube size={22} />}
+          title="ยังไม่ได้เปิดใช้แคชความหมาย"
+          description={
+            <>
+              ติดตั้ง extension <code className="rounded bg-white/10 px-1 py-0.5 font-mono text-violet-200">pgvector</code>{" "}
+              เพื่อเปิดใช้งาน — ระบบจะจำคำตอบของคำถามที่ใกล้เคียงกันโดยอัตโนมัติ
+            </>
+          }
+        />
       ) : (
-        <>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
-            <div className="rounded-lg bg-violet-500/10 border border-violet-500/20 px-3 py-2" title="จำนวนรายการที่ cache ไว้ทั้งหมด">
-              <div className="text-[11px] text-violet-300">รายการทั้งหมด</div>
-              <div className="text-2xl font-black text-violet-200 leading-tight">{stats.total.toLocaleString()}</div>
-            </div>
-            <div className="rounded-lg bg-fuchsia-500/10 border border-fuchsia-500/20 px-3 py-2" title="จำนวนครั้งที่ cache ถูกเรียกใช้">
-              <div className="text-[11px] text-fuchsia-300">ถูกใช้ซ้ำ</div>
-              <div className="text-2xl font-black text-fuchsia-200 leading-tight">{stats.totalHits.toLocaleString()}</div>
-            </div>
-            <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/20 px-3 py-2" title="hit rate ใน 1 ชม.ล่าสุด — จาก response cache counter">
-              <div className="text-[11px] text-emerald-300">Hit rate (1h)</div>
-              <div className="text-2xl font-black text-emerald-200 leading-tight">{fmtPct(stats.hitRate)}</div>
-              <div className="text-[10px] text-emerald-400/70">{stats.hitsLastHour}/{stats.hitsLastHour + stats.missesLastHour}</div>
-            </div>
-            <div className="rounded-lg bg-amber-500/10 border border-amber-500/20 px-3 py-2" title="entry ที่ไม่ถูกใช้เกิน 30 วัน">
-              <div className="text-[11px] text-amber-300">Stale (30d+)</div>
-              <div className="text-2xl font-black text-amber-200 leading-tight">{stats.staleEntries}</div>
-              <div className="text-[10px] text-amber-400/70">est. ประหยัด {stats.estimatedSavedRequests}</div>
-            </div>
+        <div className="space-y-6 p-5">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <Reveal i={0}>
+              <Stat label="รายการทั้งหมด" tone="accent" value={stats.total.toLocaleString()} hint="คำถามที่ cache ไว้" />
+            </Reveal>
+            <Reveal i={1}>
+              <Stat label="ถูกใช้ซ้ำ" tone="info" value={stats.totalHits.toLocaleString()} hint="ครั้งที่ตอบจากแคช" />
+            </Reveal>
+            <Reveal i={2}>
+              <Stat
+                label="Hit rate (1 ชม.)"
+                tone="success"
+                value={fmtPct(stats.hitRate)}
+                hint={`${stats.hitsLastHour}/${stats.hitsLastHour + stats.missesLastHour} ครั้ง`}
+              />
+            </Reveal>
+            <Reveal i={3}>
+              <Stat
+                label="ค้างนาน (30 วัน+)"
+                tone="warning"
+                value={stats.staleEntries.toLocaleString()}
+                hint={`ประหยัดโดยประมาณ ${stats.estimatedSavedRequests} คำขอ`}
+              />
+            </Reveal>
           </div>
 
           {stats.topProviders.length > 0 && (
-            <div className="mb-3">
-              <div className="text-[11px] text-gray-500 mb-1">Provider/model ที่ cache ได้ผลดี</div>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+            <section>
+              <h4 className="text-[13px] font-semibold text-white">ผู้ให้บริการ/โมเดลที่แคชได้ผลดี</h4>
+              <p className="mb-3 mt-0.5 text-[12px] text-[var(--muted)]">ตัวเลขท้ายคือจำนวนครั้งที่ตอบจากแคช</p>
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                 {stats.topProviders.slice(0, 6).map((p, i) => (
-                  <div key={i} className="text-[11px] bg-black/30 border border-white/10 rounded px-2 py-1 flex items-center justify-between gap-1">
-                    <span className="truncate text-gray-300 font-mono">{p.provider}/{p.model ?? "—"}</span>
-                    <span className="shrink-0 text-fuchsia-300">{p.totalHits}</span>
+                  <div key={i} className="flex items-center justify-between gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-[12px]">
+                    <span className="truncate font-mono text-gray-200">{p.provider}/{p.model ?? "—"}</span>
+                    <span className="shrink-0 font-semibold tabular-nums text-violet-200">{p.totalHits}</span>
                   </div>
                 ))}
               </div>
-            </div>
+            </section>
           )}
 
-          <div className="flex gap-1 mb-1.5">
-            <button
-              onClick={() => setTab("top")}
-              className={`text-[11px] px-2 py-0.5 rounded ${tab === "top" ? "bg-violet-500/20 border border-violet-500/40 text-white" : "bg-black/20 border border-white/10 text-gray-400"}`}
-            >
-              Top {stats.topEntries.length}
-            </button>
-            <button
-              onClick={() => setTab("stale")}
-              className={`text-[11px] px-2 py-0.5 rounded ${tab === "stale" ? "bg-amber-500/20 border border-amber-500/40 text-white" : "bg-black/20 border border-white/10 text-gray-400"}`}
-            >
-              Stale {stats.staleSamples.length}
-            </button>
-          </div>
-
-          {(tab === "top" ? stats.topEntries : stats.staleSamples).length === 0 ? (
-            <div className="text-xs text-gray-500 py-2 text-center">
-              {tab === "top" ? "ยังไม่มีรายการ — ระบบจะเริ่มจำเมื่อมีคำถามเข้ามา" : "ไม่มี stale entries"}
-            </div>
-          ) : (
-            <div className="space-y-1.5">
-              {(tab === "top" ? stats.topEntries : stats.staleSamples).map((e) => <EntryRow key={e.id} e={e} />)}
-            </div>
-          )}
-        </>
+          <section className="space-y-3">
+            <Tabs
+              tabs={[
+                { id: "top", label: `ใช้บ่อยสุด ${stats.topEntries.length}` },
+                { id: "stale", label: `ค้างนาน ${stats.staleSamples.length}` },
+              ]}
+              value={tab}
+              onChange={setTab}
+            />
+            {entries.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-white/10 px-4 py-6 text-center text-[13px] text-[var(--muted)]">
+                {tab === "top" ? "ยังไม่มีรายการ — ระบบจะเริ่มจำเมื่อมีคำถามเข้ามา" : "ไม่มีรายการค้างนาน"}
+              </div>
+            ) : (
+              <ul className="space-y-2">
+                {entries.map((e) => <EntryRow key={e.id} e={e} />)}
+              </ul>
+            )}
+          </section>
+        </div>
       )}
-    </div>
+    </Card>
   );
 }

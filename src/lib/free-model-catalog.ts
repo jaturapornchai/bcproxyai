@@ -34,14 +34,10 @@ interface ModelCaps {
 const PROVIDER_DEFAULT_RPM: Record<string, number> = {
   groq: 30,
   cerebras: 30,
-  google: 15,
-  github: 15,
   sambanova: 30,
   mistral: 60,
   cohere: 1, // trial key cap is 1000 calls/MONTH; throttle aggressively
-  huggingface: 30,
   nvidia: 40,
-  together: 60,
   chutes: 60,
   ollamacloud: 60,
   typhoon: 200,
@@ -82,14 +78,10 @@ export function getRpmLimit(provider: string, modelId: string): number | undefin
 const openrouter = (m: string, n: string, c: number, caps: ModelCaps = {}) => entry("openrouter", m, n, c, caps);
 const groq = (m: string, n: string, c: number, caps: ModelCaps = {}) => entry("groq", m, n, c, caps);
 const cerebras = (m: string, n: string, c: number, caps: ModelCaps = {}) => entry("cerebras", m, n, c, caps);
-const google = (m: string, n: string, c: number, caps: ModelCaps = {}) => entry("google", m, n, c, caps);
-const github = (m: string, n: string, c: number, caps: ModelCaps = {}) => entry("github", m, n, c, caps);
 const sambanova = (m: string, n: string, c: number, caps: ModelCaps = {}) => entry("sambanova", m, n, c, caps);
 const mistral = (m: string, n: string, c: number, caps: ModelCaps = {}) => entry("mistral", m, n, c, caps);
 const cohere = (m: string, n: string, c: number, caps: ModelCaps = {}) => entry("cohere", m, n, c, caps);
-const huggingface = (m: string, n: string, c: number, caps: ModelCaps = {}) => entry("huggingface", m, n, c, caps);
 const nvidia = (m: string, n: string, c: number, caps: ModelCaps = {}) => entry("nvidia", m, n, c, caps);
-const together = (m: string, n: string, c: number, caps: ModelCaps = {}) => entry("together", m, n, c, caps);
 const chutes = (m: string, n: string, c: number, caps: ModelCaps = {}) => entry("chutes", m, n, c, caps);
 const ollamacloud = (m: string, n: string, c: number, caps: ModelCaps = {}) => entry("ollamacloud", m, n, c, caps);
 const typhoon = (m: string, n: string, c: number, caps: ModelCaps = {}) => entry("typhoon", m, n, c, caps);
@@ -102,6 +94,11 @@ const sealion = (m: string, n: string, c: number, caps: ModelCaps = {}) => entry
 // openrouter/free are intentionally excluded. Cloudflare Workers AI is
 // excluded because its endpoint requires CLOUDFLARE_ACCOUNT_ID baked into
 // the URL, which is incompatible with the per-provider key lookup model.
+// Together AI, Hugging Face and GitHub Models are excluded: no genuinely free
+// path (prepaid-credit accounts / paid pass-through billed to credits /
+// retired models.github.ai endpoint) — do not re-add them.
+// Google AI Studio (direct Gemini API key) is banned by the owner — do not re-add it.
+// Google-made models served by OTHER providers (e.g. google/gemma-*:free on OpenRouter) are fine.
 export const FREE_MODEL_CATALOG: readonly FreeModelCatalogEntry[] = [
   // ── OpenRouter :free models (no charge regardless of provider routing) ──
   openrouter("openai/gpt-oss-20b:free", "OpenAI: gpt-oss-20b (free)", 131072, { tools: true, reasoning: true }),
@@ -149,37 +146,6 @@ export const FREE_MODEL_CATALOG: readonly FreeModelCatalogEntry[] = [
   cerebras("qwen-3-235b-a22b-thinking-2507", "Cerebras: Qwen 3 235B Thinking", 8192, { tools: true, reasoning: true }),
   cerebras("gpt-oss-120b", "Cerebras: gpt-oss-120b", 8192, { tools: true, reasoning: true, json: true }),
 
-  // ── Google AI Studio (Gemini free tier: 5-15 RPM, 1500 req/day Flash) ──
-  google("gemini-2.5-pro", "Google: Gemini 2.5 Pro", 1048576, { tools: true, vision: true, reasoning: true, json: true }),
-  google("gemini-2.5-flash", "Google: Gemini 2.5 Flash", 1048576, { tools: true, vision: true, reasoning: true, json: true }),
-  google("gemini-2.5-flash-lite", "Google: Gemini 2.5 Flash Lite", 1048576, { tools: true, vision: true, json: true }),
-  google("gemini-2.0-flash", "Google: Gemini 2.0 Flash", 1048576, { tools: true, vision: true, json: true }),
-  google("gemini-2.0-flash-lite", "Google: Gemini 2.0 Flash Lite", 1048576, { tools: true, vision: true, json: true }),
-  google("gemma-3-27b-it", "Google: Gemma 3 27B IT", 131072, { json: true }),
-  google("gemma-3-12b-it", "Google: Gemma 3 12B IT", 131072, { json: true }),
-
-  // ── GitHub Models (free preview, rate-limited per Microsoft account) ──
-  github("openai/gpt-4o-mini", "GitHub: GPT-4o mini", 128000, { tools: true, vision: true, json: true }),
-  github("openai/gpt-4o", "GitHub: GPT-4o", 128000, { tools: true, vision: true, json: true }),
-  github("openai/gpt-4.1", "GitHub: GPT-4.1", 1047576, { tools: true, vision: true, json: true }),
-  github("openai/gpt-4.1-mini", "GitHub: GPT-4.1 mini", 1047576, { tools: true, vision: true, json: true }),
-  github("openai/gpt-4.1-nano", "GitHub: GPT-4.1 nano", 1047576, { tools: true, vision: true, json: true }),
-  github("openai/o1-mini", "GitHub: o1-mini", 128000, { reasoning: true }),
-  github("openai/o3-mini", "GitHub: o3-mini", 200000, { reasoning: true, json: true }),
-  github("openai/o4-mini", "GitHub: o4-mini", 200000, { tools: true, reasoning: true, json: true }),
-  github("meta/Llama-3.3-70B-Instruct", "GitHub: Llama 3.3 70B Instruct", 131072, { tools: true, json: true }),
-  github("meta/Llama-4-Scout-17B-16E-Instruct", "GitHub: Llama 4 Scout 17B", 131072, { tools: true, vision: true, json: true }),
-  github("microsoft/Phi-4", "GitHub: Phi-4", 16384, { tools: true, json: true }),
-  github("microsoft/Phi-4-multimodal-instruct", "GitHub: Phi-4 Multimodal", 131072, { vision: true, json: true }),
-  github("microsoft/Phi-3.5-mini-instruct", "GitHub: Phi-3.5 mini Instruct", 131072, { tools: true, json: true }),
-  github("xai/grok-3-mini", "GitHub: Grok-3 mini", 131072, { tools: true, reasoning: true, json: true }),
-  github("xai/grok-code-fast-1", "GitHub: Grok Code Fast 1", 256000, { tools: true, json: true, code: true }),
-  github("mistral-ai/Mistral-Nemo", "GitHub: Mistral Nemo", 131072, { tools: true, json: true }),
-  github("mistral-ai/Codestral-2501", "GitHub: Codestral 2501", 262144, { code: true, json: true }),
-  github("cohere/cohere-command-r-plus-08-2024", "GitHub: Cohere Command R+", 128000, { tools: true, json: true }),
-  github("deepseek/DeepSeek-V3-0324", "GitHub: DeepSeek V3 0324", 131072, { tools: true, json: true }),
-  github("deepseek/DeepSeek-R1", "GitHub: DeepSeek R1", 131072, { reasoning: true }),
-
   // ── SambaNova (free tier: 10-30 RPM, daily quota per model) ──
   sambanova("Meta-Llama-3.3-70B-Instruct", "SambaNova: Llama 3.3 70B", 131072, { tools: true, json: true }),
   sambanova("Meta-Llama-3.1-8B-Instruct", "SambaNova: Llama 3.1 8B", 16384, { tools: true, json: true }),
@@ -208,14 +174,6 @@ export const FREE_MODEL_CATALOG: readonly FreeModelCatalogEntry[] = [
   cohere("command-r", "Cohere: Command R", 128000, { tools: true, json: true }),
   cohere("command-r7b", "Cohere: Command R7B", 128000, { tools: true, json: true }),
 
-  // ── HuggingFace Inference Router (monthly free credits) ──
-  huggingface("meta-llama/Llama-3.3-70B-Instruct", "HF: Llama 3.3 70B", 131072, { tools: true, json: true }),
-  huggingface("meta-llama/Llama-3.1-8B-Instruct", "HF: Llama 3.1 8B", 131072, { tools: true, json: true }),
-  huggingface("Qwen/Qwen3-32B", "HF: Qwen 3 32B", 131072, { tools: true, reasoning: true, json: true }),
-  huggingface("deepseek-ai/DeepSeek-R1", "HF: DeepSeek R1", 131072, { reasoning: true }),
-  huggingface("openai/gpt-oss-120b", "HF: gpt-oss-120b", 131072, { tools: true, reasoning: true }),
-  huggingface("moonshotai/Kimi-K2-Instruct-0905", "HF: Kimi K2 0905", 262144, { tools: true, code: true }),
-
   // ── NVIDIA NIM (~40 RPM, free starter credits) ──
   nvidia("meta/llama-3.3-70b-instruct", "NVIDIA: Llama 3.3 70B", 131072, { tools: true, json: true }),
   nvidia("meta/llama-3.1-405b-instruct", "NVIDIA: Llama 3.1 405B", 131072, { tools: true, json: true }),
@@ -224,10 +182,6 @@ export const FREE_MODEL_CATALOG: readonly FreeModelCatalogEntry[] = [
   nvidia("deepseek-ai/deepseek-r1", "NVIDIA: DeepSeek R1", 131072, { reasoning: true }),
   nvidia("nvidia/llama-3.3-nemotron-super-49b-v1", "NVIDIA: Nemotron Super 49B", 131072, { tools: true, reasoning: true }),
   nvidia("openai/gpt-oss-120b", "NVIDIA: gpt-oss-120b", 131072, { tools: true, reasoning: true, json: true }),
-
-  // ── Together AI (only the explicitly Free endpoints) ──
-  together("meta-llama/Llama-3.3-70B-Instruct-Turbo-Free", "Together: Llama 3.3 70B Free", 131072, { tools: true, json: true }),
-  together("meta-llama/Llama-Vision-Free", "Together: Llama 3.2 11B Vision Free", 131072, { vision: true, json: true }),
 
   // ── Chutes AI removed: production probe revealed it is not actually free.
   //    The endpoint demands paying the account balance with TAO crypto
@@ -264,13 +218,6 @@ export const FREE_MODEL_CATALOG: readonly FreeModelCatalogEntry[] = [
   openrouter("arcee-ai/trinity-large-thinking:free", "Arcee: Trinity Large Thinking (free)", 262144, { tools: true, reasoning: true }),
   openrouter("openrouter/owl-alpha", "OpenRouter: Owl Alpha (free, 1M ctx)", 1048576, { tools: true, json: true }),
 
-  // GitHub Models additions (free preview)
-  github("openai/gpt-5", "OpenAI: GPT-5 (preview)", 400000, { tools: true, vision: true, reasoning: true, json: true }),
-  github("openai/gpt-5-mini", "OpenAI: GPT-5 mini (preview)", 400000, { tools: true, vision: true, reasoning: true, json: true }),
-  github("ai21-labs/AI21-Jamba-1.5-Large", "AI21: Jamba 1.5 Large", 256000, { tools: true, json: true }),
-  github("microsoft/MAI-DS-R1", "Microsoft: MAI-DS-R1 (reasoning)", 131072, { reasoning: true }),
-  github("deepseek/DeepSeek-R1-0528", "DeepSeek: R1-0528 (reasoning)", 131072, { reasoning: true }),
-
   // Cohere additions (multilingual incl Thai — 23 languages)
   cohere("command-a-reasoning-08-2025", "Cohere: Command A Reasoning", 256000, { tools: true, reasoning: true, json: true }),
   cohere("c4ai-aya-expanse-32b", "Cohere: Aya Expanse 32B (multilingual)", 128000, { tools: true, json: true }),
@@ -281,9 +228,6 @@ export const FREE_MODEL_CATALOG: readonly FreeModelCatalogEntry[] = [
 
   // Cerebras addition (Z.ai GLM 4.7 preview)
   cerebras("zai-glm-4.7", "Cerebras: Z.ai GLM 4.7 (preview)", 8192, { tools: true, reasoning: true, json: true }),
-
-  // Google addition (Gemini 3 Flash preview — multilingual incl Thai)
-  google("gemini-3-flash-preview", "Google: Gemini 3 Flash (preview)", 1048576, { tools: true, vision: true, reasoning: true, json: true }),
 ] as const;
 
 const FREE_MODEL_KEYS = new Set(

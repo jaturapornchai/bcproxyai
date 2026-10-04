@@ -25,7 +25,7 @@ const cOther = new Counter('k6_other');
 export default function () {
   const unique = `${__VU}-${__ITER}-${Date.now()}`;
   const payload = JSON.stringify({
-    model: 'sml/fast',
+    model: 'bcai/fast',
     messages: [{ role: 'user', content: `Reply with only the word "ok" for test ${unique}` }],
     max_tokens: 5,
   });

@@ -5,7 +5,7 @@ import { isOwnerEmail, hasOwners } from "@/lib/admin-emails";
 import { ADMIN_COOKIE_NAME, adminPasswordEnabled, verifyAdminCookie } from "@/lib/admin-cookie";
 import { timingSafeStringEqual } from "@/lib/secret-compare";
 import { getNextApiKey } from "@/lib/api-keys";
-import { costPolicyBlockMessage, isModelCostAllowed } from "@/lib/cost-policy";
+import { applyNoSpendGuards, costPolicyBlockMessage, isModelCostAllowed } from "@/lib/cost-policy";
 import { resolveProviderUrl } from "@/lib/provider-resolver";
 import { upstreamAgent } from "@/lib/upstream-agent";
 
@@ -114,11 +114,11 @@ export async function POST(req: NextRequest) {
       const res = await fetch(url, {
         method: "POST",
         headers,
-        body: JSON.stringify({
+        body: JSON.stringify(applyNoSpendGuards(c.provider, {
           model: c.model,
           messages: [{ role: "user", content: prompt }],
           max_tokens: 256,
-        }),
+        })),
         signal: AbortSignal.timeout(30_000),
         // @ts-expect-error undici dispatcher not typed in standard fetch
         dispatcher: upstreamAgent,

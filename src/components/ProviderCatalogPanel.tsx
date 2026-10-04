@@ -1,6 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { IconServer } from "./ui/icons";
+import { Badge, Card, CardHeader, EmptyState } from "./ui/ui";
+import type { Tone } from "./ui/ui";
 
 interface CatalogProvider {
   name: string;
@@ -29,19 +32,11 @@ interface CatalogResponse {
   providers: CatalogProvider[];
 }
 
-const STATUS_STYLE: Record<CatalogProvider["status"], { label: string; cls: string }> = {
-  active:  { label: "✓ ใช้งานได้",  cls: "bg-emerald-500/20 text-emerald-300 border-emerald-500/30" },
-  pending: { label: "⌛ รอเชื่อม",   cls: "bg-amber-500/20 text-amber-300 border-amber-500/30" },
-  failed:  { label: "✗ ใช้ไม่ได้",  cls: "bg-red-500/20 text-red-300 border-red-500/30" },
-  paused:  { label: "⏸ ปิดอยู่",    cls: "bg-gray-500/20 text-gray-300 border-gray-500/30" },
-};
-
-const SOURCE_EMOJI: Record<string, string> = {
-  seed:        "🌱",
-  openrouter:  "🛣",
-  huggingface: "🤗",
-  pattern:     "🔍",
-  manual:      "✋",
+const STATUS_STYLE: Record<CatalogProvider["status"], { label: string; tone: Tone }> = {
+  active:  { label: "ใช้งานได้", tone: "success" },
+  pending: { label: "รอเชื่อม",  tone: "warning" },
+  failed:  { label: "ใช้ไม่ได้", tone: "danger" },
+  paused:  { label: "ปิดอยู่",   tone: "neutral" },
 };
 
 const SOURCE_LABEL: Record<string, string> = {
@@ -52,21 +47,24 @@ const SOURCE_LABEL: Record<string, string> = {
   manual:      "เพิ่มเอง",
 };
 
+const FILTERS = [
+  { id: "all", label: "ทั้งหมด" },
+  { id: "active", label: "ใช้งานได้" },
+  { id: "pending", label: "รอเชื่อม" },
+] as const;
+
 export function ProviderCatalogPanel() {
   const [data, setData] = useState<CatalogResponse | null>(null);
-  const [filter, setFilter] = useState<"all" | "active" | "pending">("all");
-  const [discovering, setDiscovering] = useState(false);
-  const [statusMsg, setStatusMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const [filter, setFilter] = useState<(typeof FILTERS)[number]["id"]>("all");
 
-  const fetchCatalog = useCallback(async () => {
-    try {
-      const res = await fetch("/api/provider-catalog", { cache: "no-store" });
-      const json = (await res.json()) as CatalogResponse;
-      setData(json);
-    } catch (err) {
-      console.error("[ProviderCatalogPanel] fetch error", err);
-    }
-  }, []);
+  const fetchCatalog = useCallback(
+    () =>
+      fetch("/api/provider-catalog", { cache: "no-store" })
+        .then((res) => res.json() as Promise<CatalogResponse>)
+        .then(setData)
+        .catch((err) => console.error("[ProviderCatalogPanel] fetch error", err)),
+    [],
+  );
 
   useEffect(() => {
     fetchCatalog();
@@ -74,160 +72,110 @@ export function ProviderCatalogPanel() {
     return () => clearInterval(t);
   }, [fetchCatalog]);
 
-  const onDiscover = async () => {
-    setDiscovering(true);
-    setStatusMsg(null);
-    try {
-      const res = await fetch("/api/provider-catalog", { method: "POST" });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
-      setStatusMsg({
-        kind: "ok",
-        text: `🔎 สแกนเสร็จ — ตรวจ ${json.scanned} รายการ, พบใหม่ ${json.newFound} ${json.newFound > 0 ? `(${json.newProviders.join(", ")})` : ""}`,
-      });
-      await fetchCatalog();
-    } catch (err) {
-      setStatusMsg({ kind: "err", text: `สแกนล้มเหลว: ${err instanceof Error ? err.message : String(err)}` });
-    } finally {
-      setDiscovering(false);
-    }
-  };
-
   if (!data) {
     return (
-      <div className="glass rounded-xl p-4 border border-white/10">
-        <div className="flex items-center gap-2 text-gray-500 text-sm">
-          <span className="animate-pulse">⏳</span> กำลังโหลดรายการ…
+      <Card className="p-5">
+        <div className="skeleton mb-4 h-6 w-64" />
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
+          {[0, 1, 2].map((i) => <div key={i} className="skeleton h-28" />)}
         </div>
-      </div>
+      </Card>
     );
   }
 
-  const filtered = data.providers.filter((p) => {
-    if (filter === "all") return true;
-    return p.status === filter;
-  });
+  const filtered = data.providers.filter((p) => filter === "all" || p.status === filter);
 
   return (
-    <div className="glass rounded-xl border border-white/10 overflow-hidden">
-      {/* Header */}
-      <div className="px-4 py-3 border-b border-white/10 bg-gradient-to-r from-purple-500/5 to-indigo-500/5">
-        <div className="flex items-center gap-3 flex-wrap">
-          <span className="text-2xl">🌐</span>
-          <div className="flex-1 min-w-[200px]">
-            <div className="font-bold text-white text-lg">รายชื่อผู้ให้บริการ (ค้นหาอัตโนมัติ)</div>
-            <div className="text-xs text-gray-400">
-              ระบบค้นหาผู้ให้บริการใหม่จากอินเทอร์เน็ตอัตโนมัติทุกๆ 15 นาที
-            </div>
+    <Card>
+      <CardHeader
+        title="รายชื่อผู้ให้บริการที่ระบบรู้จัก"
+        subtitle="ตอนนี้ระบบใช้รายการโมเดลฟรีที่กำหนดไว้ในตัวระบบเท่านั้น (ปิดการค้นหาผู้ให้บริการใหม่อัตโนมัติ)"
+        icon={<IconServer size={18} />}
+        action={
+          <div className="hidden flex-wrap justify-end gap-1.5 sm:flex">
+            <Badge tone="success">ใช้งานได้ {data.summary.active}</Badge>
+            <Badge tone="warning">รอเชื่อม {data.summary.pending}</Badge>
+            <Badge tone="info">ฟรี {data.summary.free_tier}</Badge>
+            <Badge>รวม {data.summary.total}</Badge>
           </div>
-          <div className="flex items-center gap-2 text-xs">
-            <span className="px-2 py-1 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/20">
-              ✓ ใช้งานได้ {data.summary.active}
-            </span>
-            <span className="px-2 py-1 rounded bg-amber-500/15 text-amber-300 border border-amber-500/20">
-              ⌛ รอเชื่อม {data.summary.pending}
-            </span>
-            <span className="px-2 py-1 rounded bg-cyan-500/15 text-cyan-300 border border-cyan-500/20">
-              🆓 ฟรี {data.summary.free_tier}
-            </span>
-            <span className="text-gray-500">รวม {data.summary.total}</span>
-          </div>
-        </div>
-        <div className="flex items-center gap-2 mt-2 text-[11px] text-gray-500 flex-wrap">
-          <span>แหล่งข้อมูล:</span>
-          {Object.entries(data.summary.sources).map(([src, count]) => (
-            <span key={src} className="px-1.5 py-0.5 rounded bg-white/5">
-              {SOURCE_EMOJI[src] ?? "?"} {SOURCE_LABEL[src] ?? src} ({count})
-            </span>
-          ))}
-        </div>
-      </div>
+        }
+      />
 
-      {/* Action bar */}
-      <div className="px-4 py-3 border-t border-white/5 bg-black/20 flex items-center gap-2 flex-wrap">
-        <button
-          disabled
-          className="px-4 py-1.5 rounded-lg bg-slate-700/60 text-slate-300 text-sm font-semibold opacity-70 cursor-not-allowed"
-          title="ปิดการค้นหา provider/model อัตโนมัติแล้ว ระบบใช้ hardcoded free catalog เท่านั้น"
-        >
-          📌 ใช้ hardcoded free catalog
-        </button>
-        <div className="flex items-center gap-1 ml-auto">
-          {(["all", "active", "pending"] as const).map((f) => (
+      <div className="flex flex-wrap items-center gap-3 px-5 pt-4">
+        <div className="flex gap-1 rounded-xl border border-white/10 bg-white/[0.03] p-1" role="group" aria-label="กรองตามสถานะ">
+          {FILTERS.map((f) => (
             <button
-              key={f}
-              onClick={() => setFilter(f)}
-              className={`px-2 py-1 rounded text-xs ${
-                filter === f
-                  ? "bg-indigo-500/20 text-indigo-300 border border-indigo-500/30"
-                  : "text-gray-500 hover:text-white"
+              key={f.id}
+              type="button"
+              aria-pressed={filter === f.id}
+              onClick={() => setFilter(f.id)}
+              className={`rounded-lg px-3 py-1.5 text-[12px] font-medium transition-all duration-300 ${
+                filter === f.id ? "bg-white/10 text-white" : "text-[var(--muted)] hover:text-gray-200"
               }`}
             >
-              {f === "all" ? "ทั้งหมด" : f === "active" ? "ใช้งานได้" : "รอเชื่อม"}
+              {f.label}
             </button>
           ))}
         </div>
-        {statusMsg && (
-          <span
-            className={`text-xs px-2 py-1 rounded w-full ${
-              statusMsg.kind === "ok"
-                ? "text-emerald-300 bg-emerald-500/10 border border-emerald-500/20"
-                : "text-red-300 bg-red-500/10 border border-red-500/20"
-            }`}
-          >
-            {statusMsg.text}
-          </span>
+        {Object.keys(data.summary.sources).length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-[var(--muted)]">
+            <span>แหล่งข้อมูล:</span>
+            {Object.entries(data.summary.sources).map(([src, count]) => (
+              <Badge key={src}>{SOURCE_LABEL[src] ?? src} {count}</Badge>
+            ))}
+          </div>
         )}
       </div>
 
-      {/* Provider list */}
-      <div className="p-3 max-h-[480px] overflow-y-auto">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
-          {filtered.map((p) => {
-            const stat = STATUS_STYLE[p.status];
-            return (
-              <div
-                key={p.name}
-                className={`rounded-lg border p-2.5 text-xs ${
-                  p.status === "active" ? "border-white/10 bg-white/2" : "border-amber-500/20 bg-amber-500/5"
-                }`}
-              >
-                <div className="flex items-center gap-2 mb-1.5">
-                  <span className="text-base">{SOURCE_EMOJI[p.source] ?? "?"}</span>
-                  <span className="font-bold text-white truncate">{p.label ?? p.name}</span>
-                  {p.free_tier && <span className="text-[10px] text-cyan-300">🆓</span>}
-                  <span className={`ml-auto px-1.5 py-0.5 rounded text-[10px] border ${stat.cls}`}>
-                    {stat.label}
-                  </span>
+      {filtered.length === 0 ? (
+        <EmptyState
+          icon={<IconServer size={22} />}
+          title={data.providers.length === 0 ? "ยังไม่มีรายการผู้ให้บริการ" : "ไม่มีผู้ให้บริการในกลุ่มนี้"}
+          description={
+            data.providers.length === 0
+              ? "รายการจะปรากฏที่นี่เมื่อระบบบันทึกผู้ให้บริการเข้าบัญชีรายชื่อ"
+              : "ลองเลือกตัวกรอง “ทั้งหมด”"
+          }
+        />
+      ) : (
+        <div className="max-h-[480px] overflow-y-auto p-5">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
+            {filtered.map((p) => {
+              const stat = STATUS_STYLE[p.status];
+              return (
+                <div
+                  key={p.name}
+                  className={`rounded-2xl border p-3.5 text-[12px] transition-colors hover:border-white/20 ${
+                    p.status === "active" ? "border-white/10 bg-white/[0.02]" : "border-amber-400/20 bg-amber-400/[0.04]"
+                  }`}
+                >
+                  <div className="mb-2 flex items-center gap-2">
+                    <span className="truncate text-[13px] font-semibold text-white">{p.label ?? p.name}</span>
+                    {p.free_tier && <Badge tone="info">ฟรี</Badge>}
+                    <span className="ml-auto shrink-0"><Badge tone={stat.tone} dot={p.status === "active"}>{stat.label}</Badge></span>
+                  </div>
+                  <div className="truncate font-mono text-[11px] text-[var(--muted)]" title={p.base_url}>{p.base_url}</div>
+                  {p.env_var && <div className="mt-0.5 font-mono text-[10px] text-[var(--muted)]/80">ตัวแปร: {p.env_var}</div>}
+                  {p.notes && <div className="mt-1.5 line-clamp-2 text-[11px] leading-relaxed text-gray-400">{p.notes}</div>}
+                  <div className="mt-2 flex items-center gap-2 text-[11px] text-[var(--muted)]">
+                    <span>แหล่ง: {SOURCE_LABEL[p.source] ?? p.source}</span>
+                    {p.homepage && (
+                      <a
+                        href={p.homepage}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="ml-auto text-violet-300 transition-colors hover:text-white"
+                      >
+                        เปิดเว็บ →
+                      </a>
+                    )}
+                  </div>
                 </div>
-                <div className="text-[11px] text-gray-500 font-mono truncate" title={p.base_url}>
-                  {p.base_url}
-                </div>
-                {p.env_var && (
-                  <div className="text-[10px] text-gray-600 mt-0.5 font-mono">ตัวแปร: {p.env_var}</div>
-                )}
-                {p.notes && <div className="text-[11px] text-gray-400 mt-1 line-clamp-2">{p.notes}</div>}
-                <div className="flex items-center gap-2 mt-1.5 text-[10px] text-gray-600">
-                  <span>แหล่ง: {SOURCE_LABEL[p.source] ?? p.source}</span>
-                  {p.homepage && (
-                    <a
-                      href={p.homepage}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="ml-auto text-indigo-300 hover:text-white"
-                    >
-                      เปิดเว็บ →
-                    </a>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-          {filtered.length === 0 && (
-            <div className="text-xs text-gray-500 italic col-span-full">ไม่มีผู้ให้บริการในกลุ่มนี้</div>
-          )}
+              );
+            })}
+          </div>
         </div>
-      </div>
-    </div>
+      )}
+    </Card>
   );
 }

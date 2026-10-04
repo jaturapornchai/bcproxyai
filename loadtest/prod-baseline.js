@@ -51,7 +51,7 @@ const params = {
 
 export function cached() {
   const body = JSON.stringify({
-    model: 'sml/fast',
+    model: 'bcai/fast',
     messages: [{ role: 'user', content: 'say hi' }],
     max_tokens: 5,
   });
@@ -67,7 +67,7 @@ export function cached() {
 export function uncached() {
   const unique = `${__VU}-${__ITER}-${Date.now()}`;
   const body = JSON.stringify({
-    model: 'sml/fast',
+    model: 'bcai/fast',
     messages: [{ role: 'user', content: `Reply ok. test ${unique}` }],
     max_tokens: 5,
   });

@@ -1,7 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { PROVIDER_COLORS } from "./shared";
+import { Badge, Card, CardHeader, CountUp, EmptyState, LinkButton, Stat } from "./ui/ui";
+import { IconChat, IconCompass } from "./ui/icons";
 
 interface CategoryStat {
   prompt_category: string;
@@ -25,142 +27,127 @@ interface RoutingData {
   totalLearned: number;
 }
 
-const CATEGORY_LABELS: Record<string, { label: string; icon: string }> = {
-  general:   { label: "ทั่วไป", icon: "💬" },
-  code:      { label: "โค้ด", icon: "💻" },
-  thai:      { label: "ภาษาไทย", icon: "🇹🇭" },
-  math:      { label: "คณิตศาสตร์", icon: "🔢" },
-  creative:  { label: "สร้างสรรค์", icon: "🎨" },
-  analysis:  { label: "วิเคราะห์", icon: "🔍" },
-  translate: { label: "แปลภาษา", icon: "🌐" },
+const CATEGORY_LABELS: Record<string, string> = {
+  general: "ทั่วไป",
+  code: "โค้ด",
+  thai: "ภาษาไทย",
+  math: "คณิตศาสตร์",
+  creative: "สร้างสรรค์",
+  analysis: "วิเคราะห์",
+  translate: "แปลภาษา",
 };
+
+const SEGMENT_COLORS = ["bg-violet-400", "bg-cyan-400", "bg-emerald-400", "bg-amber-400", "bg-rose-400", "bg-fuchsia-400", "bg-teal-400"];
 
 export function RoutingLearnPanel() {
   const [data, setData] = useState<RoutingData | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const fetchData = useCallback(async () => {
-    try {
-      const res = await fetch("/api/routing-stats");
-      if (res.ok) setData(await res.json());
-    } catch { /* silent */ }
-    setLoading(false);
-  }, []);
-
   useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const res = await fetch("/api/routing-stats");
+        if (res.ok) setData(await res.json());
+      } catch { /* silent */ }
+      setLoading(false);
+    };
     fetchData();
     const t = setInterval(fetchData, 30000);
     return () => clearInterval(t);
-  }, [fetchData]);
+  }, []);
 
-  if (loading) return <div className="text-gray-500 text-center py-8">กำลังโหลดข้อมูล Smart Routing...</div>;
+  if (loading) {
+    return (
+      <Card className="p-5" aria-busy="true">
+        <div className="skeleton h-24" />
+      </Card>
+    );
+  }
   if (!data || data.totalLearned === 0) {
     return (
-      <div className="glass rounded-2xl p-8 text-center text-gray-500">
-        <div className="text-4xl mb-3">🧠</div>
-        <p>ครูยังไม่รู้จักนักเรียน — ส่งการบ้านมาก่อน แล้วครูจะจำได้ว่าใครเก่งวิชาไหน!</p>
-      </div>
+      <Card>
+        <EmptyState
+          icon={<IconCompass size={22} />}
+          title="ระบบยังไม่ได้เรียนรู้ว่าโมเดลไหนเก่งเรื่องอะไร"
+          description="ส่งคำขอผ่าน gateway สักระยะ ระบบจะจำว่าโมเดลไหนตอบหมวดไหนได้ดีและเลือกให้อัตโนมัติ"
+          action={<LinkButton href="/playground" variant="primary" size="sm"><IconChat size={14} /> ลองส่งแชท</LinkButton>}
+        />
+      </Card>
     );
   }
 
   const totalDist = data.distribution.reduce((s, d) => s + d.count, 0);
+  const label = (cat: string) => CATEGORY_LABELS[cat] ?? cat;
 
   return (
     <div className="space-y-4">
-      {/* Summary */}
-      <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3">
-        <div className="bg-gray-800/50 rounded-lg p-3 text-center">
-          <div className="text-2xl font-black text-indigo-400">{data.totalLearned}</div>
-          <div className="text-xs text-gray-400">ครั้งที่ครูจำได้</div>
-        </div>
-        <div className="bg-gray-800/50 rounded-lg p-3 text-center">
-          <div className="text-2xl font-bold text-cyan-400">{Object.keys(data.categories).length}</div>
-          <div className="text-xs text-gray-400">วิชาที่สอน</div>
-        </div>
-        <div className="bg-gray-800/50 rounded-lg p-3 text-center">
-          <div className="text-2xl font-bold text-emerald-400">
-            {Object.values(data.categories).reduce((s, cats) => s + cats.length, 0)}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Stat label="ครั้งที่ระบบจำได้" value={<CountUp value={data.totalLearned} />} tone="accent" />
+        <Stat label="หมวดงาน" value={<CountUp value={Object.keys(data.categories).length} />} tone="info" />
+        <Stat
+          label="คู่ model-หมวด"
+          value={<CountUp value={Object.values(data.categories).reduce((s, cats) => s + cats.length, 0)} />}
+          tone="success"
+        />
+        <Stat label="ช่วงข้อมูล" value="7 วัน" tone="warning" />
+      </div>
+
+      <Card>
+        <CardHeader title="สัดส่วนงานแต่ละหมวด" subtitle="หมวดไหนถูกใช้เยอะที่สุดในช่วง 7 วันที่ผ่านมา" />
+        <div className="p-5">
+          <div className="flex h-8 gap-1 overflow-hidden rounded-lg" role="img" aria-label="กราฟสัดส่วนงานแต่ละหมวด">
+            {data.distribution.map((d, i) => {
+              const pct = (d.count / totalDist) * 100;
+              return (
+                <div
+                  key={d.prompt_category}
+                  className={`${SEGMENT_COLORS[i % SEGMENT_COLORS.length]} h-full opacity-80 transition-opacity hover:opacity-100`}
+                  // ponytail: width is data-driven, so it can't be a static class
+                  style={{ width: `${Math.max(pct, 3)}%` }}
+                  title={`${label(d.prompt_category)}: ${d.count} (${pct.toFixed(1)}%)`}
+                />
+              );
+            })}
           </div>
-          <div className="text-xs text-gray-400">model-category pairs</div>
+          <ul className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5 text-[12px] text-[var(--muted)]">
+            {data.distribution.map((d, i) => (
+              <li key={d.prompt_category} className="flex items-center gap-1.5">
+                <span className={`inline-block h-2 w-2 rounded-sm ${SEGMENT_COLORS[i % SEGMENT_COLORS.length]}`} />
+                {label(d.prompt_category)}
+                <span className="tabular-nums text-gray-500">{d.count}</span>
+              </li>
+            ))}
+          </ul>
         </div>
-        <div className="bg-gray-800/50 rounded-lg p-3 text-center">
-          <div className="text-2xl font-bold text-amber-400">7 วัน</div>
-          <div className="text-xs text-gray-400">ช่วงข้อมูล</div>
-        </div>
-      </div>
+      </Card>
 
-      {/* Prompt Distribution */}
-      <div className="glass rounded-xl p-4">
-        <h4 className="text-sm font-bold text-gray-300 mb-3">ตารางสอน — วิชาอะไรเรียนเยอะสุด?</h4>
-        <div className="flex gap-1 h-8 rounded-lg overflow-hidden">
-          {data.distribution.map(d => {
-            const pct = (d.count / totalDist) * 100;
-            const cat = CATEGORY_LABELS[d.prompt_category] ?? { label: d.prompt_category, icon: "?" };
-            const colors = ["bg-indigo-500", "bg-cyan-500", "bg-emerald-500", "bg-amber-500", "bg-rose-500", "bg-purple-500", "bg-teal-500"];
-            const idx = data.distribution.indexOf(d) % colors.length;
-            return (
-              <div
-                key={d.prompt_category}
-                className={`${colors[idx]} relative group`}
-                style={{ width: `${Math.max(pct, 3)}%` }}
-                title={`${cat.icon} ${cat.label}: ${d.count} (${pct.toFixed(1)}%)`}
-              >
-                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover:block z-10">
-                  <div className="glass rounded px-2 py-1 text-[10px] text-white whitespace-nowrap border border-white/10">
-                    {cat.icon} {cat.label}: {d.count} ({pct.toFixed(1)}%)
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-        <div className="flex flex-wrap gap-3 mt-2 text-[10px] text-gray-500">
-          {data.distribution.map((d, i) => {
-            const cat = CATEGORY_LABELS[d.prompt_category] ?? { label: d.prompt_category, icon: "?" };
-            const colors = ["bg-indigo-500", "bg-cyan-500", "bg-emerald-500", "bg-amber-500", "bg-rose-500", "bg-purple-500", "bg-teal-500"];
-            return (
-              <span key={d.prompt_category} className="flex items-center gap-1">
-                <span className={`inline-block h-2 w-2 rounded-sm ${colors[i % colors.length]}`} />
-                {cat.icon} {cat.label}
-              </span>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Best Models per Category */}
-      <div className="grid grid-cols-[repeat(auto-fit,minmax(360px,1fr))] gap-4">
-        {Object.entries(data.categories).map(([cat, models]) => {
-          const catInfo = CATEGORY_LABELS[cat] ?? { label: cat, icon: "?" };
-          return (
-            <div key={cat} className="bg-gray-800/30 rounded-xl border border-gray-700/50 p-4">
-              <h4 className="text-sm font-bold text-white mb-3">
-                {catInfo.icon} {catInfo.label} — เด็กเก่งประจำวิชา
-              </h4>
-              <div className="space-y-2">
-                {models.slice(0, 3).map((m, i) => {
-                  const colors = PROVIDER_COLORS[m.provider] ?? PROVIDER_COLORS.openrouter;
-                  return (
-                    <div key={m.model_id} className="flex items-center gap-2">
-                      <span className="text-xs text-gray-600 w-5 text-center">{i === 0 ? "🥇" : i === 1 ? "🥈" : "🥉"}</span>
-                      <div className="flex-1 min-w-0">
-                        <div className="text-xs text-gray-200 truncate">{m.model_id.split(":")[0]}</div>
-                        <div className={`text-[10px] ${colors.text}`}>{m.provider}</div>
-                      </div>
-                      <div className="text-right shrink-0">
-                        <div className="text-xs font-bold text-emerald-400">{m.success_rate}%</div>
-                        <div className="text-[10px] text-gray-500">{m.avg_latency_ms}ms</div>
-                      </div>
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {Object.entries(data.categories).map(([cat, models]) => (
+          <Card key={cat} hover className="p-5">
+            <h4 className="mb-3 text-[14px] font-semibold text-white">{label(cat)} <span className="font-normal text-[var(--muted)]">· โมเดลเด่นประจำหมวด</span></h4>
+            <div className="space-y-2.5">
+              {models.slice(0, 3).map((m, i) => {
+                const colors = PROVIDER_COLORS[m.provider] ?? PROVIDER_COLORS.openrouter;
+                return (
+                  <div key={m.model_id} className="flex items-center gap-3">
+                    <Badge tone={i === 0 ? "accent" : "neutral"}>{i + 1}</Badge>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-[13px] text-gray-200">{m.model_id.split(":")[0]}</div>
+                      <div className={`text-[11px] ${colors.text}`}>{m.provider}</div>
                     </div>
-                  );
-                })}
-                {models.length === 0 && (
-                  <div className="text-xs text-gray-600 text-center py-2">ยังไม่มีเด็กเรียนวิชานี้พอ</div>
-                )}
-              </div>
+                    <div className="shrink-0 text-right tabular-nums">
+                      <div className="text-[13px] font-semibold text-emerald-300">{m.success_rate}%</div>
+                      <div className="text-[11px] text-[var(--muted)]">{m.avg_latency_ms} ms</div>
+                    </div>
+                  </div>
+                );
+              })}
+              {models.length === 0 && (
+                <div className="py-2 text-center text-[12px] text-[var(--muted)]">ยังมีข้อมูลหมวดนี้ไม่พอ</div>
+              )}
             </div>
-          );
-        })}
+          </Card>
+        ))}
       </div>
     </div>
   );

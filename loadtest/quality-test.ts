@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * quality-test.ts — SMLGateway Answer Quality Test (Node.js version)
+ * quality-test.ts — BCAiRouter Answer Quality Test (Node.js version)
  *
  * ทดสอบคุณภาพคำตอบจริง ไม่ใช่แค่ HTTP 200
  * สุ่มคำถามหลายประเภท ตรวจคำตอบด้วย regex/keyword
@@ -295,8 +295,8 @@ async function runOne(q: Question): Promise<TestResult> {
       signal: AbortSignal.timeout(30_000),
     });
     const latencyMs = Date.now() - start;
-    const provider = res.headers.get("x-smlgateway-provider") ?? "?";
-    let model = res.headers.get("x-smlgateway-model") ?? "?";
+    const provider = res.headers.get("x-bcairouter-provider") ?? "?";
+    let model = res.headers.get("x-bcairouter-model") ?? "?";
 
     if (res.status !== 200) {
       return { cat: q.cat, desc: q.desc, provider, model, status: res.status, latencyMs, correct: false, error: true, answer: `HTTP ${res.status}` };
@@ -345,7 +345,7 @@ function printReport() {
   const avgLatency = total > 0 ? results.reduce((s, r) => s + r.latencyMs, 0) / total : 0;
 
   console.log("\n" + "═".repeat(70));
-  console.log("  SMLGateway Quality Test Report");
+  console.log("  BCAiRouter Quality Test Report");
   console.log("═".repeat(70));
   console.log(`\n  Total: ${total} | ✅ Correct: ${correct} (${(correct/total*100).toFixed(1)}%) | ❌ Wrong: ${wrong} (${(wrong/total*100).toFixed(1)}%) | 💥 Error: ${errors} (${(errors/total*100).toFixed(1)}%)`);
   console.log(`  Avg Latency: ${(avgLatency/1000).toFixed(2)}s`);
@@ -391,7 +391,7 @@ function printReport() {
 // ─── Main ───────────────────────────────────────────────────────────────────
 
 async function main() {
-  console.log(`\n🧪 SMLGateway Quality Test`);
+  console.log(`\n🧪 BCAiRouter Quality Test`);
   console.log(`   URL: ${CHAT_URL}`);
   console.log(`   Questions: ${QUESTIONS.length} types`);
   console.log(`   Rounds: ${ROUNDS === 0 ? "∞ (Ctrl+C to stop)" : ROUNDS}`);

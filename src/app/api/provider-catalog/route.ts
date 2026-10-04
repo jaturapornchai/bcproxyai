@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSqlClient } from "@/lib/db/schema";
+import { isProviderCostAllowed } from "@/lib/cost-policy";
 
 export const dynamic = "force-dynamic";
 
@@ -22,7 +23,7 @@ interface CatalogRow {
 export async function GET() {
   try {
     const sql = getSqlClient();
-    const rows = await sql<CatalogRow[]>`
+    const allRows = await sql<CatalogRow[]>`
       SELECT name, label, base_url, env_var, homepage, status, source, notes, free_tier,
              last_probed_at, probe_status_code, discovered_at, updated_at
       FROM provider_catalog
@@ -30,6 +31,8 @@ export async function GET() {
         CASE status WHEN 'active' THEN 0 WHEN 'pending' THEN 1 WHEN 'paused' THEN 2 ELSE 3 END,
         discovered_at DESC
     `;
+    // Paid/retired providers may still have DB rows — never list them.
+    const rows = allRows.filter((r) => isProviderCostAllowed(r.name));
 
     const summary = {
       total: rows.length,
@@ -55,7 +58,7 @@ export async function GET() {
  */
 export async function POST() {
   return NextResponse.json(
-    { ok: false, error: "Provider auto-discovery is disabled; SMLGateway uses the hardcoded free remote model catalog." },
+    { ok: false, error: "Provider auto-discovery is disabled; BCAiRouter uses the hardcoded free remote model catalog." },
     { status: 410 },
   );
 }

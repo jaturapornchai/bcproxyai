@@ -1,5 +1,5 @@
 {
-  "name": "sml-gateway",
+  "name": "bcai-router",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -34,8 +34,10 @@
     "next": "16.2.2",
     "next-auth": "^5.0.0-beta.31",
     "node-cron": "^4.2.1",
+    "postprocessing": "6.39.5",
     "react": "19.2.4",
     "react-dom": "19.2.4",
+    "three": "0.186.1",
     "undici": "^8.0.2",
     "uuid": "^13.0.0",
     "zod": "^4.3.6"
@@ -47,6 +49,7 @@
     "@types/node-cron": "^3.0.11",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/three": "0.186.0",
     "@types/uuid": "^10.0.0",
     "@vitest/coverage-v8": "^4.1.2",
     "drizzle-orm": "^0.45.2",

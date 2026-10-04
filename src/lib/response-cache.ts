@@ -15,9 +15,9 @@ function tenantNamespace(apiKey: string | null | undefined): string {
   // Master / no-auth → shared bucket. Per-key clients → isolated bucket so
   // one tenant's cached response can't be served to another.
   if (!apiKey) return "_anon";
-  // Use the prefix for sml_live_ keys (avoid hashing the full secret) and a
+  // Use the prefix for bcai_live_ keys (avoid hashing the full secret) and a
   // short hash for everything else.
-  if (apiKey.startsWith("sml_live_")) return apiKey.slice(0, 18);
+  if (apiKey.startsWith("bcai_live_")) return apiKey.slice(0, 19); // prefix + 9 random chars
   return createHash("sha256").update(apiKey).digest("hex").slice(0, 12);
 }
 

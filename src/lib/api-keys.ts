@@ -12,6 +12,7 @@ import { getSqlClient } from "@/lib/db/schema";
 import { getAllProviderNames } from "@/lib/provider-resolver";
 import { open as openSealed } from "@/lib/secret-vault";
 import { isProviderCostAllowed } from "@/lib/cost-policy";
+import { ensureProviderTogglesLoaded, isProviderEnabledSync } from "@/lib/provider-toggle";
 
 const NO_KEY_REQUIRED = new Set<string>();
 
@@ -52,6 +53,7 @@ async function refreshDbKeys(): Promise<void> {
 }
 
 export async function ensureApiKeysLoaded(): Promise<void> {
+  await ensureProviderTogglesLoaded();
   const now = Date.now();
   if (dbKeysCacheTime > 0 && now - dbKeysCacheTime <= 30_000) return;
   await refreshDbKeys();
@@ -85,7 +87,9 @@ function cleanExpired() {
 export function getNextApiKey(provider: string): string {
   cleanExpired();
 
-  if (!isProviderCostAllowed(provider)) return "";
+  // Single choke point for every upstream caller (chat, workers, audio, embeddings, replay):
+  // a provider switched off in Setup gets no key, so nothing can call or bill it.
+  if (!isProviderCostAllowed(provider) || !isProviderEnabledSync(provider)) return "";
 
   const raw = getDbKeySync(provider);
   const keys = raw.split(",").map((k) => k.trim()).filter(Boolean);

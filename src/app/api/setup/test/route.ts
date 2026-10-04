@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSqlClient } from "@/lib/db/schema";
-import { costPolicyBlockMessage, isProviderCostAllowed } from "@/lib/cost-policy";
+import { applyNoSpendGuards, costPolicyBlockMessage, isProviderCostAllowed } from "@/lib/cost-policy";
+import { resolveProviderUrl } from "@/lib/provider-resolver";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +17,14 @@ interface CatalogRow {
   models_url: string | null;
   auth_scheme: string | null;
   auth_header_name: string | null;
+}
+
+function originOf(url: string | null | undefined): string {
+  try {
+    return new URL(url ?? "").origin;
+  } catch {
+    return "";
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -47,6 +56,9 @@ export async function POST(req: NextRequest) {
     });
   }
   const cfg = rows[0];
+  // provider_catalog is admin-editable — the key may only go to the hardcoded provider origin.
+  const providerOrigin = originOf(resolveProviderUrl(provider));
+  const onProviderHost = (url: string | null | undefined) => providerOrigin !== "" && originOf(url) === providerOrigin;
 
   // Cloudflare needs account id baked into URL — allow a runtime template
   let modelsUrl = cfg.models_url ?? "";
@@ -55,6 +67,8 @@ export async function POST(req: NextRequest) {
     if (!acct) return NextResponse.json({ ok: false, error: "CLOUDFLARE_ACCOUNT_ID not set" });
     modelsUrl = `https://api.cloudflare.com/client/v4/accounts/${acct}/ai/models/search?task=Text+Generation`;
   }
+
+  if (modelsUrl && !onProviderHost(modelsUrl)) modelsUrl = "";
 
   const scheme = (cfg.auth_scheme ?? "bearer") as "bearer" | "query-key" | "none" | "apikey-header";
   const buildHeaders = (url: string): { url: string; headers: Record<string, string> } => {
@@ -94,19 +108,19 @@ export async function POST(req: NextRequest) {
   }
 
   // Strategy 2: POST minimal chat to base_url (for providers without /v1/models)
-  const chatUrl = cfg.base_url;
+  const chatUrl = onProviderHost(cfg.base_url) ? cfg.base_url : resolveProviderUrl(provider);
   if (!chatUrl) {
     return NextResponse.json({ ok: false, error: "No endpoint configured for this provider" });
   }
   const { url: chatPostUrl, headers: chatHeaders } = buildHeaders(chatUrl);
-  const body = JSON.stringify({
+  const body = JSON.stringify(applyNoSpendGuards(provider, {
     // Best-effort — provider might reject model name; we only care about whether
     // auth passes. Most providers return 400 with a clear "invalid model" when
     // the key is good, which we count as "key ok + endpoint alive".
     model: "__probe__",
     messages: [{ role: "user", content: "hi" }],
     max_tokens: 1,
-  });
+  }));
   try {
     const res = await fetch(chatPostUrl, { method: "POST", headers: chatHeaders, body, signal: AbortSignal.timeout(20000) });
     if (res.ok) return NextResponse.json({ ok: true, models: 1, note: "verified via chat probe" });

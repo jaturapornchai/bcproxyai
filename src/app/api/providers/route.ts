@@ -9,6 +9,22 @@ export const dynamic = "force-dynamic";
 // Provider list is restricted by the hardcoded no-spend model catalog.
 const NO_KEY_REQUIRED = new Set<string>();
 
+// Official API-key pages (checked 2026-10-05) — override the catalog homepage so /setup links straight to key creation.
+const KEY_URLS: Record<string, string> = {
+  groq: "https://console.groq.com/keys",
+  cerebras: "https://cloud.cerebras.ai/",
+  sambanova: "https://cloud.sambanova.ai/apis",
+  mistral: "https://console.mistral.ai/api-keys",
+  cohere: "https://dashboard.cohere.com/api-keys",
+  nvidia: "https://build.nvidia.com/settings/api-keys",
+  ollamacloud: "https://ollama.com/settings/keys",
+  openrouter: "https://openrouter.ai/keys",
+  typhoon: "https://playground.opentyphoon.ai/api-key",
+  thaillm: "https://playground.thaillm.or.th/api-key/",
+  sealion: "https://playground.sea-lion.ai/",
+  chutes: "https://chutes.ai/app/settings/api-keys",
+};
+
 interface CatalogRow {
   name: string;
   label: string | null;
@@ -84,7 +100,7 @@ export async function GET(req: NextRequest) {
         name: provider,
         label: provider,
         env_var: `${provider.toUpperCase()}_API_KEY`,
-        homepage: provider === "openrouter" ? "https://openrouter.ai/keys" : "",
+        homepage: "",
         source: "hardcoded",
         free_tier: true,
         notes: "Hardcoded free remote model catalog",
@@ -129,13 +145,13 @@ export async function GET(req: NextRequest) {
         provider,
         label: c.label ?? provider,
         envVar: c.env_var ?? "",
-        homepage: c.homepage ?? "",
+        homepage: KEY_URLS[provider] ?? c.homepage ?? "",
         source: c.source,
         freeTier: c.free_tier,
         notes: c.notes ?? "",
         modelsUrl: c.models_url ?? "",
         authScheme: c.auth_scheme ?? "bearer",
-        homepageOk: c.homepage_ok,
+        homepageOk: KEY_URLS[provider] ? null : c.homepage_ok,
         homepageStatusCode: c.homepage_status_code,
         modelsOk: c.models_ok,
         modelsStatusCode: c.models_status_code,
@@ -158,7 +174,7 @@ export async function GET(req: NextRequest) {
     });
 
     const res = NextResponse.json(providers);
-    res.headers.set("X-SMLGateway-Risky-Providers", String(riskyProviders));
+    res.headers.set("X-BCAiRouter-Risky-Providers", String(riskyProviders));
     return res;
   } catch (err) {
     console.error("[providers] error:", err);

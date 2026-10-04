@@ -26,7 +26,8 @@ export async function POST(req: NextRequest) {
 
     const images = await Promise.all(
       Array.from({ length: n }, async (_, i) => {
-        const seed = Date.now() + i; // unique seed per image
+        // Pollinations rejects seeds above int32 (HTTP 402) — keep it in range
+        const seed = (Date.now() + i) % 2147483647;
         const pollinationsBody = {
           model: mapImageModel(model),
           prompt,
@@ -46,7 +47,7 @@ export async function POST(req: NextRequest) {
         }).toString(), { method: "GET" });
 
         if (!response.ok) {
-          throw new Error(`Pollinations error: HTTP ${response.status}`);
+          throw Object.assign(new Error(`Pollinations error: HTTP ${response.status}`), { upstreamStatus: response.status });
         }
 
         if (responseFormat === "b64_json") {
@@ -71,13 +72,18 @@ export async function POST(req: NextRequest) {
         headers: {
           "Content-Type": "application/json",
           "Access-Control-Allow-Origin": "*",
-          "X-SMLGateway-Provider": "pollinations",
-          "X-SMLGateway-Model": model,
+          "X-BCAiRouter-Provider": "pollinations",
+          "X-BCAiRouter-Model": model,
         },
       }
     );
   } catch (err) {
     console.error("[v1/images/generations] Error:", err);
+    // anonymous Pollinations answers 402/429 when its ~1 req/15s limit is hit
+    const upstream = (err as { upstreamStatus?: number }).upstreamStatus;
+    if (upstream === 402 || upstream === 429) {
+      return openAIError(429, { message: "Image provider rate limited (Pollinations free tier ~1 req/15s). Retry later." });
+    }
     return openAIError(500, { message: String(err) });
   }
 }

@@ -400,7 +400,7 @@ async function postRegressionWebhook(
   const url = process.env.GATEWAY_REGRESSION_WEBHOOK;
   if (!url) return;
   try {
-    const text = `:rotating_light: SMLGateway regression\n*model*: \`${modelId}\`\n*recent 1h*: ${(recentRate * 100).toFixed(0)}% (n=${recentN})\n*baseline 23h*: ${(baselineRate * 100).toFixed(0)}% (n=${baselineN})\n*drop*: ${(dropPp * 100).toFixed(0)}pp`;
+    const text = `:rotating_light: BCAiRouter regression\n*model*: \`${modelId}\`\n*recent 1h*: ${(recentRate * 100).toFixed(0)}% (n=${recentN})\n*baseline 23h*: ${(baselineRate * 100).toFixed(0)}% (n=${baselineN})\n*drop*: ${(dropPp * 100).toFixed(0)}pp`;
     await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -458,7 +458,7 @@ export async function recordCategoryOutcome(
  * be slower than a generalist on fast silicon (e.g. Groq Llama-4-Scout), but
  * the higher win count means it's been chosen more often and proven for this
  * category. Sorting latency first inside the 100% bucket would let a fast
- * generalist hijack `sml/thai` traffic away from Thai-native models.
+ * generalist hijack `bcai/thai` traffic away from Thai-native models.
  */
 export async function getCategoryWinners(category: string, limit = 5): Promise<string[]> {
   try {

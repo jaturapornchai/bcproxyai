@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 /**
- * BCProxyAI autoscaler — rule-based, polls Postgres for real traffic metrics
- * and scales the `bcproxyai` service via `docker compose --scale`.
+ * BCAiRouter autoscaler — rule-based, polls Postgres for real traffic metrics
+ * and scales the `bcai-router` service via `docker compose --scale`.
  *
  * Run from the project root:
  *   node scripts/autoscale.mjs
  *   # or: npm run autoscale
  *
  * Environment variables (all optional):
- *   DATABASE_URL          postgres://bcproxy:bcproxy@localhost:5434/bcproxyai
+ *   DATABASE_URL          required — same value as in .env (compose Postgres on localhost:5434)
  *   MIN_REPLICAS          1        (never scale below this)
  *   MAX_REPLICAS          4        (never scale above this)
  *   CHECK_INTERVAL_SEC    30       (poll cadence)
@@ -26,9 +26,11 @@ import postgres from "postgres";
 import { execSync } from "node:child_process";
 
 // ── Config ───────────────────────────────────────────────────────────
-const DB_URL =
-  process.env.DATABASE_URL ||
-  "postgres://bcproxy:bcproxy@localhost:5434/bcproxyai";
+const DB_URL = process.env.DATABASE_URL;
+if (!DB_URL) {
+  console.error("DATABASE_URL is required (see .env.example)");
+  process.exit(1);
+}
 const MIN_REPLICAS = parseInt(process.env.MIN_REPLICAS || "1", 10);
 const MAX_REPLICAS = parseInt(process.env.MAX_REPLICAS || "4", 10);
 const CHECK_INTERVAL_MS =
@@ -75,7 +77,7 @@ async function getMetrics() {
 
 function getCurrentReplicas() {
   try {
-    const out = execSync("docker compose ps bcproxyai -q", {
+    const out = execSync("docker compose ps bcai-router -q", {
       encoding: "utf8",
       cwd: process.cwd(),
     });
@@ -91,12 +93,12 @@ function scaleTo(n, reason) {
   log("SCALE", `${lastScaleAction === "start" ? "?" : ""} → ${n} replicas (${reason})`);
   try {
     execSync(
-      `docker compose up -d --scale bcproxyai=${n} --no-recreate`,
+      `docker compose up -d --scale bcai-router=${n} --no-recreate`,
       { stdio: "pipe", cwd: process.cwd() }
     );
     lastScaleAt = Date.now();
     lastScaleAction = `→${n}`;
-    notify(`BCProxyAI autoscaled to ${n} replicas — ${reason}`);
+    notify(`BCAiRouter autoscaled to ${n} replicas — ${reason}`);
   } catch (err) {
     log("ERROR", `scale command failed: ${err.message}`);
   }

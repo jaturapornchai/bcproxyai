@@ -19,6 +19,8 @@ function getSql() {
       max: clampInt(process.env.PG_POOL_MAX, 20, 1, 200),
       idle_timeout: clampInt(process.env.PG_IDLE_TIMEOUT_SEC, 30, 1, 3600),
       connect_timeout: clampInt(process.env.PG_CONNECT_TIMEOUT_SEC, 10, 1, 120),
+      // idempotent migrations (IF NOT EXISTS) emit hundreds of NOTICE objects per boot
+      onnotice: () => {},
     });
   }
   return _sql;

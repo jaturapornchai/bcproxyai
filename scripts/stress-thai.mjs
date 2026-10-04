@@ -14,7 +14,7 @@ for (const p of prompts) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + KEY },
     body: JSON.stringify({
-      model: 'sml/auto',
+      model: 'bcai/auto',
       messages: [{ role: 'user', content: p }],
       max_tokens: 100,
       stream: false,

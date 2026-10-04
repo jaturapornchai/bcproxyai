@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { Badge, Button, Callout, Card, CardHeader } from "./ui/ui";
+import { IconRefresh, IconX } from "./ui/icons";
 
 interface ReplayResult {
   provider: string;
@@ -27,6 +29,9 @@ interface CandidateInput {
   provider: string;
   model: string;
 }
+
+const FIELD =
+  "w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-[13.5px] text-gray-100 placeholder:text-[var(--muted)] transition-colors focus:border-violet-400/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/40";
 
 export function ReplayPanel() {
   const [reqId, setReqId] = useState("");
@@ -70,84 +75,128 @@ export function ReplayPanel() {
   }
 
   return (
-    <div className="glass rounded-xl p-4 border border-pink-500/15 space-y-3">
-      <div className="flex items-center gap-2">
-        <span className="text-2xl">🔁</span>
-        <div>
-          <h2 className="text-xl font-black text-white leading-tight">Replay & Compare</h2>
-          <p className="text-xs text-gray-400">ยิง request เดิมเทียบหลาย model · owner-only · sensitive prompt block อัตโนมัติ</p>
-        </div>
-      </div>
+    <Card>
+      <CardHeader
+        icon={<IconRefresh size={18} />}
+        title="Replay & Compare"
+        subtitle="เฉพาะเจ้าของระบบ · prompt ที่อ่อนไหวจะถูกบล็อกอัตโนมัติ"
+      />
 
-      <div className="space-y-2 text-xs">
+      <div className="space-y-5 p-5">
+        <Callout title="วิธีใช้">
+          1) คัดลอก Request ID จาก header <code className="font-mono text-[12px] text-cyan-200">X-BCAiRouter-Request-Id</code> ของ request ที่ต้องการ ·
+          2) ใส่ provider และ model ที่อยากเทียบ (ได้สูงสุด 5 ตัว) · 3) กด Replay แล้วดูผลด้านล่าง
+        </Callout>
+
         <div>
-          <label className="text-gray-400">Request ID</label>
+          <label htmlFor="replay-reqid" className="mb-1.5 block text-[12px] font-medium text-[var(--muted)]">Request ID</label>
           <input
+            id="replay-reqid"
             value={reqId}
             onChange={(e) => setReqId(e.target.value)}
-            placeholder="abc123 (จาก X-SMLGateway-Request-Id)"
-            className="w-full bg-black/30 border border-white/10 rounded px-2 py-1 mt-0.5 text-gray-200"
+            placeholder="abc123 (จาก X-BCAiRouter-Request-Id)"
+            className={FIELD}
           />
         </div>
+
         <div>
-          <label className="text-gray-400">Candidates ({candidates.length}/5)</label>
-          {candidates.map((c, i) => (
-            <div key={i} className="flex gap-1 mt-1">
-              <input
-                value={c.provider}
-                onChange={(e) => setCandidate(i, "provider", e.target.value)}
-                placeholder="provider"
-                className="flex-1 bg-black/30 border border-white/10 rounded px-2 py-1 text-gray-200"
-              />
-              <input
-                value={c.model}
-                onChange={(e) => setCandidate(i, "model", e.target.value)}
-                placeholder="model"
-                className="flex-[2] bg-black/30 border border-white/10 rounded px-2 py-1 text-gray-200"
-              />
-              {candidates.length > 1 && (
-                <button onClick={() => removeCandidate(i)} className="text-red-400 px-2">×</button>
-              )}
-            </div>
-          ))}
+          <div className="mb-1.5 flex items-center justify-between">
+            <span className="text-[12px] font-medium text-[var(--muted)]">โมเดลที่ต้องการเทียบ</span>
+            <Badge tone="neutral"><span className="tabular-nums">{candidates.length}/5</span></Badge>
+          </div>
+          <div className="space-y-2">
+            {candidates.map((c, i) => (
+              <div key={i} className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <input
+                  value={c.provider}
+                  onChange={(e) => setCandidate(i, "provider", e.target.value)}
+                  placeholder="provider เช่น groq"
+                  aria-label={`provider ตัวที่ ${i + 1}`}
+                  className={`${FIELD} sm:flex-1`}
+                />
+                <input
+                  value={c.model}
+                  onChange={(e) => setCandidate(i, "model", e.target.value)}
+                  placeholder="model เช่น llama-3.3-70b-versatile"
+                  aria-label={`model ตัวที่ ${i + 1}`}
+                  className={`${FIELD} sm:flex-[2]`}
+                />
+                {candidates.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => removeCandidate(i)}
+                    aria-label={`ลบตัวที่ ${i + 1}`}
+                    className="grid h-10 w-10 shrink-0 place-items-center self-end rounded-xl border border-white/10 text-rose-300 transition-colors hover:bg-rose-400/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/50 sm:self-auto"
+                  >
+                    <IconX size={16} />
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
           {candidates.length < 5 && (
-            <button onClick={addCandidate} className="mt-1 text-pink-400 text-[11px]">+ เพิ่ม candidate</button>
+            <Button type="button" size="sm" className="mt-3" onClick={addCandidate}>
+              + เพิ่มโมเดล
+            </Button>
           )}
         </div>
-        <label className="flex items-center gap-2 text-gray-400">
-          <input type="checkbox" checked={confirm} onChange={(e) => setConfirm(e.target.checked)} />
-          override sensitive-prompt block (ใช้เฉพาะตอน debug จำเป็น)
-        </label>
-        <button
-          onClick={run}
-          disabled={loading || !reqId.trim()}
-          className="bg-pink-500/20 border border-pink-500/40 text-white text-xs px-3 py-1.5 rounded disabled:opacity-50"
-        >
-          {loading ? "กำลังยิง..." : "Replay"}
-        </button>
-      </div>
 
-      {result && (
-        <div className="space-y-1.5 text-xs border-t border-white/5 pt-3">
-          {result.error && <div className="text-red-400">{result.error}</div>}
-          {result.blocked && <div className="text-amber-400">prompt ถูก block — ถ้ามั่นใจให้ติ๊ก override แล้วลองใหม่</div>}
-          {result.results.map((r, i) => (
-            <div key={i} className={`border rounded-lg p-2 ${r.ok ? "border-emerald-500/30 bg-emerald-500/5" : "border-red-500/30 bg-red-500/5"}`}>
-              <div className="flex justify-between text-gray-200">
-                <span className="font-mono">{r.provider}/{r.model}</span>
-                <span className="text-gray-400">{r.status ?? "—"} · {r.latencyMs}ms</span>
-              </div>
-              {r.error && <div className="text-red-300 mt-0.5">{r.error}</div>}
-              {r.outputPreview && (
-                <div className="text-gray-300 mt-1 whitespace-pre-wrap">
-                  <span className="text-gray-500">{r.promptTokens ?? 0}+{r.completionTokens ?? 0} tok · </span>
-                  {r.outputPreview}
+        <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-white/[0.06] bg-white/[0.02] px-3.5 py-3 text-[13px] text-[var(--muted)]">
+          <input
+            type="checkbox"
+            checked={confirm}
+            onChange={(e) => setConfirm(e.target.checked)}
+            className="mt-0.5 h-4 w-4 shrink-0 accent-violet-400"
+          />
+          <span>
+            <span className="text-gray-200">ข้ามการบล็อก prompt อ่อนไหว</span> — ใช้เฉพาะตอน debug ที่จำเป็นเท่านั้น
+          </span>
+        </label>
+
+        <Button variant="primary" onClick={run} disabled={loading || !reqId.trim()}>
+          <IconRefresh size={16} className={loading ? "animate-spin" : undefined} />
+          {loading ? "กำลังยิง..." : "Replay"}
+        </Button>
+
+        {loading && (
+          <div className="space-y-2" role="status" aria-label="กำลังรอผล">
+            <div className="skeleton h-14 w-full" />
+            <div className="skeleton h-14 w-full" />
+          </div>
+        )}
+
+        {result && (
+          <div className="space-y-2.5 border-t border-white/[0.06] pt-5 text-[13px]">
+            {result.error && <Callout tone="warning" title="เกิดข้อผิดพลาด">{result.error}</Callout>}
+            {result.blocked && (
+              <Callout tone="warning" title="prompt ถูกบล็อก">
+                ถ้ามั่นใจว่าปลอดภัย ให้ติ๊ก “ข้ามการบล็อก” แล้วลองใหม่
+              </Callout>
+            )}
+            {result.results.map((r, i) => (
+              <div
+                key={i}
+                className={`animate-pop rounded-xl border p-3.5 ${r.ok ? "border-emerald-400/25 bg-emerald-400/[0.05]" : "border-rose-400/25 bg-rose-400/[0.05]"}`}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="break-all font-mono text-[12.5px] text-gray-100">{r.provider}/{r.model}</span>
+                  <span className="flex items-center gap-1.5">
+                    <Badge tone={r.ok ? "success" : "danger"}>{r.ok ? "สำเร็จ" : "ล้มเหลว"}</Badge>
+                    <Badge tone="neutral"><span className="tabular-nums">{r.status ?? "—"} · {r.latencyMs}ms</span></Badge>
+                  </span>
                 </div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
+                {r.error && <div className="mt-1.5 text-rose-200">{r.error}</div>}
+                {r.outputPreview && (
+                  <div className="mt-2 whitespace-pre-wrap break-words text-gray-300">
+                    <span className="tabular-nums text-[var(--muted)]">{r.promptTokens ?? 0}+{r.completionTokens ?? 0} tok · </span>
+                    {r.outputPreview}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </Card>
   );
 }

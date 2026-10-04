@@ -4,7 +4,7 @@ import { getNextApiKey } from "@/lib/api-keys";
 import { resolveProviderUrl } from "@/lib/provider-resolver";
 import { upstreamAgent } from "@/lib/upstream-agent";
 import { recordOutcome } from "@/lib/live-score";
-import { getCostAllowedProviders, isModelCostAllowed } from "@/lib/cost-policy";
+import { applyNoSpendGuards, getCostAllowedProviders, isModelCostAllowed } from "@/lib/cost-policy";
 
 // ─── Warmup pinger ───
 // Every 2 minutes, send a cheap 1-token ping to every model that has passed the
@@ -76,20 +76,21 @@ async function pingOnce(candidate: WarmupCandidate): Promise<boolean> {
   if (!url) return false;
 
   const key = getNextApiKey(candidate.provider);
+  if (!key) return false;
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Authorization: `Bearer ${key}`,
   };
   if (candidate.provider === "openrouter") {
-    headers["HTTP-Referer"] = "https://sml-gateway.app";
-    headers["X-Title"] = "SMLGateway";
+    headers["HTTP-Referer"] = "https://bcai-router.app";
+    headers["X-Title"] = "BCAiRouter";
   }
 
-  const body = JSON.stringify({
+  const body = JSON.stringify(applyNoSpendGuards(candidate.provider, {
     model: candidate.model_id,
     messages: [{ role: "user", content: "." }],
     max_tokens: 1,
-  });
+  }));
 
   const start = Date.now();
   try {

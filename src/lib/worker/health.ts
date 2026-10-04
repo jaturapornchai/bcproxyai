@@ -1,9 +1,14 @@
 import { getSqlClient } from "@/lib/db/schema";
-import { getNextApiKey } from "@/lib/api-keys";
+import { ensureApiKeysLoaded, getNextApiKey, hasProviderKey } from "@/lib/api-keys";
 import { resolveProviderUrl } from "@/lib/provider-resolver";
 import { invalidateModelListCache } from "@/lib/model-list-cache";
 import { upstreamAgent } from "@/lib/upstream-agent";
-import { costPolicyBlockMessage, isModelCostAllowed } from "@/lib/cost-policy";
+import { applyNoSpendGuards, costPolicyBlockMessage, isModelCostAllowed } from "@/lib/cost-policy";
+
+// Models the gateway can't serve (no stored key / outside the free catalog) get this status
+// with a cooldown longer than the 15-min worker cycle, so they never count as "available".
+const UNUSABLE_STATUS = "unavailable";
+const UNUSABLE_COOLDOWN_MS = 30 * 60 * 1000;
 
 async function logWorker(step: string, message: string, level = "info") {
   try {
@@ -48,20 +53,21 @@ export async function pingModel(
   if (!url) return { status: "error", latency: 0, error: "unknown provider" };
 
   const key = getNextApiKey(model.provider);
+  if (!key) return { status: UNUSABLE_STATUS, latency: 0, error: "no api key" };
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Authorization: `Bearer ${key}`,
   };
   if (model.provider === "openrouter") {
-    headers["HTTP-Referer"] = "https://sml-gateway.app";
-    headers["X-Title"] = "SMLGateway";
+    headers["HTTP-Referer"] = "https://bcai-router.app";
+    headers["X-Title"] = "BCAiRouter";
   }
 
-  const body = JSON.stringify({
+  const body = JSON.stringify(applyNoSpendGuards(model.provider, {
     model: model.model_id,
     messages: [{ role: "user", content: "hi" }],
     max_tokens: 5,
-  });
+  }));
 
   // Ollama (local) ต้อง timeout นานกว่า cloud เพราะ model ใหญ่ load ช้า
   const timeoutMs = model.provider === "ollama" ? 120000 : 15000;
@@ -88,35 +94,41 @@ export async function pingModel(
       // on reasoning before producing content — that does NOT mean it's an
       // audio/safety classifier). Only flag as non-chat when the response
       // is explicitly audio-shaped or all of content+reasoning are empty.
+      let json: {
+        error?: unknown;
+        choices?: Array<{
+          message?: {
+            content?: string | null;
+            reasoning?: string | null;
+            reasoning_content?: string | null;
+            reasoning_details?: unknown;
+            audio?: unknown;
+          };
+          finish_reason?: string;
+        }>;
+        audio?: unknown;
+        object?: string;
+      };
       try {
-        const json = await res.clone().json() as {
-          choices?: Array<{
-            message?: {
-              content?: string | null;
-              reasoning?: string | null;
-              reasoning_content?: string | null;
-              reasoning_details?: unknown;
-              audio?: unknown;
-            };
-            finish_reason?: string;
-          }>;
-          audio?: unknown;
-          object?: string;
-        };
-        const msg = json.choices?.[0]?.message;
-        const hasContent = typeof msg?.content === "string" && msg.content.trim().length > 0;
-        const hasReasoning =
-          (typeof msg?.reasoning === "string" && msg.reasoning.trim().length > 0) ||
-          (typeof msg?.reasoning_content === "string" && msg.reasoning_content.trim().length > 0) ||
-          msg?.reasoning_details != null;
-        const finishedOnLength = json.choices?.[0]?.finish_reason === "length";
-        const isChat = hasContent || hasReasoning || finishedOnLength;
-        const isAudio = json.audio != null || json.object === "audio" || msg?.audio != null;
-        if (!isChat || isAudio) {
-          return { status: "available", latency, isNonChat: true };
-        }
+        json = await res.clone().json();
       } catch {
-        // Can't parse — assume chat model, health check proceeds normally
+        // 200 with a non-JSON body (proxy/captive/HTML page) is not a working model.
+        return { status: "error", latency, error: "HTTP 200 with non-JSON body" };
+      }
+      if (json.error != null) {
+        return { status: "error", latency, error: `HTTP 200 with error: ${JSON.stringify(json.error).slice(0, 200)}` };
+      }
+      const msg = json.choices?.[0]?.message;
+      const hasContent = typeof msg?.content === "string" && msg.content.trim().length > 0;
+      const hasReasoning =
+        (typeof msg?.reasoning === "string" && msg.reasoning.trim().length > 0) ||
+        (typeof msg?.reasoning_content === "string" && msg.reasoning_content.trim().length > 0) ||
+        msg?.reasoning_details != null;
+      const finishedOnLength = json.choices?.[0]?.finish_reason === "length";
+      const isChat = hasContent || hasReasoning || finishedOnLength;
+      const isAudio = json.audio != null || json.object === "audio" || msg?.audio != null;
+      if (!isChat || isAudio) {
+        return { status: "available", latency, isNonChat: true };
       }
       return { status: "available", latency };
     }
@@ -167,16 +179,17 @@ export async function testVisionSupport(
   if (!url) return -1;
 
   const key = getNextApiKey(model.provider);
+  if (!key) return -1;
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Authorization: `Bearer ${key}`,
   };
   if (model.provider === "openrouter") {
-    headers["HTTP-Referer"] = "https://sml-gateway.app";
-    headers["X-Title"] = "SMLGateway";
+    headers["HTTP-Referer"] = "https://bcai-router.app";
+    headers["X-Title"] = "BCAiRouter";
   }
 
-  const body = JSON.stringify({
+  const body = JSON.stringify(applyNoSpendGuards(model.provider, {
     model: model.model_id,
     messages: [
       {
@@ -193,7 +206,7 @@ export async function testVisionSupport(
       },
     ],
     max_tokens: 10,
-  });
+  }));
 
   try {
     const res = await fetch(url, {
@@ -235,16 +248,17 @@ export async function testToolSupport(
   if (!url) return -1;
 
   const key = getNextApiKey(model.provider);
+  if (!key) return -1;
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Authorization: `Bearer ${key}`,
   };
   if (model.provider === "openrouter") {
-    headers["HTTP-Referer"] = "https://sml-gateway.app";
-    headers["X-Title"] = "SMLGateway";
+    headers["HTTP-Referer"] = "https://bcai-router.app";
+    headers["X-Title"] = "BCAiRouter";
   }
 
-  const body = JSON.stringify({
+  const body = JSON.stringify(applyNoSpendGuards(model.provider, {
     model: model.model_id,
     messages: [{ role: "user", content: "hi" }],
     tools: [
@@ -258,7 +272,7 @@ export async function testToolSupport(
       },
     ],
     max_tokens: 5,
-  });
+  }));
 
   try {
     const res = await fetch(url, {
@@ -313,8 +327,33 @@ export async function checkHealth(): Promise<{
   await logWorker("health", "Starting health check");
   const sql = getSqlClient();
 
-  // Get models eligible for health check
-  const models = await sql<DbModel[]>`
+  // A model is servable only if it is in the free catalog AND its provider has a stored key.
+  // Unservable models are re-marked every cycle (ALL models, any context length — /api/status
+  // counts every model without an active cooldown as available) and are never probed.
+  await ensureApiKeysLoaded();
+  const isUsable = (m: { provider: string; model_id: string }) =>
+    isModelCostAllowed(m.provider, m.model_id) && hasProviderKey(m.provider);
+  let unusableCount = 0;
+  try {
+    const allModels = await sql<{ id: string; provider: string; model_id: string }[]>`
+      SELECT id, provider, model_id FROM models
+    `;
+    const until = new Date(Date.now() + UNUSABLE_COOLDOWN_MS).toISOString();
+    for (const m of allModels.filter((row) => !isUsable(row))) {
+      const reason = isModelCostAllowed(m.provider, m.model_id) ? "no api key" : costPolicyBlockMessage(m.provider, m.model_id);
+      await sql`
+        INSERT INTO health_logs (model_id, status, latency_ms, error, cooldown_until)
+        VALUES (${m.id}, ${UNUSABLE_STATUS}, 0, ${reason}, ${until})
+      `;
+      unusableCount++;
+    }
+  } catch (err) {
+    await logWorker("health", `Mark unusable models failed: ${err}`, "error");
+  }
+
+  // Get models eligible for health check. An "unavailable" (no key) cooldown doesn't block a
+  // re-check, so a newly added key takes effect on the next cycle.
+  const models = (await sql<DbModel[]>`
     SELECT m.id, m.provider, m.model_id, m.context_length,
       COALESCE(m.supports_tools, -1) AS supports_tools,
       COALESCE(m.supports_vision, -1) AS supports_vision
@@ -325,9 +364,10 @@ export async function checkHealth(): Promise<{
         WHERE h.model_id = m.id
           AND h.cooldown_until IS NOT NULL
           AND h.cooldown_until > now()
+          AND h.status <> ${UNUSABLE_STATUS}
         LIMIT 1
       )
-  `;
+  `).filter(isUsable);
 
   const knownNonChat = models.filter((m) => isNonChatModel(m.model_id));
   for (const model of knownNonChat) {
@@ -429,7 +469,7 @@ export async function checkHealth(): Promise<{
     }
   }
 
-  const msg = `Health check done: checked=${checked}, available=${available}, cooldown=${cooldownCount}`;
+  const msg = `Health check done: checked=${checked}, available=${available}, cooldown=${cooldownCount}, unavailable(no key/blocked)=${unusableCount}`;
   await logWorker("health", msg);
 
   // Cooldowns + tool flags may have moved — drop the model-list cache so the

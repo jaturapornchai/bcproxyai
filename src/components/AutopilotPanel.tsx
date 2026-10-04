@@ -2,8 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { getAdminAccess } from "./admin-access";
+import { Badge, Callout, Card, CardHeader } from "./ui/ui";
+import type { Tone } from "./ui/ui";
+import { IconAlert, IconInfo, IconSparkle } from "./ui/icons";
 
-interface Card {
+interface AutopilotCard {
   id: string;
   severity: "info" | "warn" | "critical";
   title: string;
@@ -15,19 +18,13 @@ interface Card {
 interface Resp {
   generatedAt: string;
   windowMin: number;
-  cards: Card[];
+  cards: AutopilotCard[];
 }
 
-const SEVERITY_STYLE: Record<Card["severity"], string> = {
-  info: "border-sky-500/30 bg-sky-500/5",
-  warn: "border-amber-500/30 bg-amber-500/5",
-  critical: "border-red-500/40 bg-red-500/10",
-};
-
-const SEVERITY_EMOJI: Record<Card["severity"], string> = {
-  info: "ℹ️",
-  warn: "⚠️",
-  critical: "🚨",
+const SEVERITY: Record<AutopilotCard["severity"], { box: string; tone: Tone; label: string }> = {
+  info: { box: "border-cyan-400/20 bg-cyan-400/[0.05]", tone: "info", label: "ข้อมูล" },
+  warn: { box: "border-amber-400/25 bg-amber-400/[0.06]", tone: "warning", label: "เฝ้าระวัง" },
+  critical: { box: "border-rose-400/30 bg-rose-400/[0.08]", tone: "danger", label: "เร่งด่วน" },
 };
 
 export function AutopilotPanel() {
@@ -52,55 +49,50 @@ export function AutopilotPanel() {
     return () => { cancelled = true; clearInterval(t); };
   }, []);
 
-  if (!data) {
-    return (
-      <div className="glass rounded-xl p-4 border border-amber-500/15 text-sm text-gray-400">
-        กำลังตรวจ Autopilot suggestions...
-      </div>
-    );
-  }
-
   return (
-    <div className="glass rounded-xl p-4 border border-amber-500/15 space-y-3">
-      <div className="flex items-center gap-2">
-        <span className="text-2xl">🤖</span>
-        <div>
-          <h2 className="text-xl font-black text-white leading-tight">AI Ops Autopilot</h2>
-          <p className="text-xs text-gray-400">
-            Rule-based recommendations · ทุก 30 วิ · {data.cards.length} เรื่อง
-          </p>
-        </div>
-      </div>
-
-      {data.cards.length === 0 ? (
-        <div className="text-sm text-emerald-400 bg-emerald-500/5 border border-emerald-500/20 rounded-lg p-3">
-          ✅ ระบบดูปกติ — ไม่มี alert ใน 1 ชม.ล่าสุด
-        </div>
-      ) : (
-        <div className="space-y-2">
-          {data.cards.map((c) => (
-            <div key={c.id} className={`rounded-lg border ${SEVERITY_STYLE[c.severity]} p-3`}>
-              <div className="flex items-start gap-2">
-                <span className="text-lg">{SEVERITY_EMOJI[c.severity]}</span>
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-bold text-white">{c.title}</div>
-                  <div className="text-xs text-gray-300 mt-0.5">{c.summary}</div>
-                  <div className="text-xs text-gray-400 mt-1.5">
-                    <span className="text-gray-500">→ </span>{c.action}
-                  </div>
-                  <div className="flex flex-wrap gap-2 mt-1.5">
-                    {Object.entries(c.evidence).map(([k, v]) => (
-                      <span key={k} className="text-[10px] bg-black/30 border border-white/10 rounded px-1.5 py-0.5 text-gray-400">
-                        {k}: <span className="text-gray-200">{String(v)}</span>
-                      </span>
-                    ))}
+    <Card>
+      <CardHeader
+        icon={<IconSparkle size={18} />}
+        title="AI Ops Autopilot"
+        subtitle={data ? `คำแนะนำอัตโนมัติจากกฎของระบบ · อัปเดตทุก 30 วินาที · ${data.cards.length} เรื่อง` : "กำลังตรวจคำแนะนำ..."}
+      />
+      <div className="space-y-3 p-5">
+        {!data ? (
+          <div className="skeleton h-16" />
+        ) : data.cards.length === 0 ? (
+          <Callout tone="success">ระบบดูปกติ — ไม่มีการแจ้งเตือนใน 1 ชั่วโมงล่าสุด</Callout>
+        ) : (
+          data.cards.map((c) => {
+            const s = SEVERITY[c.severity];
+            return (
+              <div key={c.id} className={`rounded-xl border p-4 ${s.box}`}>
+                <div className="flex items-start gap-3">
+                  <span className="mt-0.5 shrink-0 text-gray-300">
+                    {c.severity === "info" ? <IconInfo size={18} /> : <IconAlert size={18} />}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-[14px] font-semibold text-white">{c.title}</span>
+                      <Badge tone={s.tone}>{s.label}</Badge>
+                    </div>
+                    <p className="mt-1 text-[13px] text-gray-300">{c.summary}</p>
+                    <p className="mt-1.5 text-[13px] text-[var(--muted)]">
+                      <span className="text-violet-300">แนะนำ: </span>{c.action}
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {Object.entries(c.evidence).map(([k, v]) => (
+                        <span key={k} className="rounded-md border border-white/10 bg-black/30 px-1.5 py-0.5 text-[11px] text-[var(--muted)]">
+                          {k}: <span className="text-gray-200">{String(v)}</span>
+                        </span>
+                      ))}
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
+            );
+          })
+        )}
+      </div>
+    </Card>
   );
 }

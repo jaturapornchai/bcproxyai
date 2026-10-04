@@ -5,7 +5,8 @@ import { useEffect, useState } from "react";
 type WhoAmI =
   | { loggedIn: false }
   | { loggedIn: true; source: "google"; role: "admin" | "guest"; email: string }
-  | { loggedIn: true; source: "password"; role: "admin"; email: null };
+  | { loggedIn: true; source: "password"; role: "admin"; email: null }
+  | { loggedIn: true; source: "local"; role: "admin"; email: null };
 
 // Session chip for the top nav. Talks to /api/auth/whoami so it stays
 // correct for both login paths (Google OAuth + password cookie).
@@ -35,14 +36,15 @@ export function NavSessionChip() {
 
   const isAdmin = me.role === "admin";
   const isPassword = me.source === "password";
-  const label = isPassword ? "admin (key)" : me.email ?? "—";
+  const isLocal = me.source === "local";
+  const label = isLocal ? "localhost" : isPassword ? "admin (key)" : me.email ?? "—";
   const signOutUrl = isPassword ? "/api/auth/admin-logout" : "/api/auth/signout?callbackUrl=/";
 
   return (
     <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/5 border border-white/10 text-xs text-gray-200">
       <span
         className={`inline-block h-2 w-2 rounded-full ${isAdmin ? "bg-emerald-400" : "bg-amber-400"}`}
-        title={isPassword ? "Admin via password" : isAdmin ? "Admin" : "Guest"}
+        title={isLocal ? "Local mode — no login required" : isPassword ? "Admin via password" : isAdmin ? "Admin" : "Guest"}
       />
       <span className="font-mono max-w-[12rem] truncate">{label}</span>
       <span
@@ -52,13 +54,15 @@ export function NavSessionChip() {
       >
         {isAdmin ? "admin" : "guest"}
       </span>
-      <a
-        href={signOutUrl}
-        className="ml-0.5 text-red-300 hover:text-red-200 hover:bg-red-500/10 rounded px-1"
-        title="ออก"
-      >
-        ออก
-      </a>
+      {!isLocal && (
+        <a
+          href={signOutUrl}
+          className="ml-0.5 text-red-300 hover:text-red-200 hover:bg-red-500/10 rounded px-1"
+          title="ออก"
+        >
+          ออก
+        </a>
+      )}
     </div>
   );
 }

@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /**
- * SMLGateway Stress Test
+ * BCAiRouter Stress Test
  * ส่ง requests แบบ concurrent ผ่าน Gateway เหมือนที่ OpenClaw เรียก
  */
 
 const BASE_URL = "http://localhost:3333/v1/chat/completions";
 const TOTAL_REQUESTS = 10000;
 const CONCURRENCY = 20; // realistic: simulate 20 users
-const MODELS = ["auto", "bcproxy/fast", "bcproxy/thai"];
+const MODELS = ["auto", "bcai/fast", "bcai/thai"];
 
 const QUESTIONS_TH = [
   "สวัสดีครับ",
@@ -90,8 +90,8 @@ async function sendRequest(i) {
     const code = res.status;
     stats.statusCodes[code] = (stats.statusCodes[code] || 0) + 1;
 
-    const provider = res.headers.get("x-bcproxy-provider") || "unknown";
-    const resolvedModel = res.headers.get("x-bcproxy-model") || "unknown";
+    const provider = res.headers.get("x-bcairouter-provider") || "unknown";
+    const resolvedModel = res.headers.get("x-bcairouter-model") || "unknown";
 
     if (res.ok) {
       stats.success++;
@@ -151,7 +151,7 @@ function printReport() {
 
   console.log("\n");
   console.log("═══════════════════════════════════════════════════════");
-  console.log("  SMLGateway Stress Test Report");
+  console.log("  BCAiRouter Stress Test Report");
   console.log("═══════════════════════════════════════════════════════");
   console.log("");
   console.log(`  Total Requests:    ${stats.total}`);
@@ -199,7 +199,7 @@ function printReport() {
 }
 
 async function main() {
-  console.log("SMLGateway Stress Test");
+  console.log("BCAiRouter Stress Test");
   console.log(`  Target: ${BASE_URL}`);
   console.log(`  Requests: ${TOTAL_REQUESTS} | Concurrency: ${CONCURRENCY}`);
   console.log(`  Models: ${MODELS.join(", ")}`);

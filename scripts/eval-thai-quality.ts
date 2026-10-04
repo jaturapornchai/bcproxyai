@@ -6,7 +6,7 @@
  *
  * Usage:
  *   tsx scripts/eval-thai-quality.ts > /tmp/thai-seed.sql
- *   ssh root@<droplet> 'docker exec -i sml-gateway-postgres-1 psql -U sml -d smlgateway' < /tmp/thai-seed.sql
+ *   ssh root@<droplet> 'docker exec -i bcai-router-postgres-1 psql -U bcai -d bcairouter' < /tmp/thai-seed.sql
  *
  * Reads GATEWAY_API_KEY + GATEWAY_URL from env (or argv).
  * Progress goes to stderr; SQL goes to stdout.

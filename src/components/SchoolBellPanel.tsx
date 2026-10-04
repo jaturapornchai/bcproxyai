@@ -1,7 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { PROVIDER_COLORS, fmtTime } from "./shared";
+import { Badge, Button, Card, CardHeader, EmptyState } from "./ui/ui";
+import type { Tone } from "./ui/ui";
 
 interface SystemEvent {
   id: number;
@@ -14,13 +17,23 @@ interface SystemEvent {
   created_at: string;
 }
 
-const EVENT_STYLES: Record<string, { icon: string; bg: string; text: string; sound: string }> = {
-  model_new:      { icon: "🆕", bg: "bg-emerald-500/20", text: "text-emerald-400", sound: "ding" },
-  model_banned:   { icon: "🚫", bg: "bg-red-500/20", text: "text-red-400", sound: "alarm" },
-  complaint:      { icon: "📝", bg: "bg-amber-500/20", text: "text-amber-400", sound: "bell" },
-  provider_error: { icon: "💥", bg: "bg-red-500/20", text: "text-red-400", sound: "alarm" },
-  provider_back:  { icon: "✅", bg: "bg-emerald-500/20", text: "text-emerald-400", sound: "ding" },
+const EVENT_META: Record<string, { label: string; tone: Tone; dot: string }> = {
+  model_new:      { label: "โมเดลใหม่", tone: "success", dot: "bg-emerald-400" },
+  model_banned:   { label: "โมเดลถูกแบน", tone: "danger", dot: "bg-rose-400" },
+  complaint:      { label: "ข้อร้องเรียน", tone: "warning", dot: "bg-amber-400" },
+  provider_error: { label: "ผู้ให้บริการขัดข้อง", tone: "danger", dot: "bg-rose-400" },
+  provider_back:  { label: "ผู้ให้บริการกลับมา", tone: "success", dot: "bg-emerald-400" },
 };
+const FALLBACK_META = { label: "ประกาศ", tone: "neutral" as Tone, dot: "bg-gray-400" };
+
+function IconBell({ size = 18, className }: { size?: number; className?: string }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" aria-hidden className={className}>
+      <path d="M6 9a6 6 0 0 1 12 0c0 6 2.5 7.5 2.5 7.5h-17S6 15 6 9Z" />
+      <path d="M10 20a2 2 0 0 0 4 0" />
+    </svg>
+  );
+}
 
 export function SchoolBellPanel() {
   const [events, setEvents] = useState<SystemEvent[]>([]);
@@ -62,68 +75,76 @@ export function SchoolBellPanel() {
     return () => clearInterval(t);
   }, [fetchEvents]);
 
-  if (loading) return <div className="text-gray-500 text-center py-8">กำลังโหลดระฆัง...</div>;
+  // Newest id currently shown — the last `newCount` ids are the unread ones.
+  const latestId = events.reduce((m, e) => Math.max(m, e.id), 0);
 
-  return (
-    <div className="space-y-3">
-      {/* Bell Header */}
-      <div className="flex items-center gap-3">
-        <span className={`text-3xl transition-transform ${bellRing ? "animate-bounce" : ""}`}>
-          🔔
-        </span>
-        {newCount > 0 && (
-          <span className="bg-red-500 text-white text-xs font-bold rounded-full px-2 py-0.5 animate-pulse">
-            +{newCount} ใหม่
-          </span>
-        )}
-        <button
-          onClick={() => setNewCount(0)}
-          className="text-xs text-gray-500 hover:text-white ml-auto"
-        >
-          เคลียร์
-        </button>
-      </div>
+  const shell = (body: ReactNode) => (
+    <Card>
+      <CardHeader
+        icon={<IconBell className={bellRing ? "animate-bounce" : ""} />}
+        title="การแจ้งเตือนระบบ"
+        subtitle="เหตุการณ์สำคัญแบบเรียลไทม์ เช่น โมเดลใหม่ โมเดลถูกแบน ผู้ให้บริการขัดข้องหรือกลับมาใช้ได้ — อัปเดตทุก 5 วินาที"
+        action={
+          <div className="flex items-center gap-2">
+            {newCount > 0 && <Badge tone="danger" dot>+{newCount} ใหม่</Badge>}
+            <Button size="sm" onClick={() => setNewCount(0)} disabled={newCount === 0}>เคลียร์</Button>
+          </div>
+        }
+      />
+      {body}
+    </Card>
+  );
 
-      {/* Events Timeline */}
-      {events.length === 0 ? (
-        <div className="glass rounded-xl p-6 text-center text-gray-500">
-          <div className="text-3xl mb-2">🔕</div>
-          <p className="text-sm">เงียบสงบ — ไม่มีเรื่องวุ่นวายใน 1 ชม. ที่ผ่านมา เด็กๆ ตั้งใจเรียนดี!</p>
-        </div>
-      ) : (
-        <div className="space-y-2">
-          {events.map(evt => {
-            const style = EVENT_STYLES[evt.type] ?? { icon: "📢", bg: "bg-gray-500/20", text: "text-gray-400", sound: "" };
-            const colors = evt.provider ? (PROVIDER_COLORS[evt.provider] ?? PROVIDER_COLORS.openrouter) : null;
-            const isNew = evt.id > (lastIdRef.current - newCount);
+  if (loading) {
+    return shell(
+      <div className="space-y-2.5 p-5" aria-busy="true" aria-label="กำลังโหลดการแจ้งเตือน">
+        {[0, 1, 2].map(i => <div key={i} className="skeleton h-14" />)}
+      </div>,
+    );
+  }
 
-            return (
-              <div
-                key={evt.id}
-                className={`${style.bg} rounded-lg p-3 flex items-start gap-3 border border-transparent ${
-                  isNew ? "border-white/10 animate-pulse" : ""
-                } transition-all`}
-              >
-                <span className="text-xl shrink-0">{style.icon}</span>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className={`text-sm font-medium ${style.text}`}>{evt.title}</span>
-                    {colors && (
-                      <span className={`text-[10px] ${colors.text}`}>{evt.provider}</span>
-                    )}
-                  </div>
-                  {evt.detail && (
-                    <div className="text-xs text-gray-400 mt-0.5 truncate">{evt.detail}</div>
-                  )}
-                </div>
-                <div className="text-[10px] text-gray-600 shrink-0">
-                  {fmtTime(evt.created_at)}
-                </div>
+  if (events.length === 0) {
+    return shell(
+      <EmptyState
+        icon={<IconBell size={22} />}
+        title="ยังไม่มีเหตุการณ์ใน 1 ชั่วโมงที่ผ่านมา"
+        description="ระบบทำงานปกติ — เมื่อมีโมเดลใหม่ โมเดลถูกแบน หรือผู้ให้บริการขัดข้อง จะแจ้งที่นี่ทันที"
+      />,
+    );
+  }
+
+  return shell(
+    <ol className="max-h-[480px] space-y-2 overflow-y-auto p-5" aria-live="polite">
+      {events.map(evt => {
+        const meta = EVENT_META[evt.type] ?? FALLBACK_META;
+        const colors = evt.provider ? (PROVIDER_COLORS[evt.provider] ?? PROVIDER_COLORS.openrouter) : null;
+        const isNew = evt.id > latestId - newCount;
+
+        return (
+          <li
+            key={evt.id}
+            className={`flex items-start gap-3 rounded-xl border px-4 py-3 transition-colors ${
+              isNew ? "border-violet-400/30 bg-violet-400/[0.07]" : "border-white/10 bg-white/[0.03]"
+            }`}
+          >
+            <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${meta.dot}`} aria-hidden />
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="text-[13px] font-medium text-white">{evt.title}</span>
+                <Badge tone={meta.tone}>{meta.label}</Badge>
+                {isNew && <Badge tone="accent" dot>ใหม่</Badge>}
+                {colors && <span className={`text-[11px] ${colors.text}`}>{evt.provider}</span>}
               </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
+              {evt.detail && (
+                <div className="mt-0.5 truncate text-[12px] text-[var(--muted)]">{evt.detail}</div>
+              )}
+            </div>
+            <time className="shrink-0 text-[12px] tabular-nums text-[var(--muted)]" dateTime={evt.created_at}>
+              {fmtTime(evt.created_at)}
+            </time>
+          </li>
+        );
+      })}
+    </ol>,
   );
 }

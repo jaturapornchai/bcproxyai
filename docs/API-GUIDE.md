@@ -1,12 +1,13 @@
-# SMLGateway — OpenAI-Compatible API Guide
+# BCAiRouter — OpenAI-Compatible API Guide
 
 > Drop-in replacement สำหรับ OpenAI API — ใช้กับ app ใดก็ได้ที่รองรับ OpenAI format
-> รวมโมเดลฟรีจาก 21 providers, smart routing, per-category teacher, hedge top-3, auto-retry, fallback
+> รวมโมเดลฟรีจาก 11 providers, smart routing, per-category teacher, hedge top-3, auto-retry, fallback
 
 ## Base URL
 
 ```
-http://localhost:3334/v1      # in-compose Caddy (recommended)
+https://bcairouter.bcaicloud.com/v1   # production
+http://localhost:3334/v1      # local, in-compose Caddy (recommended)
 http://localhost:3333/v1      # external Caddy (if configured, 300s timeout)
 ```
 
@@ -15,13 +16,13 @@ http://localhost:3333/v1      # external Caddy (if configured, 300s timeout)
 ## Authentication
 
 ```
-Authorization: Bearer <any-string>
+Authorization: Bearer bcai_live_...
 ```
 
-SMLGateway ไม่ตรวจ API key ของ client — ใส่อะไรก็ได้ (หรือไม่ใส่ก็ได้)
-Key ของ provider แต่ละตัวตั้งใน environment (`.env.local`) หรือ dashboard (`/` → ผู้ให้บริการ)
+- **Server mode** (production) — `/v1/*` ต้องใช้ key `bcai_live_*` ที่เจ้าของออกให้ที่ `/admin/keys`; `/v1/trace/*`, `/v1/prompts*` (จัดการ) และ `/api/*` เฉพาะเจ้าของที่ login ด้วย Google — ยกเว้น `/api/health`, `/api/public/*`, `/api/auth/*` และ `/api/my-stats` (ใช้ key `bcai_live_*`)
+- **Local open mode** (ไม่ตั้ง auth env เลย) — ไม่ตรวจ key ส่งค่าอะไรก็ได้ ใช้บนเครื่องตัวเองเท่านั้น
 
-**Local-only** — ออกแบบรันบน Docker Desktop เครื่องเดียว ไม่มี multi-tenant / public deploy
+Key ของ provider กรอกที่หน้า `/setup` (เก็บใน DB ไม่ใช่ env)
 
 ---
 
@@ -39,7 +40,7 @@ POST /v1/chat/completions
 
 ```jsonc
 {
-  "model": "sml/auto",                // virtual model หรือ "provider/model_id"
+  "model": "bcai/auto",                // virtual model หรือ "provider/model_id"
   "messages": [
     { "role": "system", "content": "You are a helpful assistant." },
     { "role": "user", "content": "สวัสดี" }
@@ -64,13 +65,13 @@ POST /v1/chat/completions
 
 | Model | พฤติกรรม |
 |-------|---------|
-| `sml/auto` (แนะนำ) | Smart routing — เลือก model ตาม category (thai/code/tools/vision/...) |
-| `sml/fast` | เลือก model latency ต่ำสุด |
-| `sml/tools` | เลือก model ที่รองรับ function calling |
-| `sml/thai` | เลือก model ครูหัวหน้าหมวด thai |
-| `sml/consensus` | ยิง 3 model ขนานกัน → เลือกคำตอบที่ตรงกันมากสุด |
+| `bcai/auto` (แนะนำ) | Smart routing — เลือก model ตาม category (thai/code/tools/vision/...) |
+| `bcai/fast` | เลือก model latency ต่ำสุด |
+| `bcai/tools` | เลือก model ที่รองรับ function calling |
+| `bcai/thai` | เลือก model ครูหัวหน้าหมวด thai |
+| `bcai/consensus` | ยิง 3 model ขนานกัน → เลือกคำตอบที่ตรงกันมากสุด |
 | `provider/model_id` | ระบุตรง เช่น `groq/moonshotai/kimi-k2-instruct-0905` |
-| `auto` | alias ของ `sml/auto` (backward-compat) |
+| `auto` | alias ของ `bcai/auto` |
 
 #### Vision (ส่งรูป)
 
@@ -94,7 +95,6 @@ POST /v1/chat/completions
 ```
 
 - Proxy จะเลือกเฉพาะ model ที่รองรับ vision อัตโนมัติ
-- Ollama: image URL จะถูกแปลงเป็น base64 ให้อัตโนมัติ
 - **ถ้าส่งรูป + tools พร้อมกัน** → tools จะถูก strip ออก (provider ส่วนใหญ่ไม่รองรับ)
 
 #### Function Calling (Tools)
@@ -350,7 +350,7 @@ Chat + JSON schema validation + auto-retry (default 2 ครั้ง) ถ้า
 
 ```json
 {
-  "model": "sml/auto",
+  "model": "bcai/auto",
   "messages": [{"role": "user", "content": "Describe a fruit"}],
   "schema": {
     "type": "object",
@@ -367,13 +367,13 @@ Chat + JSON schema validation + auto-retry (default 2 ครั้ง) ถ้า
 
 Response: `{ ok, attempts, data, model, provider, latency_ms, request_ids }`
 
-### 11. Trace
+### 11. Trace (เฉพาะเจ้าของ)
 
 ```
 GET /v1/trace/:reqId
 ```
 
-ดู log ละเอียดของ request เดิม (ใช้ `X-SMLGateway-Request-Id` header ที่ได้จาก response).
+ดู log ละเอียดของ request เดิม (ใช้ `X-BCAiRouter-Request-Id` header ที่ได้จาก response).
 Response รวม `routing_explain` JSONB ที่บันทึก decision trail (mode, candidates, selected, fallbackUsed) — no prompt content.
 
 ### 12. My Stats
@@ -382,10 +382,10 @@ Response รวม `routing_explain` JSONB ที่บันทึก decision 
 GET /api/my-stats?window=24h
 ```
 
-สรุปการใช้งานของ IP ตัวเอง — total, p50/p95/p99, top models, by hour
+สรุปการใช้งานของ IP ตัวเอง (ใช้ key `bcai_live_*`) — total, p50/p95/p99, top models, by hour
 Windows: `1h`, `6h`, `24h`, `7d`, `30d`
 
-### 13. Prompt Library
+### 13. Prompt Library (จัดการได้เฉพาะเจ้าของ)
 
 ```
 GET    /v1/prompts              รายการทั้งหมด
@@ -397,30 +397,30 @@ DELETE /v1/prompts/:name        ลบ
 
 ใช้ใน chat:
 ```json
-{ "model": "sml/auto", "prompt": "pirate", "messages": [{"role":"user","content":"how?"}] }
+{ "model": "bcai/auto", "prompt": "pirate", "messages": [{"role":"user","content":"how?"}] }
 ```
-→ ระบบจะ prepend system prompt `pirate` ที่บันทึกไว้ให้อัตโนมัติ
+→ ระบบจะ prepend system prompt `pirate` ที่บันทึกไว้ให้อัตโนมัติ (key `bcai_live_*` ใช้ชื่อ prompt ได้ แต่ list/แก้/ลบไม่ได้)
 
-### 14. Dev Controls (X-SMLGateway-* headers)
+### 14. Dev Controls (X-BCAiRouter-* headers)
 
 ```
-X-SMLGateway-Prefer:      groq,cerebras       ดัน provider ขึ้นบน
-X-SMLGateway-Exclude:     mistral              ตัดออก
-X-SMLGateway-Max-Latency: 3000                 กรอง model ที่ช้าเกิน
-X-SMLGateway-Strategy:    fastest | strongest  preset sort
+X-BCAiRouter-Prefer:      groq,cerebras       ดัน provider ขึ้นบน
+X-BCAiRouter-Exclude:     mistral              ตัดออก
+X-BCAiRouter-Max-Latency: 3000                 กรอง model ที่ช้าเกิน
+X-BCAiRouter-Strategy:    fastest | strongest  preset sort
 ```
 
 Response headers:
 ```
-X-SMLGateway-Request-Id   ใช้กับ /v1/trace/:reqId
-X-SMLGateway-Provider     provider ที่ตอบจริง
-X-SMLGateway-Model        model ที่ตอบจริง
-X-SMLGateway-Hedge        true ถ้าชนะจาก hedge
-X-SMLGateway-Cache        HIT ถ้าดึงจาก semantic cache
+X-BCAiRouter-Request-Id   ใช้กับ /v1/trace/:reqId
+X-BCAiRouter-Provider     provider ที่ตอบจริง
+X-BCAiRouter-Model        model ที่ตอบจริง
+X-BCAiRouter-Hedge        true ถ้าชนะจาก hedge
+X-BCAiRouter-Cache        HIT ถ้าดึงจาก semantic cache
 X-Resceo-Backoff          true ถ้ายิงถี่เกิน soft limit (ไม่บล็อก, hint เท่านั้น)
 ```
 
-### 15. Ops endpoints (owner/master only — auth chain เดียวกับ /api/admin/*)
+### 15. Ops endpoints (เฉพาะเจ้าของ — auth เดียวกับ /api/admin/*)
 
 ```
 GET  /api/control-room?windowMin=60      single-call dashboard snapshot
@@ -447,6 +447,19 @@ POST /api/replay                          owner-only request replay
   "selected": { "provider": "groq", "model": "llama-3.1-8b", "reason": "selected:fastest" }
 }
 ```
+
+### 16. หน้าแรก `/` — public vs เจ้าของ
+
+```
+GET /api/health            public: { status } (503 เฉพาะตอน DB ต่อไม่ได้) · เจ้าของ: รายงานเต็ม
+GET /api/public/pulse      public: กิจกรรมสดแบบไม่ระบุตัวตน (ดาว = id HMAC เปลี่ยนทุกวัน)
+GET /api/public/insights   public: สรุป 24 ชม., p95, ผลสอบแบบตำแหน่ง, รอบตรวจ, โทเคนวันนี้ปัดลงทีละ 100K
+GET /api/activity          เจ้าของ: กิจกรรมสดฉบับเต็ม
+GET /api/insights          เจ้าของ: insights ฉบับเต็ม (เหตุขัดข้อง, error ล่าสุด, โควตา, การพักโมเดล, perf, ระบบ)
+GET /api/openrouter-status เจ้าของ: สถานะ key OpenRouter + tripwire
+```
+
+ข้อมูล public ไม่มีชื่อ provider/model, prompt/คำตอบ, ข้อความ error, request id, IP หรือ key — ทุก endpoint ข้างบนอ่านจาก DB/Redis อย่างเดียว ไม่เรียก provider
 
 ---
 
@@ -479,7 +492,7 @@ Spread across providers (กระจายโหลด)
 | 413 | Request ใหญ่เกินไป — retry model ที่ context ใหญ่กว่า |
 | 429 | Rate limited — cooldown API key 5 นาที, retry provider อื่น |
 | 500+ | Server error — cooldown model 5 นาที, retry ตัวถัดไป |
-| Timeout | 15 วินาที cloud, 60 วินาที Ollama — retry ตัวถัดไป |
+| Timeout | 15 วินาที — retry ตัวถัดไป |
 
 Total timeout: **30 วินาที** สำหรับ retry loop ทั้งหมด
 
@@ -504,7 +517,6 @@ App ไม่ต้องกังวลเรื่องพวกนี้ —
 | `reasoning` ใน messages | Strip ออก (Mistral/Groq ไม่รองรับ) |
 | `reasoning_content` ใน messages | Strip ออก |
 | `tool_call_id` format ยาว | แปลงเป็น 9 chars สำหรับ Mistral |
-| Image URL + Ollama | แปลง URL → base64 ให้ |
 | Tools + Images พร้อมกัน | Strip tools ออก (incompatible) |
 | Tools + model ไม่รองรับ | Strip tools + orphaned messages ออก |
 | Messages ยาวมาก (>30K tokens) | Compress อัตโนมัติ |
@@ -634,23 +646,25 @@ while (true) {
 
 ---
 
-## Providers (13 ตัว)
+## Providers (11 ตัว)
 
-| Provider | ประเภท | ต้องการ Key |
-|----------|--------|------------|
-| openrouter | Cloud (aggregator) | `OPENROUTER_API_KEY` |
-| mistral | Cloud | `MISTRAL_API_KEY` |
-| groq | Cloud (fast inference) | `GROQ_API_KEY` |
-| cerebras | Cloud (fast inference) | `CEREBRAS_API_KEY` |
-| sambanova | Cloud (fast inference) | `SAMBANOVA_API_KEY` |
-| google | Cloud (Gemini) | `GOOGLE_AI_API_KEY` |
-| github | Cloud (GitHub Models) | `GITHUB_MODELS_TOKEN` |
-| fireworks | Cloud | `FIREWORKS_API_KEY` |
-| cohere | Cloud | `COHERE_API_KEY` |
-| cloudflare | Cloud (Workers AI) | `CLOUDFLARE_API_TOKEN` |
-| huggingface | Cloud | `HF_TOKEN` |
-| kilo | Cloud | `KILO_API_KEY` |
-| ollama | Local | ไม่ต้อง (default: `http://host.docker.internal:11434`) |
+ตรงกับ catalog ใน `src/lib/free-model-catalog.ts` — ระบบเรียกเฉพาะโมเดลฟรีที่อยู่ใน catalog และ key ของทุก provider กรอกที่ `/setup`
+
+| Provider id | ผู้ให้บริการ |
+|-------------|------------|
+| `openrouter` | OpenRouter (เฉพาะโมเดล `:free`, ล็อก `max_price = 0`) |
+| `sambanova` | SambaNova |
+| `mistral` | Mistral La Plateforme |
+| `nvidia` | NVIDIA NIM |
+| `groq` | Groq |
+| `cohere` | Cohere (trial key) |
+| `cerebras` | Cerebras |
+| `thaillm` | ThaiLLM (NECTEC) |
+| `sealion` | SEA-LION (AI Singapore) |
+| `ollamacloud` | Ollama Cloud |
+| `typhoon` | Typhoon (SCB 10X) |
+
+ไม่รองรับ: Google AI Studio (Gemini API key ตรง), Together AI, Hugging Face, GitHub Models
 
 ---
 
@@ -671,7 +685,6 @@ while (true) {
 | Status | ความหมาย |
 |--------|---------|
 | 400 | Request format ผิด |
-| 402 | Budget limit (ถ้าตั้ง daily limit) |
 | 404 | Model ไม่เจอ |
 | 503 | ทุก model fail — retry หมดแล้ว |
 
@@ -679,7 +692,7 @@ while (true) {
 
 ## Quick Start
 
-1. ตั้ง `base_url` เป็น `http://localhost:3334/v1`
-2. ตั้ง `api_key` เป็นอะไรก็ได้
-3. ใช้ `model: "auto"` (หรือไม่ส่งก็ได้)
+1. ตั้ง `base_url` เป็น `https://bcairouter.bcaicloud.com/v1` (local: `http://localhost:3334/v1`)
+2. ตั้ง `api_key` เป็น key `bcai_live_*` จาก `/admin/keys` (local open mode ใส่อะไรก็ได้)
+3. ใช้ `model: "bcai/auto"` (หรือไม่ส่งก็ได้)
 4. ส่ง request ตาม OpenAI format ปกติ — proxy จัดการ routing, retry, normalization ให้ทั้งหมด

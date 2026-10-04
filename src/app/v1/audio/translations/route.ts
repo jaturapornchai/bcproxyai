@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { getNextApiKey } from "@/lib/api-keys";
 import { openAIError } from "@/lib/openai-compat";
 import { costPolicyBlockMessage, isProviderCostAllowed } from "@/lib/cost-policy";
+import { GROQ_TRANSLATION_MODELS, pickAllowedModel } from "@/lib/free-media-models";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -29,9 +30,16 @@ export async function POST(req: NextRequest) {
 
     const formData = await req.formData();
 
-    if (!formData.get("model")) {
-      formData.set("model", "whisper-large-v3-turbo");
+    // Free-plan Whisper only — turbo has no translation support; set() also drops duplicate 'model' fields
+    const model = pickAllowedModel(formData.get("model"), GROQ_TRANSLATION_MODELS);
+    if (!model) {
+      return openAIError(402, {
+        message: `Model '${String(formData.get("model"))}' is blocked by cost policy. Allowed: ${GROQ_TRANSLATION_MODELS.join(", ")}.`,
+        code: "cost_policy_blocked",
+        param: "model",
+      });
     }
+    formData.set("model", model);
 
     const response = await fetch("https://api.groq.com/openai/v1/audio/translations", {
       method: "POST",
@@ -55,8 +63,8 @@ export async function POST(req: NextRequest) {
       headers: {
         "Content-Type": "application/json",
         "Access-Control-Allow-Origin": "*",
-        "X-SMLGateway-Provider": "groq",
-        "X-SMLGateway-Model": String(formData.get("model")),
+        "X-BCAiRouter-Provider": "groq",
+        "X-BCAiRouter-Model": String(formData.get("model")),
       },
     });
   } catch (err) {

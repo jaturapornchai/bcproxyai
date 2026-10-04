@@ -18,7 +18,7 @@
 	request_header -X-Real-IP
 	request_header -Forwarded
 
-	reverse_proxy sml-gateway:3000 {
+	reverse_proxy bcai-router:3000 {
 		lb_policy round_robin
 		health_uri /api/health
 		health_interval 10s

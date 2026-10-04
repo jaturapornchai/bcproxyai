@@ -4,7 +4,8 @@ import { getNextApiKey } from "@/lib/api-keys";
 import { PROVIDER_COMPLETIONS_URLS } from "@/lib/providers";
 import { resolveProviderCompletionsUrl } from "@/lib/provider-resolver";
 import { openAIError } from "@/lib/openai-compat";
-import { getCostAllowedProviders, isModelCostAllowed, isProviderCostAllowed } from "@/lib/cost-policy";
+import { applyNoSpendGuards, getCostAllowedProviders, isModelCostAllowed, isProviderCostAllowed } from "@/lib/cost-policy";
+import { rejectPaidBodyKeys } from "@/app/v1/_lib/no-spend";
 import crypto from "crypto";
 
 export const dynamic = "force-dynamic";
@@ -22,6 +23,8 @@ export async function POST(req: NextRequest) {
     if (!body.prompt && !body.messages) {
       return openAIError(400, { message: "prompt is required", param: "prompt" });
     }
+    const paidAddonError = rejectPaidBodyKeys(body);
+    if (paidAddonError) return paidAddonError;
 
     const modelField = (body.model as string) || "auto";
     const isStream = body.stream === true;
@@ -51,7 +54,7 @@ export async function POST(req: NextRequest) {
     const modelList = [...models];
 
     // If specific model requested, try to find it
-    if (modelField !== "auto" && modelField !== "sml/auto") {
+    if (modelField !== "auto" && modelField !== "bcai/auto") {
       const specific = await sql<{ id: string; provider: string; model_id: string }[]>`
         SELECT id, provider, model_id FROM models
         WHERE id = ${modelField} OR model_id = ${modelField}
@@ -77,21 +80,21 @@ export async function POST(req: NextRequest) {
           "Authorization": `Bearer ${apiKey}`,
         };
         if (model.provider === "openrouter") {
-          headers["HTTP-Referer"] = "https://smlgateway.ai";
-          headers["X-Title"] = "SMLGateway Gateway";
+          headers["HTTP-Referer"] = "https://bcairouter.ai";
+          headers["X-Title"] = "BCAiRouter Gateway";
         }
 
         const response = await fetch(url, {
           method: "POST",
           headers,
-          body: JSON.stringify({ ...body, model: model.model_id }),
+          body: JSON.stringify(applyNoSpendGuards(model.provider, { ...body, model: model.model_id })),
         });
 
         if (response.ok) {
           const respHeaders = new Headers();
           respHeaders.set("Content-Type", response.headers.get("Content-Type") || "application/json");
-          respHeaders.set("X-SMLGateway-Provider", model.provider);
-          respHeaders.set("X-SMLGateway-Model", model.model_id);
+          respHeaders.set("X-BCAiRouter-Provider", model.provider);
+          respHeaders.set("X-BCAiRouter-Model", model.model_id);
           respHeaders.set("Access-Control-Allow-Origin", "*");
 
           if (isStream && response.body) {
@@ -121,15 +124,20 @@ export async function POST(req: NextRequest) {
       temperature: body.temperature ?? 0,
     };
 
+    // The /v1 gate checks this internal call too — forward the caller's Bearer.
+    const authorization = req.headers.get("authorization");
     const chatResponse = await fetch(new URL("/v1/chat/completions", req.url), {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...(authorization ? { Authorization: authorization } : {}) },
       body: JSON.stringify(chatBody),
     });
 
     if (!chatResponse.ok) {
-      const err = await chatResponse.text();
-      return openAIError(chatResponse.status, { message: err });
+      // chat route already returns an OpenAI-shaped error body — pass it through
+      return new Response(chatResponse.body, {
+        status: chatResponse.status,
+        headers: { "Content-Type": chatResponse.headers.get("content-type") ?? "application/json" },
+      });
     }
 
     if (isStream && chatResponse.body) {
@@ -159,8 +167,8 @@ export async function POST(req: NextRequest) {
     const responseHeaders = new Headers();
     responseHeaders.set("Content-Type", "application/json");
     responseHeaders.set("Access-Control-Allow-Origin", "*");
-    if (chatResponse.headers.get("X-SMLGateway-Provider")) {
-      responseHeaders.set("X-SMLGateway-Provider", chatResponse.headers.get("X-SMLGateway-Provider")!);
+    if (chatResponse.headers.get("X-BCAiRouter-Provider")) {
+      responseHeaders.set("X-BCAiRouter-Provider", chatResponse.headers.get("X-BCAiRouter-Provider")!);
     }
 
     return new Response(JSON.stringify(completionResponse), { status: 200, headers: responseHeaders });

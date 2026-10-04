@@ -32,9 +32,11 @@ export function compressMessages(messages: Message[]): { messages: Message[]; co
   const nonSystem = messages.filter(m => m.role !== "system");
 
   // Keep last 3 conversation turns (6 messages: 3 user + 3 assistant)
-  const recentCount = Math.min(6, nonSystem.length);
-  const oldMessages = nonSystem.slice(0, -recentCount);
-  const recentMessages = nonSystem.slice(-recentCount);
+  let cut = Math.max(0, nonSystem.length - 6);
+  // never split an assistant tool_calls message from its tool results — orphan tool msgs get 400
+  while (cut > 0 && nonSystem[cut].role === "tool") cut--;
+  const oldMessages = nonSystem.slice(0, cut);
+  const recentMessages = nonSystem.slice(cut);
 
   // Summarize old messages
   if (oldMessages.length > 0) {
